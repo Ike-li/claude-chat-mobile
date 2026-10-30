@@ -806,6 +806,54 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // #456：菜单行带说明与参数提示（终端里输入 / 每个命令旁都有一行说明）；前缀也匹配别名；
+  // 说明来自 skill / 插件 / MCP 文件，是第三方内容，必须按纯文本显示。
+  test('P0-02o 斜杠菜单显示说明与参数提示，别名能搜到，说明里的 HTML 不执行', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    // 本地命令的说明走 i18n
+    await page.locator('#input').fill('/mo');
+    await expect(page.locator('#cmdHints [data-cmd="/model"]')).toContainText('切换模型');
+
+    await sendChatMessage(page, 'test:commands-changed');
+    await waitForIdle(page);
+
+    await page.locator('#input').fill('/rev');
+    const review = page.locator('#cmdHints [data-cmd="/review-pr"]');
+    await expect(review).toContainText('<pr-number>');
+    await expect(review).toContainText('Review a pull request');
+
+    // 别名 stats → /usage，选中插入的是本名
+    await page.locator('#input').fill('/sta');
+    await page.locator('#cmdHints [data-cmd="/usage"]').click();
+    await expect(page.locator('#input')).toHaveValue('/usage ');
+
+    await page.locator('#input').fill('/xss');
+    const probe = page.locator('#cmdHints [data-cmd="/xss-probe"]');
+    await expect(probe).toContainText('<img src=x onerror=');
+    await expect(page.locator('#cmdHints img')).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__slashXss)).toBeUndefined();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 真 CLI 的 init 清单里有 model：/model 交给 CLI 执行，不走前端本地选择器。#456 起清单是对象，
+  // 照旧拿 includes('model') 判断会永远匹配不上，本地分支就把 CLI 自己的 /model 截走了。
+  test('P0-02q CLI 列了 model 时 /model 透传给 CLI，不走本地选择器', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:commands-changed');
+    await waitForIdle(page);
+
+    await page.locator('#input').fill('/model claude-3-opus[1m]');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('/model claude-3-opus[1m]');
+    await expect(page.locator('#messages')).not.toContainText('模型已设为');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // terminal_slash_commands（SDK）：绑在本地终端的命令不进手机补全菜单。
   // 判据由 SDK 每轮 init 下发，不是前端硬编码黑名单。
   test('P0-02p terminal 绑定命令不出现在补全菜单，同帧的普通命令照常出现', async ({ page }) => {

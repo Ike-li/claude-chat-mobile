@@ -36,6 +36,12 @@
 //             再把收到的结果原样写进助手正文（`elicitation → {…}`）后收尾。SDK 没接 onElicitation 时它自己就回
 //             {action:'decline'}，所以「回调接上了没有」从正文就能看出来。CCM_FAKE_CLAUDE_ELICIT=url 发 URL 模式，
 //             accept 之后再吐一条 system/elicitation_complete。
+//   turn-fg-task → 一条跑得久的前台 Bash 挡着本轮（#459）：吐 assistant tool_use 与
+//             system/task_started{is_backgrounded:false}，然后不收尾，直到收到 background_tasks 控制请求
+//             （SDK Query.backgroundTasks，终端 Ctrl+B）。收到后照 SDK d.ts 描述的次序吐：
+//             task_updated{patch.is_backgrounded:true} → background_tasks_changed（它成了后台任务）→
+//             「running in the background」的 tool_result → 回答与 result。给的 tool_use_id 对不上回 backgrounded:false。
+//             CCM_FAKE_CLAUDE_BG_DISABLED=1 → 那条控制请求回 error，原文照 CLI 2.1.309。
 //   turn-autoreport → 同 turn，收尾后再吐一条后台任务完成（system/task_notification）与下一轮的
 //             message_start，且那一轮不收尾——实例停在「后台任务完成触发的自动汇报轮正在跑」。
 //             没有用户输入的轮次，账面靠 agent 自己合成（maybeSynthesizeAutoTurn）。
@@ -53,6 +59,8 @@
 //   cost-state 等几行、0.6–2s 进程才退；文件已被删掉时这次追加会把它重新建出来。
 //   隔 500ms（比真 CLI 慢）是为了把窗口撑开，但必须短于 SDK 关 stdin 后约 2s 的宽限——过了宽限
 //   SDK 会 SIGTERM，写入就不会发生了。
+//   CCM_FAKE_CLAUDE_EXIT_TITLE=<标题> → 收尾时先追加一条 custom-title。模拟真 CLI 把内存里的会话标题
+//   当元数据再写一遍（CLI 2.1.312 源码：追加会话元数据时写 currentSessionTitle），网页刚改的名字就被盖回去（#458）。
 //
 // 【它仍然不是真 CLI】不跑模型、不认工具、不落 transcript（上面那一行收尾写入除外）。
 // 任何需要真回合语义的断言仍归 S5。
@@ -85,12 +93,28 @@ const MODEL_VALUE_FROM_GATEWAY = process.env.CCM_FAKE_CLAUDE_MODEL_VALUE_FROM_GA
 // 不置位时既有用例的前提逐字不变。
 const LISTED_MODEL = process.env.CCM_FAKE_CLAUDE_MODEL_LIST_FILE
   ? readFileSync(process.env.CCM_FAKE_CLAUDE_MODEL_LIST_FILE, 'utf8').trim() : '';
+// MCP（#457）：mcpServerStatus() 发 mcp_status 控制请求、读响应的 mcpServers；reconnect / toggle 失败时 CLI 回
+// subtype:'error'，SDK 据此抛错。显式 opt-in 才这样应答：CCM_FAKE_CLAUDE_MCP_STATUS=<McpServerStatus[] 的 JSON>，
+// CCM_FAKE_CLAUDE_MCP_RECONNECT_ERROR=<错误文本>；CCM_FAKE_CLAUDE_CONTROL_LOG=<路径> 把收到的每个控制请求按行记下，
+// 供用例核对参数确实到了 CLI。不置位时一律照旧回 success + {}。
+const MCP_STATUS = process.env.CCM_FAKE_CLAUDE_MCP_STATUS ? JSON.parse(process.env.CCM_FAKE_CLAUDE_MCP_STATUS) : null;
+const MCP_RECONNECT_ERROR = process.env.CCM_FAKE_CLAUDE_MCP_RECONNECT_ERROR || '';
+const CONTROL_LOG = process.env.CCM_FAKE_CLAUDE_CONTROL_LOG || '';
+// 斜杠命令清单（#456）。SDK 的 supportedCommands() 同样读 initialize 响应（commands 字段），真 CLI 的 system/init
+// 只带名字（slash_commands: string[]）。显式 opt-in（CCM_FAKE_CLAUDE_COMMANDS=<SlashCommand[] 的 JSON>）才两处都带；
+// 不置位时 initialize 响应与 init 逐字不变。
+const COMMANDS = process.env.CCM_FAKE_CLAUDE_COMMANDS ? JSON.parse(process.env.CCM_FAKE_CLAUDE_COMMANDS) : null;
 const EXIT_APPEND = process.env.CCM_FAKE_CLAUDE_EXIT_APPEND || '';
 // turn-screenshot 档的截图：固定 id 与 1×1 PNG，用例据此拼引用 t:<id>:0、比对取回的数据
 const SCREENSHOT_TOOL_USE_ID = 'toolu_fake_screenshot';
 const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X2Xb0AAAAASUVORK5CYII=';
 const EXIT_MARKER = process.env.CCM_FAKE_CLAUDE_EXIT_MARKER || '';
+const EXIT_TITLE = process.env.CCM_FAKE_CLAUDE_EXIT_TITLE || '';
 const RESULT_DELAY_MS = Number(process.env.CCM_FAKE_CLAUDE_RESULT_DELAY_MS) || 0;
+const BG_DISABLED = process.env.CCM_FAKE_CLAUDE_BG_DISABLED === '1';
+const FG_TOOL_USE_ID = 'toolu_fake_fg';
+const FG_TASK_ID = 'fake-fg-task';
+let fgPendingMsg = null; // turn-fg-task：被前台任务挡着、还没收尾的那条 user 消息
 
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 
@@ -132,11 +156,25 @@ rl.on('line', (line) => {
     return;
   }
 
+  if (msg.type === 'control_request' && msg.request?.subtype === 'background_tasks') {
+    answerBackgroundTasks(msg);
+    return;
+  }
   if (msg.type === 'control_request') {
-    const payload = msg.request?.subtype !== 'initialize' ? {}
+    if (CONTROL_LOG) appendFileSync(CONTROL_LOG, `${JSON.stringify(msg.request)}\n`);
+    if (MCP_RECONNECT_ERROR && msg.request?.subtype === 'mcp_reconnect') {
+      out({ type: 'control_response', response: { subtype: 'error', request_id: msg.request_id, error: MCP_RECONNECT_ERROR } });
+      return;
+    }
+    if (MCP_STATUS && msg.request?.subtype === 'mcp_status') {
+      out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { mcpServers: MCP_STATUS } } });
+      return;
+    }
+    const models = msg.request?.subtype !== 'initialize' ? {}
       : LISTED_MODEL ? { models: [{ value: LISTED_MODEL, displayName: LISTED_MODEL, resolvedModel: LISTED_MODEL }] }
         : GATEWAY_MODEL ? { models: [{ value: MODEL_VALUE_FROM_GATEWAY ? GATEWAY_MODEL : 'opus', displayName: GATEWAY_MODEL, resolvedModel: GATEWAY_MODEL }] }
           : {};
+    const payload = msg.request?.subtype === 'initialize' && COMMANDS ? { ...models, commands: COMMANDS } : models;
     out({
       type: 'control_response',
       response: { subtype: 'success', request_id: msg.request_id, response: payload },
@@ -157,15 +195,57 @@ rl.on('line', (line) => {
       tools: [],
       model: (INIT_EACH_TURN && GATEWAY_MODEL) || 'fake-claude',
       permissionMode: 'default',
+      ...(COMMANDS ? { slash_commands: COMMANDS.map(c => c.name) } : {}),
     });
   }
 
   if (MODE === 'turn-elicitation') { sendElicitation(msg); return; }
+  if (MODE === 'turn-fg-task') {
+    startForegroundTask(msg);
+    return;
+  }
+
   if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport' && MODE !== 'turn-screenshot' && MODE !== 'turn-local-command') return;
 
   if (RESULT_DELAY_MS > 0) setTimeout(() => finishTurn(msg), RESULT_DELAY_MS);
   else finishTurn(msg);
 });
+
+function startForegroundTask(msg) {
+  fgPendingMsg = msg;
+  out({
+    type: 'assistant', session_id: SESSION_ID, uuid: randomUUID(), parent_tool_use_id: null,
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: FG_TOOL_USE_ID, name: 'Bash', input: { command: 'sleep 120 && echo done' } }] },
+  });
+  out({
+    type: 'system', subtype: 'task_started', session_id: SESSION_ID, uuid: randomUUID(),
+    task_id: FG_TASK_ID, tool_use_id: FG_TOOL_USE_ID, description: 'sleep 120 && echo done',
+    task_type: 'local_bash', is_backgrounded: false,
+  });
+}
+
+function answerBackgroundTasks(msg) {
+  if (BG_DISABLED) {
+    out({ type: 'control_response', response: { subtype: 'error', request_id: msg.request_id, error: 'Background tasks are disabled in this session.' } });
+    return;
+  }
+  const target = msg.request?.tool_use_id;
+  const hit = fgPendingMsg && (target == null || target === FG_TOOL_USE_ID);
+  out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { backgrounded: Boolean(hit) } } });
+  if (!hit) return;
+  const pending = fgPendingMsg;
+  fgPendingMsg = null;
+  out({ type: 'system', subtype: 'task_updated', session_id: SESSION_ID, uuid: randomUUID(), task_id: FG_TASK_ID, patch: { is_backgrounded: true } });
+  out({
+    type: 'system', subtype: 'background_tasks_changed', session_id: SESSION_ID, uuid: randomUUID(),
+    tasks: [{ task_id: FG_TASK_ID, task_type: 'local_bash', description: 'sleep 120 && echo done' }],
+  });
+  out({
+    type: 'user', session_id: SESSION_ID, uuid: randomUUID(), parent_tool_use_id: null,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: FG_TOOL_USE_ID, content: `Command running in background with ID: ${FG_TASK_ID}` }] },
+  });
+  finishTurn(pending);
+}
 
 function finishTurn(msg, reply = REPLY) {
   if (MODE === 'turn-screenshot') {
@@ -255,6 +335,7 @@ function finishTurn(msg, reply = REPLY) {
 rl.on('close', () => {
   if (!EXIT_APPEND) process.exit(0);
   setTimeout(() => {
+    if (EXIT_TITLE) appendFileSync(EXIT_APPEND, `${JSON.stringify({ type: 'custom-title', customTitle: EXIT_TITLE, sessionId: SESSION_ID })}\n`);
     appendFileSync(EXIT_APPEND, `${JSON.stringify({ type: 'cost-state', sessionId: SESSION_ID })}\n`);
     if (EXIT_MARKER) writeFileSync(EXIT_MARKER, '');
     process.exit(0);

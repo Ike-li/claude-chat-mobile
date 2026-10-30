@@ -252,6 +252,28 @@ test('waitForSessionExits 等本会话里已移除、正在回收的实例退完
   );
 });
 
+// 网页改名的退出补写（#458）挂在这上面：CLI 退出收尾会把内存里的旧标题写回 transcript，
+// 活的、空闲回收中的、已移出表还没退完的实例都会写，所以三种都得算；别的会话不算。
+test('sessionExitPromises：本会话里还没退完的实例都算，活的也算', async () => {
+  const manager = createInstanceManager();
+  const live = exitableAgent(manager, 's1');
+  const reclaiming = exitableAgent(manager, 's1', { terminating: true });
+  const closed = exitableAgent(manager, 's1');
+  manager.remove(closed.agent.instanceId);
+  exitableAgent(manager, 's-other');
+  const exits = manager.sessionExitPromises('s1');
+  assert.equal(exits.length, 3);
+  assert.equal(manager.sessionExitPromises('s-none').length, 0);
+  let done = false;
+  Promise.all(exits).then(() => { done = true; });
+  live.exit(); reclaiming.exit();
+  await flush();
+  assert.equal(done, false, '已移出表的那个还在收尾写盘');
+  closed.exit();
+  await flush();
+  assert.equal(done, true);
+});
+
 // 等待是异步的：这期间另一台设备可能又打开、又关掉了这个会话。只等调用那一刻收集到的，
 // 新关掉的那个 CLI 就漏了——等完它已不是活实例，保护①放行，删除又落在它的收尾写入前面。
 test('waitForSessionExits 等待期间新关掉的实例也要等到', async () => {

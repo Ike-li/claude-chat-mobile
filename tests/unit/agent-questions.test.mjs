@@ -1,10 +1,16 @@
 // tests/unit/agent-questions.test.mjs —— AskUserQuestion（F2）行为域单测。
 // 从 agent-permissions.test.mjs 分出：按行为域拆分是硬门禁（见 source-layout.test.mjs），
 // 提问这一域已自成一块——下发/作答下标对齐、TTL 过期、abort、multiSelect、快照重建。
+//
+// #455：作答、跳过、不回答、过期都走 canUseTool 的 allow 通道（updatedInput = 原始 input + answers），
+// tool_result 与终端里答的同形、不是错误；只有取消 / 中止 / 退出仍是 deny + interrupt（等价终端 Esc）。
+// 答案的格式细节在 agent-question-answers.test.mjs。
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSession, awaitTtlSettled } from '../helpers/agent-unit.mjs';
+
+const UNANSWERED_CAP = 'ask_user_question_unanswered_v1';
 
 // ---- AskUserQuestion ----
 test.describe('AskUserQuestion', () => {
@@ -38,24 +44,22 @@ test.describe('AskUserQuestion', () => {
     s.dispose();
   });
 
-  // 下发前 .filter(o => o.label) 过滤掉空 label 项，而 resolveQuestion 回读的是【原始未过滤】数组：
-  // 只要模型给的选项里有一项不带 label（normalizeQuestionOption 产出 ''），后续所有项下标整体前移，
-  // 两侧下标空间就此错位 —— 手机上点「取消」，模型收到的是「删除全部」。
-  test('handleQuestion：空 label 项被过滤后，作答下标仍须与下发列表对齐', async () => {
+  // 下发前 .filter(o => o.label) 过滤掉空 label 项：作答下标必须按过滤后的列表回读，而回给 CLI 的 questions
+  // 必须是过滤前的原始 input——前者错了「取消」会答成「删除全部」，后者错了 CLI 判「改了原始字段」整份拒收。
+  test('handleQuestion：空 label 项被过滤后，作答下标与下发列表对齐，回给 CLI 的仍是原始 questions', async () => {
     const { s, events } = makeSession();
     const ac = new AbortController();
-    const promise = s.handleQuestion(
-      { questions: [{ question: '删掉全部记录吗', options: [{ value: 'NO_LABEL' }, '删除全部', '取消'] }] },
-      { signal: ac.signal, toolUseID: 'q1' }
-    );
+    const input = { questions: [{ question: '删掉全部记录吗', options: [{ value: 'NO_LABEL' }, '删除全部', '取消'] }] };
+    const original = structuredClone(input);
+    const promise = s.handleQuestion(input, { signal: ac.signal, toolUseID: 'q1' });
     const q = events.find(e => e.type === 'question');
     assert.deepEqual(q.payload.options.map(o => o.label), ['删除全部', '取消'], '空 label 项不下发');
 
     s.resolveQuestion('q1#0', 1); // 用户点下发列表的下标 1 =「取消」
     const r = await promise;
-    const answered = JSON.stringify(r);
-    assert.match(answered, /取消/, '模型必须收到「取消」');
-    assert.doesNotMatch(answered, /删除全部/, '绝不能把「取消」答成「删除全部」');
+    assert.equal(r.behavior, 'allow');
+    assert.deepEqual(r.updatedInput.answers, { 删掉全部记录吗: '取消' }, '绝不能把「取消」答成「删除全部」');
+    assert.deepStrictEqual(r.updatedInput.questions, original.questions, '回传的 questions 被归一化过：CLI 会整份拒收');
     s.dispose();
   });
 
@@ -78,34 +82,35 @@ test.describe('AskUserQuestion', () => {
     s.dispose();
   });
 
-  test('resolveQuestion：全部答完 → removeEventListener + 单题+整组 request_resolved + denyKinds(answered)', () => {
+  test('resolveQuestion：全部答完 → allow + removeEventListener + 单题与整组 request_resolved(answered)，不留 denyKind', async () => {
     const { s, events } = makeSession();
     const ac = new AbortController();
     let removed = false;
     const origRemove = ac.signal.removeEventListener;
     ac.signal.removeEventListener = (type, fn) => { removed = true; origRemove.call(ac.signal, type, fn); };
 
-    s.handleQuestion(
+    const promise = s.handleQuestion(
       { questions: [{ question: 'Q1', options: ['A', 'B'] }] },
       { signal: ac.signal, toolUseID: 'q1' }
     );
     s.resolveQuestion('q1#0', 0);
     assert.equal(s.pendingQuestions.size, 0);
     assert.equal(removed, true);
-    assert.equal(s.denyKinds.get('q1'), 'answered');
+    const r = await promise;
+    assert.equal(r.behavior, 'allow');
+    assert.deepEqual(r.updatedInput.answers, { Q1: 'A' });
+    // tool_result 本身就是成功的：不再靠 denyKind 把错误伪装成已回答（回放时那张表早没了，答过的卡显 ❌）
+    assert.equal(s.denyKinds.has('q1'), false);
     const rrs = events.filter(e => e.type === 'request_resolved' && e.payload.kind === 'question');
-    // 单题 answered + 整组终态（outcome 含「答案」）
     assert.ok(rrs.some(e => e.payload.requestId === 'q1#0' && e.payload.outcome === 'answered'));
-    const final = rrs.find(e => e.payload.requestId === 'q1');
-    assert.ok(final);
-    assert.ok(final.payload.outcome.includes('「'));
+    assert.equal(rrs.find(e => e.payload.requestId === 'q1')?.payload.outcome, 'answered');
     s.dispose();
   });
 
-  test('abort signal 触发 → 逐个 request_resolved(aborted) + denyKinds(cancelled)', () => {
+  test('abort signal 触发 → deny + interrupt（等价终端 Esc）+ 逐个 request_resolved(aborted) + denyKinds(cancelled)', async () => {
     const { s, events } = makeSession();
     const ac = new AbortController();
-    s.handleQuestion(
+    const promise = s.handleQuestion(
       { questions: [{ question: 'Q1', options: ['A'] }, { question: 'Q2', options: ['B'] }] },
       { signal: ac.signal, toolUseID: 'q1' }
     );
@@ -114,7 +119,20 @@ test.describe('AskUserQuestion', () => {
     assert.equal(s.denyKinds.get('q1'), 'cancelled');
     const aborted = events.filter(e => e.type === 'request_resolved' && e.payload.outcome === 'aborted');
     assert.equal(aborted.length, 2);
+    const r = await promise;
+    assert.equal(r.behavior, 'deny');
+    assert.equal(r.interrupt, true, '中止本轮要真的停下这一轮，不能改成 allow 让模型接着跑');
     s.dispose();
+  });
+
+  test('dispose：挂起的提问 deny + interrupt，与中止同一条路', async () => {
+    const { s } = makeSession();
+    const ac = new AbortController();
+    const promise = s.handleQuestion({ questions: [{ question: 'Q1', options: ['A'] }] }, { signal: ac.signal, toolUseID: 'q1' });
+    s.dispose();
+    const r = await promise;
+    assert.equal(r.behavior, 'deny');
+    assert.equal(r.interrupt, true);
   });
 
   test('resolveQuestion：越界 optionIndex 不作答', () => {
@@ -130,7 +148,7 @@ test.describe('AskUserQuestion', () => {
   });
 
   // 对齐 CLI：AskUserQuestion 自动提供 Other，用户可自由文本作答（不在模型给的 options 下标里）
-  test('resolveQuestion：freeText（Other）作答 → answered，文案含自由文本', async () => {
+  test('resolveQuestion：freeText（Other）作答 → answers 是去空白的原文', async () => {
     const { s, events } = makeSession();
     const ac = new AbortController();
     const promise = s.handleQuestion(
@@ -139,16 +157,13 @@ test.describe('AskUserQuestion', () => {
     );
     s.resolveQuestion('q1#0', null, { freeText: '  date-fns  ' });
     assert.equal(s.pendingQuestions.size, 0);
-    assert.equal(s.denyKinds.get('q1'), 'answered');
     const result = await promise;
-    assert.equal(result.behavior, 'deny');
-    assert.match(result.message, /date-fns/);
-    assert.ok(!result.message.includes('dayjs') || result.message.includes('date-fns'));
+    assert.equal(result.behavior, 'allow');
+    assert.deepEqual(result.updatedInput.answers, { 'Which lib?': 'date-fns' });
     const rr = events.find(e =>
       e.type === 'request_resolved' && e.payload.kind === 'question' && e.payload.requestId === 'q1'
     );
-    assert.ok(rr);
-    assert.ok(rr.payload.outcome.includes('date-fns'));
+    assert.equal(rr?.payload.outcome, 'answered');
     s.dispose();
   });
 
@@ -173,8 +188,7 @@ test.describe('AskUserQuestion', () => {
     );
     s.resolveQuestion('q1#0', 0, { freeText: 'custom answer' });
     const result = await promise;
-    assert.match(result.message, /custom answer/);
-    assert.ok(!result.message.includes('「A」') || result.message.includes('custom'));
+    assert.deepEqual(result.updatedInput.answers, { Q1: 'custom answer' });
     s.dispose();
   });
 
@@ -203,9 +217,12 @@ test.describe('AskUserQuestion', () => {
     s.dispose();
   });
 
-  // AG-001：提问 TTL 镜像 BE-003——无人作答时到期 timer fail-closed，防 canUseTool 永挂 + isBusy 锁死
-  test('提问到期无人作答 → 到期 timer 自动 fail-closed deny + emit expired（AG-001）', { timeout: 3000 }, async () => {
+  // AG-001：提问 TTL 镜像 BE-003——无人作答时到期 timer 结算，防 canUseTool 永挂 + isBusy 锁死。
+  // #455：对提问来说「用户没答」就是如实的结果，回 allow + 空 answers（模型看到 The user did not answer the questions.），
+  // 本轮继续；不再伪装成一条错误。不带 unanswered 标注：skipped / replied_in_chat / dismissed 三个取值都不准确。
+  test('提问到期无人作答 → allow + 空 answers + emit expired，不带标注（AG-001）', { timeout: 3000 }, async () => {
     const { s, events } = makeSession({ approvalTtlMs: 30 });
+    s.cliCapabilities = new Set([UNANSWERED_CAP]);
     const ac = new AbortController();
     const promise = s.handleQuestion(
       { questions: [{ question: 'Pick?', options: ['A', 'B'] }] },
@@ -213,12 +230,13 @@ test.describe('AskUserQuestion', () => {
     );
     assert.equal(s.pendingQuestions.size, 1);
     const result = await awaitTtlSettled(promise); // 见 helper 注释：expiryTimer 是 unref 的
-    assert.equal(result.behavior, 'deny');
-    assert.equal(result.interrupt, false);
+    assert.equal(result.behavior, 'allow');
+    assert.deepEqual(result.updatedInput.answers, {});
+    assert.equal('annotations' in result.updatedInput, false);
     assert.equal(s.pendingQuestions.size, 0);
     const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 'q1' && e.payload.outcome === 'expired');
     assert.ok(rr, '整组 outcome=expired');
-    assert.equal(s.denyKinds.get('q1'), 'denied');
+    assert.equal(s.denyKinds.has('q1'), false);
     s.dispose();
   });
 
@@ -236,18 +254,16 @@ test.describe('AskUserQuestion', () => {
     s.dispose();
   });
 
-  test('resolveQuestion：multiSelect optionIndexes 多选合并', async () => {
+  test('resolveQuestion：multiSelect optionIndexes 多选按 CLI 规则用 ", " 拼', async () => {
     const { s } = makeSession();
     const ac = new AbortController();
     const promise = s.handleQuestion(
-      { questions: [{ question: 'Pick many', multiSelect: true, options: ['A', 'B', 'C'] }] },
+      { questions: [{ question: 'Pick many', multiSelect: true, options: ['A', 'B', 'C, D'] }] },
       { signal: ac.signal, toolUseID: 'q1' }
     );
     s.resolveQuestion('q1#0', null, { optionIndexes: [0, 2] });
     const result = await promise;
-    // 多选合并进同一对书名号：用户选择了：「A、C」
-    assert.match(result.message, /「A、C」/);
-    assert.ok(!result.message.includes('B'));
+    assert.deepEqual(result.updatedInput.answers, { 'Pick many': 'A, "C, D"' });
     s.dispose();
   });
 
@@ -298,21 +314,21 @@ test.describe('AskUserQuestion', () => {
     ],
   };
 
-  test('resolveQuestionGroup：整组合法 → 一次交给模型，答案按题序拼，逐题与整组 request_resolved 都发', async () => {
+  test('resolveQuestionGroup：整组合法 → 一次交给 CLI，answers 按题目原文作键，逐题与整组 request_resolved 都发', async () => {
     const { s, events } = makeSession();
     const ac = new AbortController();
-    const promise = s.handleQuestion(threeQuestions, { signal: ac.signal, toolUseID: 'q1' });
-    // 提交顺序与题序无关：拼给模型的那句话只靠顺序对应题目，必须按题序
+    const input = structuredClone(threeQuestions);
+    const promise = s.handleQuestion(input, { signal: ac.signal, toolUseID: 'q1' });
     s.resolveQuestionGroup('q1', [
       { index: 2, freeText: ' 自定义 ' },
       { index: 0, optionIndex: 1 },
       { index: 1, optionIndexes: [0, 2] },
     ]);
     const result = await promise;
-    assert.equal(result.behavior, 'deny');
-    assert.equal(result.message, '用户选择了：「B」、「X、Z」、「自定义」');
+    assert.equal(result.behavior, 'allow');
+    assert.deepEqual(result.updatedInput.answers, { Q1: 'B', Q2: 'X, Z', Q3: '自定义' });
+    assert.deepStrictEqual(result.updatedInput.questions, threeQuestions.questions);
     assert.equal(s.pendingQuestions.size, 0);
-    assert.equal(s.denyKinds.get('q1'), 'answered');
     const rrs = events.filter(e => e.type === 'request_resolved' && e.payload.kind === 'question').map(e => e.payload.requestId);
     // 逐题那三条是回放去重与其它设备关卡的依据，整组那条是终态
     assert.deepEqual([...rrs].sort(), ['q1', 'q1#0', 'q1#1', 'q1#2']);
@@ -335,7 +351,9 @@ test.describe('AskUserQuestion', () => {
     s.dispose();
   });
 
-  test('resolveQuestionGroup：必须覆盖每一道仍未作答的题（缺题、重题都不收）', () => {
+  // 允许留题不答之后，「没答」也要显式写成 { skipped: true }：整组仍须覆盖每一道未答题，
+  // 否则半组写入的坑又回来了（只收到一半，剩下的题快照里不再补发、也没人能再答）。
+  test('resolveQuestionGroup：必须覆盖每一道仍未作答的题，没答的要显式 skipped（缺题、重题都不收）', () => {
     const { s } = makeSession();
     const ac = new AbortController();
     s.handleQuestion(threeQuestions, { signal: ac.signal, toolUseID: 'q1' });
@@ -344,6 +362,32 @@ test.describe('AskUserQuestion', () => {
     // 三题都覆盖了、只是第 1 题交了两个不同答案：哪个算数说不清，整组不收
     s.resolveQuestionGroup('q1', [{ index: 0, optionIndex: 0 }, { index: 0, optionIndex: 1 }, { index: 1, optionIndexes: [1] }, { index: 2, optionIndex: 0 }]);
     assert.equal(s.pendingQuestions.get('q1').remaining, 3, '同一题交两次不收');
+    s.dispose();
+  });
+
+  test('resolveQuestionGroup：留题不答（skipped）→ 本轮继续，answers 里没有那题，逐题 outcome=skipped', async () => {
+    const { s, events } = makeSession();
+    const ac = new AbortController();
+    const promise = s.handleQuestion(structuredClone(threeQuestions), { signal: ac.signal, toolUseID: 'q1' });
+    s.resolveQuestionGroup('q1', [{ index: 0, optionIndex: 0 }, { index: 1, skipped: true }, { index: 2, optionIndex: 0 }]);
+    const result = await promise;
+    assert.equal(result.behavior, 'allow');
+    assert.deepEqual(result.updatedInput.answers, { Q1: 'A', Q3: 'P' });
+    assert.equal('annotations' in result.updatedInput, false, 'CLI 没声明能力：不带 annotations，旧 CLI 在严格宿主下会整份拒收');
+    const outcomes = Object.fromEntries(events.filter(e => e.type === 'request_resolved').map(e => [e.payload.requestId, e.payload.outcome]));
+    assert.deepEqual(outcomes, { 'q1#0': 'answered', 'q1#1': 'skipped', 'q1#2': 'answered', q1: 'answered' });
+    s.dispose();
+  });
+
+  test('resolveQuestionGroup：CLI 声明了 unanswered 能力 → 没答的题标 unanswered: skipped', async () => {
+    const { s } = makeSession();
+    s.cliCapabilities = new Set([UNANSWERED_CAP]);
+    const ac = new AbortController();
+    const promise = s.handleQuestion(structuredClone(threeQuestions), { signal: ac.signal, toolUseID: 'q1' });
+    s.resolveQuestionGroup('q1', [{ index: 0, skipped: true }, { index: 1, optionIndexes: [1] }, { index: 2, skipped: true }]);
+    const result = await promise;
+    assert.deepEqual(result.updatedInput.answers, { Q2: 'Y' });
+    assert.deepEqual(result.updatedInput.annotations, { Q1: { unanswered: 'skipped' }, Q3: { unanswered: 'skipped' } });
     s.dispose();
   });
 
@@ -362,12 +406,12 @@ test.describe('AskUserQuestion', () => {
       // 先同步判：被拒收时 promise 要到 TTL 才结算，直接 await 会把测试挂住而不是变红
       assert.equal(s.pendingQuestions.size, 0, `提交了 ${items.length} 项却被整组拒收，这一轮会挂到 TTL`);
       const result = await promise;
-      assert.equal(result.message, '用户选择了：「A」、「Y」、「P」', `提交了 ${items.length} 项`);
+      assert.deepEqual(result.updatedInput.answers, { Q1: 'A', Q2: 'Y', Q3: 'P' }, `提交了 ${items.length} 项`);
       s.dispose();
     }
   });
 
-  test('resolveQuestionGroup：过期后整组提交不作答（fail-closed，与逐题作答对称）', async () => {
+  test('resolveQuestionGroup：过期后整组提交不作答（与逐题作答对称），按过期结算', async () => {
     const { s, events } = makeSession({ approvalTtlMs: 60_000 });
     const ac = new AbortController();
     const promise = s.handleQuestion(threeQuestions, { signal: ac.signal, toolUseID: 'q1' });
@@ -379,9 +423,51 @@ test.describe('AskUserQuestion', () => {
       Date.now = realNow;
     }
     const result = await promise;
-    assert.doesNotMatch(result.message, /用户选择了/);
-    assert.equal(s.denyKinds.get('q1'), 'denied');
+    assert.deepEqual(result.updatedInput.answers, {}, '过期之后交来的答案不算数');
     assert.ok(events.some(e => e.type === 'request_resolved' && e.payload.requestId === 'q1' && e.payload.outcome === 'expired'));
+    s.dispose();
+  });
+
+  // 「不回答」：关掉整张卡、本轮继续（模型看到 The user did not answer the questions.），和「中止本轮」是两回事
+  test('dismissQuestion：allow + 空 answers，本轮继续；逐题与整组 outcome=dismissed', async () => {
+    const { s, events } = makeSession();
+    const ac = new AbortController();
+    const promise = s.handleQuestion(structuredClone(threeQuestions), { signal: ac.signal, toolUseID: 'q1' });
+    s.dismissQuestion('q1');
+    assert.equal(s.pendingQuestions.size, 0);
+    const result = await promise;
+    assert.equal(result.behavior, 'allow');
+    assert.deepEqual(result.updatedInput.answers, {});
+    assert.equal('annotations' in result.updatedInput, false);
+    assert.deepStrictEqual(result.updatedInput.questions, threeQuestions.questions);
+    const outcomes = Object.fromEntries(events.filter(e => e.type === 'request_resolved').map(e => [e.payload.requestId, e.payload.outcome]));
+    assert.deepEqual(outcomes, { 'q1#0': 'dismissed', 'q1#1': 'dismissed', 'q1#2': 'dismissed', q1: 'dismissed' });
+    s.dispose();
+  });
+
+  test('dismissQuestion：已经答了的题照样交上去；有能力时只给没答的标 dismissed', async () => {
+    const { s } = makeSession();
+    s.cliCapabilities = new Set([UNANSWERED_CAP]);
+    const ac = new AbortController();
+    const promise = s.handleQuestion(structuredClone(threeQuestions), { signal: ac.signal, toolUseID: 'q1' });
+    s.resolveQuestion('q1#0', 1); // 旧页面逐题答了第 1 题
+    s.dismissQuestion('q1');
+    const result = await promise;
+    assert.deepEqual(result.updatedInput.answers, { Q1: 'B' });
+    assert.deepEqual(result.updatedInput.annotations, { Q2: { unanswered: 'dismissed' }, Q3: { unanswered: 'dismissed' } });
+    s.dispose();
+  });
+
+  test('dismissQuestion：不认识的 toolUseID、已结算的提问 → 什么都不做', () => {
+    const { s, events } = makeSession();
+    s.dismissQuestion('nope');
+    assert.equal(events.length, 0);
+    const ac = new AbortController();
+    s.handleQuestion({ questions: [{ question: 'Q1', options: ['A'] }] }, { signal: ac.signal, toolUseID: 'q1' });
+    s.resolveQuestion('q1#0', 0);
+    const before = events.length;
+    s.dismissQuestion('q1');
+    assert.equal(events.length, before);
     s.dispose();
   });
 

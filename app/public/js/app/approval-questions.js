@@ -68,7 +68,7 @@ export function createApprovalController(context, {
   const permAllowBtn = byId('permAllow'), permDenyBtn = byId('permDeny'), permIntegrityReload = byId('permIntegrityReload');
   const questionText = byId('questionText'), questionOptions = byId('questionOptions');
   const questionHeader = byId('questionHeader'), questionMultiHint = byId('questionMultiHint');
-  const questionMultiSubmit = byId('questionMultiSubmit'), questionSkip = byId('questionSkip');
+  const questionMultiSubmit = byId('questionMultiSubmit'), questionSkip = byId('questionSkip'), questionInterrupt = byId('questionInterrupt');
   const questionOtherToggle = byId('questionOtherToggle'), questionOtherPanel = byId('questionOtherPanel');
   const questionOtherInput = byId('questionOtherInput'), questionOtherSubmit = byId('questionOtherSubmit');
   const questionOtherWrap = byId('questionOtherWrap'), questionTabs = byId('questionTabs');
@@ -391,9 +391,10 @@ export function createApprovalController(context, {
 
   // ---- 选择题弹窗（E7：AskUserQuestion）----
   // 单题：点选项即交（多选点「确认选择」）。多题（服务端标了 questionCount > 1）：对齐 CLI 合成一张组卡，
-  // 顶部标签栏来回切题，答案先攒成草稿，最后在复查页整组一次提交；没答完时「提交」禁用（机主定，CLI 允许缺题）。
+  // 顶部标签栏来回切题，答案先攒成草稿，最后在复查页整组一次提交；留着没答的题按跳过提交（#455，机主 2026-10-29
+  // 改判对齐 CLI——原先没答完禁用提交，理由是给模型的文案只靠顺序对应题目，答案改按题目原文作键后不成立了）。
   // activeGroup = { key: toolUseID, questions（按 questionIndex 升序）, drafts, cursor, openIndexes }，cursor 等于
-  // 题数时停在复查页；openIndexes 是仍未作答的题，含还没送到的——各题分开送达，收齐答完才放行提交。
+  // 题数时停在复查页；openIndexes 是仍未作答的题，含还没送到的——各题分开送达，收齐之前不放行提交。
   // 组卡期间 activeQuestion 恒为 null。
   let activeGroup = null;
   // 组卡草稿按 toolUseID 留着：切会话时 clearAll 收卡，切回来 pending 快照重建组卡时接着用。只在提交 / 整组
@@ -489,18 +490,19 @@ export function createApprovalController(context, {
     questionMultiSubmit.disabled = questionArming || (!activeGroup && n === 0);
     questionMultiSubmit.textContent = n ? `${base} (${n})` : base;
   }
-  // 提问 sheet 动作按钮可点状态只在这里算：防误触期内全部禁用；结束后尊重空多选 / 组卡未答完。
+  // 提问 sheet 动作按钮可点状态只在这里算：防误触期内全部禁用；结束后尊重空多选 / 组卡还有题没送到。
   // 用原生 disabled 而不只是 pointer-events：后者挡不住键盘 Enter（对齐 syncPermButtons / 验收 O70）。
   function syncQuestionButtons() {
     if (questionSkip) questionSkip.disabled = questionArming;
+    if (questionInterrupt) questionInterrupt.disabled = questionArming;
     if (questionOtherSubmit) questionOtherSubmit.disabled = questionArming;
     syncMultiSubmit();
     if (questionGroupSubmit) {
-      let missing = 0;
+      let undelivered = 0;
       if (activeGroup) {
-        missing = buildQuestionGroupAnswers(activeGroup.questions, activeGroup.drafts, [...activeGroup.openIndexes]).missing.length;
+        undelivered = buildQuestionGroupAnswers(activeGroup.questions, activeGroup.drafts, [...activeGroup.openIndexes]).undelivered.length;
       }
-      questionGroupSubmit.disabled = questionArming || missing > 0;
+      questionGroupSubmit.disabled = questionArming || undelivered > 0;
     }
     // 选项按钮（及同 wrap 内预览按钮）随 arming 禁用；desc 等非按钮子节点没有 onclick，跳过
     if (questionOptions) {
@@ -647,10 +649,10 @@ export function createApprovalController(context, {
     });
     addTab(`✓ ${t('提交')}`, g.questions.length);
   }
-  // 复查页：逐题列答案，点一行回那题改；没答的标「未作答」，答完才能提交。
+  // 复查页：逐题列答案，点一行回那题改；没答的标「未作答」，提交时按跳过处理；还有题没送到时等收齐。
   function paintGroupReview() {
     const g = activeGroup;
-    const { missing } = buildQuestionGroupAnswers(g.questions, g.drafts, [...g.openIndexes]);
+    const { missing, undelivered } = buildQuestionGroupAnswers(g.questions, g.drafts, [...g.openIndexes]);
     if (questionReviewList) {
       questionReviewList.innerHTML = '';
       g.questions.forEach((q, i) => {
@@ -670,23 +672,25 @@ export function createApprovalController(context, {
       });
     }
     if (questionReviewMissing) {
-      questionReviewMissing.textContent = missing.length ? t('还有 {n} 题没答，答完才能提交').replace('{n}', missing.length) : '';
-      questionReviewMissing.classList.toggle('hidden', !missing.length);
+      const note = undelivered.length ? t('还有 {n} 题没送到，收齐后才能提交').replace('{n}', undelivered.length)
+        : missing.length ? t('还有 {n} 题没答，提交后按跳过处理').replace('{n}', missing.length) : '';
+      questionReviewMissing.textContent = note;
+      questionReviewMissing.classList.toggle('hidden', !note);
     }
-    if (questionGroupSubmit) questionGroupSubmit.disabled = questionArming || missing.length > 0;
+    if (questionGroupSubmit) questionGroupSubmit.disabled = questionArming || undelivered.length > 0;
   }
   function submitQuestionGroup() {
     if (questionArming) return;
     const g = activeGroup;
     if (!g) return;
-    const { answers, missing } = buildQuestionGroupAnswers(g.questions, g.drafts, [...g.openIndexes]);
-    if (missing.length) return; // 按钮此时是禁用的
+    const { answers, undelivered } = buildQuestionGroupAnswers(g.questions, g.drafts, [...g.openIndexes]);
+    if (undelivered.length) return; // 按钮此时是禁用的
     if (failIfDisconnected('question')) return;
     // 先标记已答再 emit/关窗（同 answerQuestion）；整组 key 入库即覆盖组里每一个 #i
     markQuestionAnswered(g.key);
     groupDrafts.delete(g.key);
     socket.emit('user:answer', { requestId: g.key, answers, instanceId: g.instanceId ?? getViewingInstanceId() });
-    const labels = g.questions.map(q => `「${questionDraftLabel(q, g.drafts.get(q.questionIndex))}」`);
+    const labels = g.questions.map(q => `「${questionDraftLabel(q, g.drafts.get(q.questionIndex)) || t('跳过')}」`);
     finishQuestionUI(`${t('已选择：')}${labels.join(t('、'))}`);
   }
 
@@ -765,18 +769,34 @@ export function createApprovalController(context, {
       if (e.key === 'Enter') { e.preventDefault(); if (!questionArming) answerQuestionOther(); }
     });
   }
-  // 跳过/中止：复用 user:interrupt。后端 handleQuestion 已监听 abort → deny「问题已取消」；
-  // 弹窗内必须自带此入口——遮罩盖住输入区「停止」时否则无路可走。
-  // 不在本地乐观关窗：等 request_resolved(aborted) / result 走既有清理，避免多设备/重放分叉。
+  // 「不回答」（#455）：关掉整张卡、本轮继续——服务端 allow + 空 answers，模型看到 The user did not answer the questions.
+  // 按整组 key 发（单题卡也是一组），本机乐观关卡同作答；与「中止本轮」分开：用户只是不想答，不该连这一轮一起停掉。
   if (questionSkip) {
     questionSkip.onclick = () => {
+      if (questionArming) return;
+      const key = activeGroup ? activeGroup.key : activeQuestion ? questionGroupKey(activeQuestion.requestId) : null;
+      if (!key) return;
+      if (failIfDisconnected('question')) return; // #371
+      haptic('tap');
+      const instanceId = (activeGroup || activeQuestion).instanceId ?? getViewingInstanceId();
+      markQuestionAnswered(key);
+      groupDrafts.delete(key);
+      socket.emit('user:answer', { requestId: key, dismiss: true, instanceId });
+      finishQuestionUI(t('已选择不回答，本轮继续'));
+    };
+  }
+  // 中止本轮：复用 user:interrupt。后端 handleQuestion 已监听 abort → deny「问题已取消」+ interrupt，等价终端 Esc；
+  // 弹窗内必须自带此入口——遮罩盖住输入区「停止」时否则无路可走。
+  // 不在本地乐观关窗：等 request_resolved(aborted) / result 走既有清理，避免多设备/重放分叉。
+  if (questionInterrupt) {
+    questionInterrupt.onclick = () => {
       if (questionArming) return;
       if (!activeQuestion && !activeGroup) return;
       // #371：断线时不要 emit interrupt（恢复后可能补送一次中止）；失败原因写浮层内
       if (failIfDisconnected('question')) return;
       haptic('tap');
       clearSheetErrors();
-      addBar(t('已跳过提问（中止本轮）'), 'text-ink-faint');
+      addBar(t('已请求中止本轮'), 'text-ink-faint');
       requestInterrupt();
     };
   }

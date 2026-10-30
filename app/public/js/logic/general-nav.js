@@ -25,7 +25,7 @@
 // "L1 有几行、各是什么" 只有一个事实源——接线层按 GENERAL_NAV_IDS 找 L2 页容器，两处分叉会让
 // 某一页永远打不开，而那种失败在 UI 上表现为"点了没反应"，最难归因。
 
-import { t, getLang } from '../i18n.js';
+import { t, tk, getLang } from '../i18n.js';
 import { formatUptime } from './format.js';
 
 // L1 七行的 id 与顺序。接线层据此定位 L2 页容器（#generalPage-<id>），测试据此钉住顺序。
@@ -164,19 +164,25 @@ function aboutRow({ service = null } = {}) {
   return row('about', 'ℹ️', t('关于'), items);
 }
 
-// MCP 服务器里「一切正常」的唯一取值。SDK 的 d.ts 只声明 `status: string`，没给取值集合——
-// 所以这里用**白名单**而不是黑名单：不认识的值一律落到「有问题」一侧。
-// 把一个连不上的服务器显示成正常，比显示成未知更糟——用户会拿着一个绿灯去别处找原因。
-const MCP_OK_STATUS = 'connected';
+// MCP 服务器状态分档（#457）。取值集合来自 mcpServerStatus() 的类型声明：
+// connected / failed / needs-auth / pending / disabled。connected 是绿档；pending（正在连）与 disabled（用户自己停用的）
+// 是灰档，都不是故障；其余归红档——不认识的值也落到「有问题」一侧（白名单原则不变）：把一个连不上的服务器显示成
+// 正常，比显示成未知更糟，用户会拿着一个绿灯去别处找原因。
+const MCP_TONE = { connected: 'ok', pending: 'muted', disabled: 'muted' };
+const MCP_LABEL = {
+  pending: tk('连接中'),
+  disabled: tk('已停用'),
+  failed: tk('连接失败'),
+  'needs-auth': tk('需要授权'),
+};
 
 /**
- * 把 init 事件里的 mcp_servers 译成「几个、哪个坏了」。
+ * 把 MCP 服务器清单（init 的 mcp_servers 快照，或 mcp:status 现查的结果）译成「几个、哪个有问题、能做什么」。
  *
- * 这份数据早就随 init 到了浏览器（agent/agent.js 的 emit('init', {mcpServers})），
- * 只是从来没有渲染面——补它只差一个格式化。
- *
- * @param {Array<{name?: string, status?: string}>|null|undefined} servers
- * @returns {{total: number, failed: number, items: Array<{name: string, status: string, ok: boolean}>}|null}
+ * @param {Array<{name?: string, status?: string, error?: string}>|null|undefined} servers
+ * @returns {{total: number, failed: number, items: Array<{name: string, status: string, tone: 'ok'|'muted'|'bad',
+ *   label: string, error: string, reconnect: boolean, enabled: boolean, needsAuth: boolean}>}|null}
+ *   failed 只数红档。label 是给人看的状态（绿档为空）；不认识的值原样显示。
  *   没有任何服务器时返回 null（调用方据此整段隐藏，不给空计数占位）
  */
 export function formatMcpServers(servers) {
@@ -185,10 +191,20 @@ export function formatMcpServers(servers) {
     .filter(s => s && typeof s.name === 'string' && s.name)
     .map(s => {
       const status = typeof s.status === 'string' ? s.status : '';
-      return { name: s.name, status, ok: status === MCP_OK_STATUS };
+      const tone = MCP_TONE[status] || 'bad';
+      return {
+        name: s.name,
+        status,
+        tone,
+        label: MCP_LABEL[status] ? t(MCP_LABEL[status]) : (tone === 'ok' ? '' : status || t('状态未知')),
+        error: typeof s.error === 'string' ? s.error : '',
+        reconnect: status === 'failed',
+        enabled: status !== 'disabled',
+        needsAuth: status === 'needs-auth',
+      };
     });
   if (!items.length) return null;
-  return { total: items.length, failed: items.filter(i => !i.ok).length, items };
+  return { total: items.length, failed: items.filter(i => i.tone === 'bad').length, items };
 }
 
 /**

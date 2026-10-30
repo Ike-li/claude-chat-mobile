@@ -141,11 +141,12 @@ const CLAIMS = [
     actual: () => /s\?\.data\?\.hidden !== true/.test(read('app/src/ops/notifications.js')) ? 'hidden !== true' : '判据已改', expect: 'hidden !== true' },
   { diagram: '00', shown: 'claude-agent-sdk 0.3.310',
     actual: () => JSON.parse(read('package.json')).dependencies['@anthropic-ai/claude-agent-sdk'], expect: '0.3.310' },
-  { diagram: '00 / 01 / 08 / 11', shown: '共 32 种 type',
+  { diagram: '00 / 01 / 08 / 11', shown: '共 33 种 type',
     // 同上：27 → 31（trusted_devices、session_recap、prompt_suggestion、rewind_applied）；
-    // 31 → 32（elicitation，#460），gh-pages 四张图与图集首页只换显示文字。
+    // 31 → 32（foreground_tasks，#459），gh-pages 四张图与图集首页只换显示文字。
+    // 32 → 33（elicitation，#460），同样只换显示文字。
     actual: () => (/AGENT_EVENT_TYPES = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(read('app/src/shared/protocol.js'))?.[1].match(/'[a-z_]+'/g) || []).length,
-    expect: 32 },
+    expect: 33 },
   { diagram: '06', shown: '但「后台完成」只算真后台：跑得久的前台 Bash 靠 is_backgrounded 滤掉',
     actual: () => {
       const src = read('app/src/agent/agent.js');

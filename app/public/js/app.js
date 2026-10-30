@@ -76,7 +76,6 @@ import {
   undismissedServiceNotices,
   MISSING_FOLDERS_NOTICE_ID,
   formatHooksBridgeRow,
-  formatMcpServers,
   formatPushStatusRow,
   describePushTestResult,
   formatStatuslineBridgeRow,
@@ -171,6 +170,7 @@ import {
   detectAtMentionQuery,
   applyAtMentionPick,
   buildSlashCommandHints,
+  hasSlashCommand,
   composerHintOptionId,
   resolveComposerHintKeydown,
   unifiedDiffLines,
@@ -213,6 +213,7 @@ import { readThemePref, writeThemePref, applyThemeToDocument } from './theme.js'
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
 // 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
 import { resolveDirUnreadBadge, unreadSessionsInGroup } from './logic/unread.js';
+import { askQuestionResultView } from './logic/questions.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
 import { createAlertController } from './app/alerts.js';
@@ -236,6 +237,7 @@ import { createComposePage } from './app/compose-page.js';
 import { createSettingsController } from './app/settings.js';
 import { createGeneralNav } from './app/general-nav.js';
 import { createAboutPage } from './app/about-page.js';
+import { createHostMcp } from './app/host-mcp.js';
 import { createEnvConfigPanel } from './app/env-config.js';
 import { createNoticeDismissals } from './app/notice-dismissals.js';
 import { createLastKnownExpiry } from './app/terminal-state-expiry.js';
@@ -251,6 +253,8 @@ import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
 import { createSessionRowMenu } from './app/session-row-menu.js';
 import { createElicitationSheet } from './app/elicitation-sheet.js';
+import { createForegroundTasks } from './app/foreground-tasks.js';
+import { createSessionRenameController } from './app/session-rename.js';
 import { createCrashNotices } from './app/crash-notices.js';
 import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
@@ -2784,6 +2788,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     }),
     outOfBand: {
       task_notification: onTaskNotification,
+      // 前台任务集合（#459）：按实例存、只画当前查看的那个，所以不经视图过滤
+      foreground_tasks: (ev) => foregroundTasks.onEvent(ev),
       // 回退已生效（可能来自本机，也可能来自另一台设备）。走 outOfBand 而非普通 handler：
       // 它是【跨会话】通知，普通分支会因 event.sessionId ≠ currentSessionId 触发 onSessionId
       // 把当前会话身份改掉——用户正看着 A 会话，B 会话的回退不该改写 A 的状态。
@@ -3217,6 +3223,8 @@ import { createGateFocusController } from './app/focus-layers.js';
         </details>`);
       setStatusIcon(card.querySelector('.t-status'), 'pending');
       card.dataset.toolName = p.name || ''; // tool_result 无 name，结果特化渲染从卡上取
+      // 会话 DOM 缓存放回的卡不进 toolCards，要按 id 找卡的（「后台运行」按钮）靠这个属性，见 getToolCard
+      if (p.toolUseId) card.dataset.toolUseId = p.toolUseId;
       const inCode = card.querySelector('.t-in code');
       if (inCode) {
         // 空对象输入展开也只有「{}」噪音 → 整块藏掉（CLI 对空输入零渲染）
@@ -3328,7 +3336,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
       // 机制 4 错误显性化：子工具真错误累进聚合卡标题的 ❌ 计数。折叠态下嵌套卡的红图标看不见，
       // 而移动端多数时候就是折叠着的——不往上报一层，子代理内部报错在手机上等于隐瞒。
-      // 【只数真错误】denyKind 的三档（已回答/已拒绝/已取消）是用户自己的动作，他知道，不是异常。
+      // 【只数真错误】denyKind 的两档（已拒绝/已取消）是用户自己的动作，他知道，不是异常。
       // 【不染聚合卡的状态图标】那个图标表达的是 Agent 工具【自身】的结果（下方 tool_result 在管）：
       // 一次失败的 Read 不该让整张卡看起来失败了——子代理完全可能照常得出结论。
       if (isSubagentPayload(p) && p.ok === false && !p.denyKind) {
@@ -3346,17 +3354,20 @@ import { createGateFocusController } from './app/focus-layers.js';
         }
         return;
       }
-      // deny+message 通道结果被 SDK 标 is_error（ok:false），但真实语义由 denyKind 决定（agent.js）：
-      // answered=已回答 ☑️ / denied=已拒绝 🚫 / cancelled=已取消 🚫——均非工具报错；无 denyKind 才按 ok 显 ✅/❌。
+      // 审批的 deny+message 通道结果被 SDK 标 is_error（ok:false），真实语义由 denyKind 决定（agent.js）：
+      // denied=已拒绝 🚫 / cancelled=已取消 🚫——均非工具报错。AskUserQuestion 的作答 #455 起走 allow，结果本身就是
+      // 成功的，按 CLI 文案分已回答 / 没回答（askQuestionResultView，与历史回放同一个判法）；其余按 ok 显 ✅/❌。
       // UI-007：结果态 SVG
-      const statusKind = p.denyKind === 'answered' ? 'answered'
+      const askView = !p.denyKind && card.dataset.toolName === 'AskUserQuestion'
+        ? askQuestionResultView({ ok: p.ok, text: p.outputSummary }) : null;
+      const statusKind = askView ? askView.kind
         : (p.denyKind === 'denied' || p.denyKind === 'cancelled') ? 'denied'
         : (p.ok ? 'ok' : 'error');
       setStatusIcon(card.querySelector('.t-status'), statusKind); // 语义色随 kind 一起落，见 setStatusIcon
       if (p.outputSummary) {
         const out = card.querySelector('.t-out');
         // deny 通道正文带 SDK 加的 "Error:" 前缀（非真错误），剥掉只留语义文本
-        const raw = p.denyKind ? p.outputSummary.replace(/^Error:\s*/i, '') : p.outputSummary;
+        const raw = askView ? askView.text : p.denyKind ? p.outputSummary.replace(/^Error:\s*/i, '') : p.outputSummary;
         const code = out.querySelector('code') || out;
         // Task 清单工具结果 → ☐/◐/☒ 清单文本（deny/报错走通用路径保留原文）
         const taskText = (!p.denyKind && p.ok) ? renderTaskToolResultText(card.dataset.toolName, raw) : null;
@@ -4085,6 +4096,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   function adoptSpawnCard(sa, p) {
     const wrap = sa.el;
     wrap.dataset.toolName = p.name || ''; // tool_result 无 name，清单工具特化渲染从卡上取（同通用卡）
+    if (p.toolUseId) wrap.dataset.toolUseId = p.toolUseId; // 同通用卡
     setStatusIcon(wrap.querySelector('.t-status'), 'pending');
     // 【只显 description，不铺原始输入】通用工具卡在这个槽里放的是整个 input 的 pretty JSON，
     // 合卡后它就挡在展开区门口——含用户刚打的整段 prompt（2026-09-10 真机撞到）。CLI 在同一
@@ -4326,7 +4338,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传。
     // /rewind 前端拦截——同 /model：TUI 命令不可透传（SDK 非交互，出不来那两步选择界面）。
     // 映射到本地的两步面板，最终仍落在 session:rewind:preview / confirm 上。
-    if (/^\/rewind(\s|$)/.test(rawText) && !(window.availableSkills || []).includes('rewind')) {
+    if (/^\/rewind(\s|$)/.test(rawText) && !hasSlashCommand(window.availableSkills, 'rewind')) {
       if (!displayedSessionId) { addBar(t('还没有会话可回退'), 'text-info'); return; }
       inputEl.value = '';
       inputEl.dispatchEvent(new Event('input'));
@@ -4335,7 +4347,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       rewindCommand.openPanel(displayedSessionId, drivingCwdOf(displayedInstanceId)); // 驾驶轴，同 requestSessionFork
       return;
     }
-    if (/^\/model(\s|$)/.test(rawText) && !(window.availableSkills || []).includes('model')) {
+    if (/^\/model(\s|$)/.test(rawText) && !hasSlashCommand(window.availableSkills, 'model')) {
       const arg = rawText.slice(6).trim();
       if (arg) {
         let nakedArg = arg;
@@ -4916,8 +4928,11 @@ import { createGateFocusController } from './app/focus-layers.js';
     autosize();
     updateSendButtonState();
   }
-  // 前端本地拦截命令（不透传后端），并入提示列表
-  const LOCAL_COMMANDS = ['model', 'rewind'];
+  // 前端本地拦截命令（不透传后端），并入提示列表。说明现取 t()：跟着当前语言走
+  const localCommandHints = () => [
+    { name: 'model', description: t('切换模型') },
+    { name: 'rewind', description: t('把代码和/或对话恢复到之前的某个时间点') },
+  ];
 
   inputEl.addEventListener('input', () => {
     const val = inputEl.value;
@@ -4929,15 +4944,18 @@ import { createGateFocusController } from './app/focus-layers.js';
       const matches = buildSlashCommandHints({
         commands: window.availableSkills || [],
         terminalCommands: window.terminalSlashCommands || [],
-        localCommands: LOCAL_COMMANDS,
+        localCommands: localCommandHints(),
         prefix: val.slice(1),
       });
       cmdHintActiveIndex = -1;
       if (matches.length > 0) {
+        // 说明与参数提示来自 skill / 插件 / MCP 文件，是第三方内容：一律 esc() 后才进 innerHTML
         hints.innerHTML = matches.map((cmd, i) => {
-          const safe = esc(cmd);
+          const safe = esc(cmd.name);
           const id = composerHintOptionId('cmd', i);
-          return `<div id="${id}" role="option" aria-selected="false" class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm font-mono" data-cmd="/${safe}">/${safe}</div>`;
+          const arg = cmd.argumentHint ? ` <span class="text-ink-soft">${esc(cmd.argumentHint)}</span>` : '';
+          const desc = cmd.description ? `<div class="slash-hint-desc text-xs text-ink-soft truncate">${esc(cmd.description)}</div>` : '';
+          return `<div id="${id}" role="option" aria-selected="false" class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm" data-cmd="/${safe}"><div class="font-mono truncate">/${safe}${arg}</div>${desc}</div>`;
         }).join('');
         hints.classList.remove('hidden');
         setComposerHintExpanded('cmdHints');
@@ -4960,8 +4978,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (!hints.contains(e.target) && e.target !== inputEl) hideCmdHints();
     if (atMentionList && !atMentionList.contains(e.target) && e.target !== inputEl) hideAtMentionList();
     // 点抽屉外面任意处 = 收抽屉。通用确认 sheet 与会话行「⋯」菜单（z-50，盖在抽屉之上）不算「外面」：
-    // 从抽屉里发起的操作（标为已读 / 未读、删除）做完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。
-    const insideConfirmSheet = Boolean(e.target.closest?.('#confirmModal, #sessionMenuModal'));
+    // 从抽屉里发起的操作（标为已读 / 未读、重命名、删除）做完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。
+    const insideConfirmSheet = Boolean(e.target.closest?.('#confirmModal, #sessionMenuModal, #sessionRenameModal'));
     // 本身就是「打开抽屉」入口的按钮（顶栏「需要你」chip、落地页「选择其他会话」）：同一次点击冒泡到这里，
     // 不豁免就是开了又立刻关上（验收 O37）。新入口在 index.html 上标 data-opens-drawer 即可。
     const opensDrawer = Boolean(e.target.closest?.('[data-opens-drawer]'));
@@ -5718,8 +5736,12 @@ import { createGateFocusController } from './app/focus-layers.js';
       ? currentCwd : null;
     currentCwd = newCwd;
     composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;
+    const viewingChanged = viewingInstanceId !== newViewing;
     viewingInstanceId = newViewing;
+    foregroundTasks.render(); // 「转后台」只跟着当前查看的实例
     cwdSeen = true;
+    // 「宿主机」页开着时查看的会话换了（含别的设备切走）：MCP 卡片立刻按新会话重画（先退回快照、不留旧按钮），再现查（#457 review）
+    if (viewingChanged && generalNav?.currentPage() === 'host') { renderHostEnvSection(); hostMcp.refresh(); }
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）
     if (pendingDeepLink) { const link = pendingDeepLink; pendingDeepLink = null; applyDeepLink(link); } // ②2c：instances 到齐后消费暂存深链
 
@@ -6331,6 +6353,8 @@ import { createGateFocusController } from './app/focus-layers.js';
       // 状态对账：视图已稳定（上面所有 clearView 已执行完）→ 用 ack 带回的快照重建未决审批/提问卡片。
       // 放最后而非提前 socket.emit，正为不被 reload 分支的 clearView 清掉（workflow 高频事件常触发 gap）。
       applyPendingSnapshot(res?.pending, id);
+      // 'keep' 分支的卡是从 sessionDomCache 放回的，这里视图已稳定，按手里的前台任务快照把「后台运行」挂回去
+      foregroundTasks.render();
     });
   }
 
@@ -7137,6 +7161,25 @@ import { createGateFocusController } from './app/focus-layers.js';
     },
   });
   const sessionRowMenu = createSessionRowMenu(appContext, { $, el, openSheet, closeSheet });
+  // 转后台（#459，终端 Ctrl+B）：输入条「转后台」与工具卡「后台运行」，见 app/foreground-tasks.js
+  const foregroundTasks = createForegroundTasks(appContext, {
+    $, socket, addBar,
+    getViewingInstanceId: () => viewingInstanceId,
+    // 切回会话时卡是从 sessionDomCache 原样放回的，toolCards 已随 clearView 清空；刷新后从历史渲染的卡只在
+    // histToolCards 里。两种都按 DOM 上的 data-tool-use-id 找回（#469 review）
+    getToolCard: toolUseId => toolCards.get(toolUseId)
+      || messagesEl.querySelector(`[data-tool-use-id="${CSS.escape(toolUseId)}"]`),
+  });
+  const sessionRename = createSessionRenameController(appContext, {
+    $, socket, openSheet, closeSheet,
+    onRenamed: ({ cwd, sectionKey, terminalMayOverwrite } = {}) => {
+      // 同删除：丢掉这一行所在小节的 SWR 缓存再重建，免得先画一帧旧名字
+      if (sectionKey) sessionsCache.delete(sectionKey);
+      if (cwd) sessionsCache.delete(cwd);
+      openSessionPanel();
+      drawer.showNotice(terminalMayOverwrite ? t('终端正在使用这个会话，改名可能被覆盖') : '');
+    },
+  });
 
   // ---- /rewind 面板（对齐终端的两步交互）----
   // 成功路径的 UI 更新由 rewind_applied 广播统一驱动（本机与其他设备同一条路径），
@@ -7299,40 +7342,28 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 这样是「先收侧栏、再弹面板」而不是反过来闪一帧。也**不能**改写 btnGeneralSettings.onclick
   // （那是控制器 bind 的落点，覆盖掉 open 就没了）。
   if (btnGeneralSettings) btnGeneralSettings.addEventListener('click', closeLeftSidebar);
-  // 「宿主机上的 claude」段：MCP 服务器与 skills 数，来自 init 事件（缺字段不覆盖，见 init handler）。
+  // 「宿主机上的 claude」段：MCP 服务器与 skills 数。skills 数来自 init 事件（缺字段不覆盖，见 init handler）；
+  // MCP 进页时现查（#457，见 app/host-mcp.js），拿不到再用 init 那份快照。
+  const hostMcp = createHostMcp({
+    emit: (event, payload, ms = 3000) => new Promise(resolve => {
+      socket.timeout(ms).emit(event, payload, (err, res) => resolve(err ? null : res));
+    }),
+    appConfirm,
+    getInstanceId: () => viewingInstanceId,
+    // 现取当前 cwd 的那份：没有就是没有，绝不回落到上一个工作区的快照
+    getSnapshot: () => mcpServersByCwd.get(currentCwd) ?? null,
+    onChange: () => renderHostEnvSection(),
+  });
   function renderHostEnvSection() {
     const section = $('hostEnvSection'), body = $('hostEnvBody');
     if (!section || !body) return;
-    // 现取当前 cwd 的那份：没有就是没有（整段隐藏），绝不回落到上一个工作区的快照。
-    const lastMcpServers = mcpServersByCwd.get(currentCwd) ?? null;
     const lastSkillsCount = skillsCountByCwd.get(currentCwd) ?? 0;
-    const mcp = formatMcpServers(lastMcpServers);
+    const mcpCard = hostMcp.renderCard();
     // 两样都没有 = 这个 cwd 确实既没配 MCP 也没有 skill，整段隐藏，不给空计数占位
-    if (!mcp && !lastSkillsCount) { section.classList.add('hidden'); return; }
+    if (!mcpCard && !lastSkillsCount) { section.classList.add('hidden'); return; }
     section.classList.remove('hidden');
     body.replaceChildren();
-
-    if (mcp) {
-      const card = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs"></div>');
-      const head = el('<div class="font-semibold text-ink"></div>');
-      head.textContent = `${t('MCP 服务器')} · ${mcp.total} ${t('个')}`;
-      card.appendChild(head);
-      const list = el('<div class="mt-1 flex flex-wrap gap-x-3 gap-y-1"></div>');
-      for (const item of mcp.items) {
-        const row = el('<span class="inline-flex items-center gap-1"></span>');
-        const dot = el('<span aria-hidden="true"></span>');
-        dot.className = item.ok ? 'text-success' : 'text-danger';
-        dot.textContent = '●';
-        const name = el('<span class="text-ink-soft"></span>');
-        // 非正常态把原始 status 一并显示：'failed' 与 'needs-auth' 是两种完全不同的处置，
-        // 压成一个「异常」会让用户无从下手。
-        name.textContent = item.ok ? item.name : `${item.name}（${item.status || t('状态未知')}）`;
-        row.append(dot, name);
-        list.appendChild(row);
-      }
-      card.appendChild(list);
-      body.appendChild(card);
-    }
+    if (mcpCard) body.appendChild(mcpCard);
 
     if (lastSkillsCount) {
       const skills = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs"></div>');
@@ -7405,7 +7436,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (page !== 'notify') notifications.clearSubscribeResult();
       // MCP / skills 那一段按 cwd 归键，而切到一个**已经 live** 的会话不会重放 init——
       // 只靠 init 回调重画的话，换过工作区之后这一页还挂着上一处的数据。每次进页现取一次。
-      if (page === 'host') { ensureGeneralVersions(); renderHostEnvSection(); }
+      if (page === 'host') { ensureGeneralVersions(); renderHostEnvSection(); hostMcp.refresh(); }
       // 审批规则每次进页重拉：用户可能刚在电脑上改过 settings.json，缓存一次会显示过期名单
       if (page === 'behavior') loadPermissionRules();
       if (page === 'about') { ensureGeneralVersions(); aboutPage.load(); }
@@ -7659,6 +7690,9 @@ import { createGateFocusController } from './app/focus-layers.js';
           socket.emit('session:close', { instanceId: liveInst.instanceId });
           closeLeftSidebar();
         }
+      } else if (action === 'rename') {
+        haptic('tap');
+        sessionRename.open({ sessionId: s.id, cwd: rowCwd, title: displaySessionTitle(s.title, ''), sectionKey: workspaceCwd });
       } else if (action === 'delete') {
         haptic('warning');
         openDeleteSession(s.id, rowCwd, displaySessionTitle(s.title, ''), workspaceCwd); // 空串 → 内部回落 sessionId
@@ -9273,6 +9307,8 @@ import { createGateFocusController } from './app/focus-layers.js';
       renderHistoryBubbles(msgs, () => {
         // 渲染途中切走时 renderHistoryBubbles 也会调这里（为了放行历史闸），那时补提示就补进了别的会话（PR #245 review）
         if (displayedSessionId === sessionId && displayedInstanceId === reqInstanceId) crashNotices.restore(sessionId);
+        // 前台任务快照随 sync:since 先到、那时卡还没从历史渲染出来——卡落地后再挂一次「后台运行」
+        foregroundTasks.render();
         flushHeldHistoryAppends(gateHandle);
         onDone?.();
       }, { fullReload: true, turnRunningAtRequest, noticeBar, superseded: () => historyLoadGate.superseded(gateHandle) });
@@ -9565,6 +9601,7 @@ import { createGateFocusController } from './app/focus-layers.js';
           </details>`);
         setStatusIcon(card.querySelector('.t-status'), 'pending');
         card.dataset.toolName = msg.name || ''; // tool_result 无 name，结果特化渲染从卡上取
+        if (msg.toolUseId) card.dataset.toolUseId = msg.toolUseId; // 同 live
         const inCode = card.querySelector('.t-in code');
         if (inCode) {
           if (String(msg.inputSummary || '').trim() === '{}') {
@@ -9586,6 +9623,7 @@ import { createGateFocusController } from './app/focus-layers.js';
             // 同 live 的 adoptSpawnCard：接管状态/输入/结果三槽 + 改写 histToolCards 指向，
             // 让本文件下方 tool_result 分支（setStatusIcon / .t-out / dataset.toolName）零改动生效。
             sa.el.dataset.toolName = msg.name || '';
+            sa.el.dataset.toolUseId = msg.toolUseId;
             setStatusIcon(sa.el.querySelector('.t-status'), 'pending');
             // 同 live 的 adoptSpawnCard：只显 description，不铺原始输入 JSON
             const histInEl = sa.el.querySelector('.t-in');
@@ -9630,13 +9668,15 @@ import { createGateFocusController } from './app/focus-layers.js';
           appendNode(orphan, msg);
           return;
         }
-        setStatusIcon(card.querySelector('.t-status'), msg.ok === false ? 'error' : 'ok');
+        // AskUserQuestion 同 live：按 CLI 文案分已回答 / 没回答；旧 transcript 的 deny 格式答案不再显成 ❌（#455）
+        const askView = card.dataset.toolName === 'AskUserQuestion' ? askQuestionResultView({ ok: msg.ok, text: msg.outputSummary }) : null;
+        setStatusIcon(card.querySelector('.t-status'), askView ? askView.kind : msg.ok === false ? 'error' : 'ok');
         if (msg.outputSummary) {
           const out = card.querySelector('.t-out');
           const code = out.querySelector('code') || out;
           // Task 清单工具结果 → ☐/◐/☒ 清单文本（同 live；历史是 block.content 文本形态）
           const taskText = msg.ok !== false ? renderTaskToolResultText(card.dataset.toolName, msg.outputSummary) : null;
-          code.textContent = taskText ?? formatToolSummary(msg.outputSummary);
+          code.textContent = taskText ?? formatToolSummary(askView ? askView.text : msg.outputSummary);
           if (!taskText && code !== out) {
             code.className = toolOutputHighlightClass(code.textContent);
             codeBlocks.push(code);

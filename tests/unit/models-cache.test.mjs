@@ -9,6 +9,7 @@ import {
   createModelsCache,
   createCwdKeyedCache,
   isCwdDefaultModel,
+  mergeInitSlashCommands,
   modelListSignature,
   normalizeSlashCommands,
   resolveSlashCommandsForCwd,
@@ -122,13 +123,45 @@ test.describe('isCwdDefaultModel：只采纳「fresh + 未 pin」启动的模型
 
 // slash 命令 per-cwd：连接重放 / 切区注入的数据源。核心不变量同 models——A 区列表绝不进 B 区视图。
 test.describe('normalizeSlashCommands / resolveSlashCommandsForCwd', () => {
-  test('normalize：string[] 原样；{name} 抽名；空/非数组 → null', () => {
-    assert.deepEqual(normalizeSlashCommands(['clear', 'model', 'git-commit']), ['clear', 'model', 'git-commit']);
-    assert.deepEqual(normalizeSlashCommands([{ name: 'help' }, { name: 'effort', description: 'x' }]), ['help', 'effort']);
+  // #456：菜单要显示说明与参数提示，归一不再只留名字。字段名照 SDK SlashCommand；空字段不带，省体积。
+  test('normalize：保留说明 / 参数提示 / 别名；裸字符串归一成 { name }；空 / 非数组 → null', () => {
+    assert.deepEqual(normalizeSlashCommands(['clear', 'model']), [{ name: 'clear' }, { name: 'model' }]);
+    assert.deepEqual(normalizeSlashCommands([
+      { name: 'review', description: 'Review a PR', argumentHint: '<pr>', aliases: [] },
+      { name: 'usage', description: 'Show usage', argumentHint: '', aliases: ['cost', 'stats'] },
+    ]), [
+      { name: 'review', description: 'Review a PR', argumentHint: '<pr>' },
+      { name: 'usage', description: 'Show usage', aliases: ['cost', 'stats'] },
+    ]);
     assert.equal(normalizeSlashCommands([]), null);
     assert.equal(normalizeSlashCommands(null), null);
     assert.equal(normalizeSlashCommands('clear'), null);
     assert.equal(normalizeSlashCommands([{ description: 'no name' }, '', null]), null);
+  });
+
+  // SDK SlashCommand.builtin：同名多行时 /name 执行标了 builtin 的那行。菜单上的说明要跟实际执行的一致。
+  test('normalize：同名多行只留一行，有 builtin 的那行优先，与先后无关', () => {
+    const plugin = { name: 'review', description: 'plugin review', argumentHint: '' };
+    const builtin = { name: 'review', description: 'builtin review', argumentHint: '', builtin: true };
+    assert.deepEqual(normalizeSlashCommands([plugin, builtin]), [{ name: 'review', description: 'builtin review' }]);
+    assert.deepEqual(normalizeSlashCommands([builtin, plugin]), [{ name: 'review', description: 'builtin review' }]);
+    assert.deepEqual(normalizeSlashCommands(['a', 'a', 'b']), [{ name: 'a' }, { name: 'b' }]);
+  });
+
+  // init 的 slash_commands 只有名字。直接覆盖的话，每轮 init 都把 supportedCommands() 拿到的说明抹掉。
+  test('init 合并：成员以 init 为准，同名沿用缓存里的说明；init 里没有的不残留', () => {
+    const cached = [
+      { name: 'clear', description: 'Clear conversation' },
+      { name: 'old-skill', description: 'deleted since' },
+    ];
+    assert.deepEqual(mergeInitSlashCommands(['clear', 'new-skill'], cached), [
+      { name: 'clear', description: 'Clear conversation' },
+      { name: 'new-skill' },
+    ]);
+    // init 自己带了说明（mock / 未来 CLI）就用它自己的
+    assert.deepEqual(mergeInitSlashCommands([{ name: 'clear', description: 'fresh' }], cached), [{ name: 'clear', description: 'fresh' }]);
+    assert.deepEqual(mergeInitSlashCommands(['clear'], null), [{ name: 'clear' }]);
+    assert.equal(mergeInitSlashCommands([], cached), null);
   });
 
   test('resolve：优先本 cwd 缓存；未知 cwd 不回落别区 lastInit', () => {
@@ -136,7 +169,7 @@ test.describe('normalizeSlashCommands / resolveSlashCommandsForCwd', () => {
     c.set('/ws/a', { slashCommands: ['a-skill', 'clear'] });
     const lastInit = { cwd: '/ws/a', slashCommands: ['a-skill', 'clear', 'model'] };
 
-    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', lastInit)?.slashCommands, ['a-skill', 'clear']);
+    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', lastInit)?.slashCommands, [{ name: 'a-skill' }, { name: 'clear' }]);
     // B 区无缓存、lastInit.cwd≠B → null（旧 #5 整字段剥离的动机：不把 A 区 skill 灌进 B）
     assert.equal(resolveSlashCommandsForCwd(c, '/ws/b', lastInit), null);
   });
@@ -144,13 +177,13 @@ test.describe('normalizeSlashCommands / resolveSlashCommandsForCwd', () => {
   test('resolve：本 cwd 无缓存但 lastInit.cwd 命中 → 回落 lastInit（冷启动种种子）', () => {
     const c = createCwdKeyedCache();
     const lastInit = { cwd: '/ws/a', slashCommands: ['clear', 'model', 'effort'] };
-    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', lastInit)?.slashCommands, ['clear', 'model', 'effort']);
+    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', lastInit)?.slashCommands, [{ name: 'clear' }, { name: 'model' }, { name: 'effort' }]);
   });
 
-  test('resolve：缓存可直接存 string[]（兼容 load 形态）', () => {
+  test('resolve：缓存可直接存 string[]（兼容 load 形态与 #456 之前落盘的旧缓存）', () => {
     const c = createCwdKeyedCache();
     c.set('/ws/a', ['clear', 'compact']);
-    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', null)?.slashCommands, ['clear', 'compact']);
+    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', null)?.slashCommands, [{ name: 'clear' }, { name: 'compact' }]);
   });
 
   test('resolve：缺 cache / 缺 cwd 安全 → null，不抛', () => {
@@ -167,13 +200,13 @@ test.describe('normalizeSlashCommands / resolveSlashCommandsForCwd', () => {
     const lastInit = { cwd: '/ws/b', slashCommands: ['x'], terminalSlashCommands: ['statusline'] };
 
     const a = resolveSlashCommandsForCwd(c, '/ws/a', lastInit);
-    assert.deepEqual(a.slashCommands, ['clear', 'color']);
+    assert.deepEqual(a.slashCommands, [{ name: 'clear' }, { name: 'color' }]);
     assert.deepEqual(a.terminalSlashCommands, ['color'], 'A 区命中缓存时，名单必须来自同一条缓存而非 lastInit');
 
     // 回落 lastInit 时两者也必须一起来自 lastInit
     const b = resolveSlashCommandsForCwd(createCwdKeyedCache(), '/ws/b', lastInit);
-    assert.deepEqual(b.slashCommands, ['x']);
-    assert.deepEqual(b.terminalSlashCommands, ['statusline']);
+    assert.deepEqual(b.slashCommands, [{ name: 'x' }]);
+    assert.deepEqual(b.terminalSlashCommands, ['statusline'], '隐藏名单只用名字，仍是 string[]');
   });
 
   test('resolve：无 terminal 名单（旧 CLI / 旧缓存）→ 空数组，不是 null', () => {

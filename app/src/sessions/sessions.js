@@ -175,6 +175,14 @@ export function getSession(id) {
   return state.sessions.find(s => s.id === id) || null;
 }
 
+// 网页改名（#458）：transcript 里的 custom-title 才是真相，这里只让实例广播里的标题跟上。不在注册表里的会话（终端开的）不登记。
+export function setSessionTitle(id, title) {
+  const existing = state.sessions.find(s => s.id === id);
+  if (!existing || typeof title !== 'string' || !title) return;
+  existing.title = title.slice(0, 40);
+  save();
+}
+
 export function updateSessionCost(id, cost) {
   const existing = state.sessions.find(s => s.id === id);
   if (existing && typeof cost === 'number') {

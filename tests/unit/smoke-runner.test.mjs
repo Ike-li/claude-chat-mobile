@@ -73,6 +73,14 @@ test('runner 起的 server 不读仓库根的配置文件：两个配置路径�
   }
 });
 
+// 冒烟在宿主机上跑，HOME 是真的：两个 CLI 桥的投递箱默认在 ~/.claude/ccm/ 下、读完即删，被测实例开着桥
+// 就会和同机的生产 server 抢事件（生产丢 Stop/Notification 推送且不报错）。冒烟场景都不靠桥，一律关掉。
+test('runner 起的 server 关掉两个 CLI 桥，不和同机生产 server 抢投递箱', () => {
+  const env = smokeEnv({ root: '/tmp/ccm-smoke-x', port: 1 }, {});
+  assert.equal(env.CLI_HOOKS_BRIDGE, 'off');
+  assert.equal(env.CLI_STATUSLINE_BRIDGE, 'off');
+});
+
 // smoke 侧只需确认它确实接上了共享清单；清单本身的行为由 tests/unit/spawn-env.test.mjs 覆盖。
 test('runner 复用共享的环境隔离清单（与集成测同一份）', async () => {
   const shared = await import('../helpers/spawn-env.mjs');

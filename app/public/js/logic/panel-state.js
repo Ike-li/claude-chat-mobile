@@ -77,6 +77,8 @@ export const STATUS_ICONS = {
   // answered / aborted 是中性终态：不是工具失败，也不该占用绿色去邀功——刻意让它们退出红/绿的注意力预算
   answered: { tone: 'text-ink-soft', label: tk('已回答'), path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
   aborted: { tone: 'text-ink-soft', label: tk('已中止'), path: '<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="currentColor"/>' },
+  // 提问没人答（「不回答」或过期，#455）：本轮照常继续，同样是中性终态
+  unanswered: { tone: 'text-ink-soft', label: tk('未作答'), path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
 };
 // 供调用点在换色前清掉上一个状态的色（不能只 add，否则两个色类叠着靠 CSS 顺序决胜负）
 export const STATUS_ICON_TONES = [...new Set(Object.values(STATUS_ICONS).map(s => s.tone))];
@@ -231,6 +233,8 @@ export function formatSessionRowSubtitle({
 export function sessionRowMenuItems({ hasId = false, live = false, unread = false } = {}) {
   const items = [];
   if (hasId) items.push({ action: 'toggle-read', label: unread ? t('标为已读') : t('标为未读') });
+  // 打开着也能改：活会话的 CLI 退出时会把旧名写回来，服务端在它退出后补写（#458）
+  if (hasId) items.push({ action: 'rename', label: t('重命名') });
   if (live) items.push({ action: 'close', label: t('关闭会话') });
   if (hasId) {
     items.push(live

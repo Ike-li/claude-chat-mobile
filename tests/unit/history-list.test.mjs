@@ -183,6 +183,60 @@ test('listSessions: ai-title 距文件尾超尾窗时优雅回退到首条 user�
   assert.equal(result[0].title, '兜底首条问题'); // 优雅回退，不崩、不空
 });
 
+// custom-title 是 /rename 与 SDK renameSession 写的用户自起名（#458）。口径对齐 SDK 的 summary：
+// custom-title > ai-title > 首条 user > 首条命令，与两者在文件里的先后无关；多条时后写者胜。
+test('listSessions: custom-title 优先于 ai-title（与先后无关）', async () => {
+  const cwd = '/test/customtitle-head';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'sess-custom', [
+    { type: 'user', message: { role: 'user', content: '普通问题' } },
+    { type: 'custom-title', customTitle: '我起的名字', sessionId: 'sess-custom' },
+    { type: 'ai-title', aiTitle: '之后才生成的 AI 标题' },
+  ]);
+  const result = await listSessions(cwd, { baseDir: BASE });
+  assert.equal(result[0].title, '我起的名字');
+  assert.equal(await peekSessionListTitle(cwd, 'sess-custom', { baseDir: BASE }), '我起的名字');
+});
+
+test('listSessions: 头窗已有 ai-title、custom-title 只在尾窗时也能读到', async () => {
+  const cwd = '/test/customtitle-tail';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'customtitle-tail', [
+    { type: 'user', message: { role: 'user', content: '首条' } },
+    { type: 'ai-title', aiTitle: '头窗里的AI标题' },
+    { type: 'assistant', message: { role: 'assistant', content: 'f'.repeat(120 * 1024) } }, // 把后文推出头窗
+    { type: 'custom-title', customTitle: '网页上改的名字', sessionId: 'customtitle-tail' },
+    { type: 'assistant', message: { role: 'assistant', content: '尾' } },
+  ]);
+  const result = await listSessions(cwd, { baseDir: BASE });
+  assert.equal(result[0].title, '网页上改的名字');
+});
+
+test('listSessions: 头窗的旧 custom-title 被尾窗更新的那条覆盖（后写者胜）', async () => {
+  const cwd = '/test/customtitle-renamed';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'customtitle-renamed', [
+    { type: 'user', message: { role: 'user', content: '首条' } },
+    { type: 'custom-title', customTitle: '旧名字', sessionId: 'customtitle-renamed' },
+    { type: 'assistant', message: { role: 'assistant', content: 'g'.repeat(700 * 1024) } },
+    { type: 'custom-title', customTitle: '新名字', sessionId: 'customtitle-renamed' },
+  ]);
+  const result = await listSessions(cwd, { baseDir: BASE });
+  assert.equal(result[0].title, '新名字');
+});
+
+test('listSessionsPage: 搜索按 custom-title 也能搜到', async () => {
+  const cwd = '/test/customtitle-search';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'customtitle-search', [
+    { type: 'user', message: { role: 'user', content: '原始问题' } },
+    { type: 'ai-title', aiTitle: 'AI 起的' },
+    { type: 'custom-title', customTitle: 'RenamedNeedle', sessionId: 'customtitle-search' },
+  ]);
+  const found = await listSessionsPage(cwd, { baseDir: BASE, limit: 50, query: 'RenamedNeedle' });
+  assert.deepEqual(found.sessions.map(s => s.id), ['customtitle-search']);
+});
+
 test('listSessions: isMeta 条目不当标题', async () => {
   const cwd = '/test/metamsg';
   const dir = join(BASE, getProjectDir(cwd));

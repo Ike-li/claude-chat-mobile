@@ -92,6 +92,19 @@ export const EN_DICT = Object.freeze({
   '个可用': 'available',
   '当前工作区加载的技能': 'Skills loaded for this workspace',
   '状态未知': 'status unknown',
+  // —— MCP 服务器（宿主机页，#457）——
+  '连接中': 'connecting',
+  '已停用': 'disabled',
+  '连接失败': 'failed to connect',
+  '需要授权': 'needs authorization',
+  '快照': 'snapshot',
+  '会话启动时的状态；开着会话时才能现查、重连和启停': 'Status as of session start; open a session to check live, reconnect, or enable/disable',
+  '需在电脑上完成授权': 'Finish authorizing on the computer',
+  '重连': 'Reconnect',
+  '停用': 'Disable',
+  '启用': 'Enable',
+  '停用这个 MCP 服务器？': 'Disable this MCP server?',
+  '对本项目持久生效，与终端 /mcp 相同：之后新开的会话也不再加载它。': 'This persists for the project, the same as /mcp in the terminal: new sessions won\'t load it either.',
   '先跑这个': 'Start here',
   '⚙ 全部配置 · 端口 / 工作区 / 推送 →': '⚙ All settings · port / workspaces / push →',
   '在下方「已受信任的设备」里核对时，认准这一串就是你手上这台。': 'When checking the trusted device list below, this string identifies the device in your hand.',
@@ -238,7 +251,9 @@ export const EN_DICT = Object.freeze({
   '其他…': 'Other…',
   '输入你的答案': 'Type your answer',
   '提交其他答案': 'Submit other answer',
-  '跳过并中止本轮': 'Skip and interrupt turn',
+  '不回答': "Don't answer",
+  '可点选项、多选确认、填「其他」；不回答时本轮照常继续': 'Tap an option, confirm a multi-select, or fill in "Other". If you don\'t answer, the turn carries on',
+  '已选择不回答，本轮继续': 'Not answering — the turn carries on',
   // MCP elicitation 卡片（#460）
   '🔐 MCP 需要你': '🔐 MCP needs you',
   'MCP 需要你': 'MCP needs you',
@@ -252,7 +267,6 @@ export const EN_DICT = Object.freeze({
   '没有响应，请稍后再试': 'No response, please try again later',
   '提交失败': 'Submit failed',
   '⏱ 这个 MCP 请求等太久已过期，已按取消处理': '⏱ This MCP request waited too long and expired; it was cancelled',
-  '可点选项、多选确认、填「其他」，或跳过中止本轮': 'Tap an option, confirm a multi-select, fill in "Other", or skip to interrupt the turn',
   // 多题提问的组卡（对齐 CLI 的题目标签栏与 Review your answers）
   '可多选': 'Multiple choices allowed',
   '下一题': 'Next',
@@ -261,7 +275,9 @@ export const EN_DICT = Object.freeze({
   '提交': 'Submit',
   '检查你的回答，点一题可回去改': 'Review your answers — tap a question to change it',
   '未作答': 'Not answered',
-  '还有 {n} 题没答，答完才能提交': '{n} unanswered — answer all questions to submit',
+  '还有 {n} 题没答，提交后按跳过处理': '{n} unanswered — they will be skipped when you submit',
+  '还有 {n} 题没送到，收齐后才能提交': '{n} still loading — submit once they arrive',
+  '跳过': 'Skipped',
   '提交回答': 'Submit answers',
 
   // —— 删除会话 / 通用确认 ——
@@ -708,7 +724,6 @@ export const EN_DICT = Object.freeze({
   '、': ', ',
   '请先输入其他答案': 'Type your other answer first',
   '已回答（其他）：': 'Answered (other): ',
-  '已跳过提问（中止本轮）': 'Question skipped (turn interrupted)',
   '已请求中止本轮': 'Interrupt requested',
 
   // —— 发送 / 停止 ——
@@ -853,6 +868,17 @@ export const EN_DICT = Object.freeze({
   'Claude 即将汇报结果': 'Claude will report back shortly',
   '已请求停止后台任务': 'Stop requested for background task',
   '已请求停止后台任务…': 'Stop requested for the background task…',
+  // 转后台（#459，app/foreground-tasks.js 与 logic backgroundTasksErrorText）
+  '转后台': 'Background',
+  '把正在跑的前台命令 / 子代理转到后台，本轮继续（终端 Ctrl+B）': 'Move the running foreground command / subagent to the background and keep going (Ctrl+B in the terminal)',
+  '后台运行': 'Run in background',
+  '只把这一条转到后台，本轮继续': 'Move just this one to the background and keep going',
+  '转后台无响应，请稍后再试': 'No response moving to background — try again later',
+  '这个会话禁用了后台任务（CLAUDE_CODE_DISABLE_BACKGROUND_TASKS）': 'Background tasks are disabled for this session (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS)',
+  '这个任务已经不在前台了': 'That task is no longer in the foreground',
+  '会话已经关闭，或正由终端驾驶': 'The session is closed, or a terminal is driving it',
+  '转后台失败：': 'Could not move to background: ',
+  '转后台失败': 'Could not move to background',
   '工具': 'tool',
   '个运行中': 'running',
   '运行中': 'Running',
@@ -981,6 +1007,7 @@ export const EN_DICT = Object.freeze({
   '修改配置': 'Config changed',
   '重启服务': 'Service restart',
   '永久删除会话': 'Permanently deleted session',
+  '重命名会话': 'Renamed session',
   // 删除被拒的原因，跟在「永久删除会话 <id> · 」后面（service-diag.js AUDIT_DELETE_REJECT_REASON）
   '会话正被本产品驱动': 'the session is being driven by this app',
   '会话正在打开中': 'the session is still opening',
@@ -1039,6 +1066,12 @@ export const EN_DICT = Object.freeze({
   '已彻底删除：': 'Permanently deleted: ',
   '彻底删除失败': 'Permanent delete failed',
   '删除会话': 'Delete session',
+  // 会话改名（#458，app/session-rename.js）
+  '重命名': 'Rename',
+  '给会话改名': 'Rename session',
+  '改名失败': 'Rename failed',
+  '改名无响应，请稍后再试': 'No response renaming — try again later',
+  '终端正在使用这个会话，改名可能被覆盖': 'A terminal is using this session; it may overwrite the new name',
   '关闭会话「': 'Close session "',
   '」？': '"?',
   '会话将从 tab 列表移除，但历史保留可重新打开。': 'It leaves the tab list, but the history stays and can be reopened.',
@@ -1074,6 +1107,7 @@ export const EN_DICT = Object.freeze({
   // —— /rewind 面板（app/rewind-command.js）与回退结果 ——
   // 三个模式名与终端 /rewind 第二步逐字一致；其余沿用上面「回退 = revert」的叫法。
   '把代码和/或对话恢复到某条消息发出之前……': 'Restore the code and/or conversation to the point before one of your messages…',
+  '把代码和/或对话恢复到之前的某个时间点': 'Restore the code and/or conversation to a previous point', // 斜杠菜单里 /rewind 的说明
   '正在读取会话…': 'Reading the session…',
   '这个会话还没有可回退的轮次': 'This session has no turns to revert yet',
   '代码改动待确认': 'Code changes not known yet',

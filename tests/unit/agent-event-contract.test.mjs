@@ -362,9 +362,15 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        同一类展示偏好、同一个存储，旧事件不留。入向不变 67）
   //      + folders:removeMissing（2026-10-27，#355：「N 个文件夹找不到了」告警里一键按原始配置条目移除仍缺失的。
   //        不复用 folders:remove：那条只认当前有效连接根，缺失路径恰不在 workDirs 里；也不走 env:set 整份覆盖。入向 67→68）
+  //      + mcp:status / mcp:reconnect / mcp:toggle（2026-10-29，#457：「宿主机」页的 MCP 服务器对应终端 /mcp——现查状态、
+  //        重连、启停。三条都是对当前实例的控制请求，不开 HTTP 端点；toggle 会写项目配置，所以只认指定实例、不静默回落。入向 68→71）
+  //      + session:rename（2026-10-29，#458：网页端给会话改名，对应终端 /rename。写的是 transcript 而不是授权面，
+  //        与 deletePermanent 同口径校验；不新增出向事件：别的设备靠 instances 快照与 session:list 刷新跟上。入向 71→72）
+  //      + task:background（2026-10-29，#459 转后台＝终端 Ctrl+B：SDK Query.backgroundTasks(toolUseId?)。
+  //        不并进 task:stop：一个杀任务、一个只换前后台，载荷与失败原因都不同。入向 72→73）
   //      + elicitation:respond（2026-10-29，#460 MCP 服务器要表单输入 / URL 授权时手机作答。不并进 user:answer：
-  //        那条是 AskUserQuestion 的选项下标 / 自由文本，这条是 accept|decline|cancel + 按 schema 校验的表单内容。入向 68→69）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 69);
+  //        那条是 AskUserQuestion 的选项下标 / 自由文本，这条是 accept|decline|cancel + 按 schema 校验的表单内容。入向 73→74）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 74);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:removeMissing'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('about:get'));
@@ -422,9 +428,11 @@ test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 32 种一致', () => {
   //        就永远不知道该重载，屏幕上会一直留着已被服务端截断的那几轮，且刷新前不自愈。
   //        它走 outOfBand（跨会话通知，不能触发 currentSessionId 切换），因此必须同时登记进
   //        DEFAULT_REPLAY_OOB_TYPES——否则回放缓冲会把它排队再整批丢弃。出向 30→31）
+  //      + foreground_tasks（2026-10-29，#459：此刻挡着本轮、可转后台的前台任务全量快照。瞬时、不进环形缓冲，
+  //        切回 / 重连由 sync:since 补推；同样走 outOfBand、登记进 DEFAULT_REPLAY_OOB_TYPES。出向 31→32）
   //      + elicitation（2026-10-29，#460：MCP 表单 / URL 授权卡片。与 question 同族：进环形缓冲、走普通 handle，
-  //        进 pending 快照与 eventsSince 过滤；URL 授权完成走既有 system 信封的 kind:'elicitation_complete'，不另开 type。出向 31→32）
-  assert.equal(AGENT_EVENT_TYPES.length, 32);
+  //        进 pending 快照与 eventsSince 过滤；URL 授权完成走既有 system 信封的 kind:'elicitation_complete'，不另开 type。出向 32→33）
+  assert.equal(AGENT_EVENT_TYPES.length, 33);
   assert.ok(AGENT_EVENT_TYPES.includes('rewind_applied'));
   // trusted_devices（2026-09-09）：已受信任设备列表的下发面。载荷里没有全量 token，
   // 只有 shortId + kind/ua/ip/approvedAt + isCurrent（DEVICE-03）。

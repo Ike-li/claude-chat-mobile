@@ -226,6 +226,20 @@ test('多题组卡：后几题还没送到时不放行提交，收齐答完才�
   assert.deepEqual(lastAnswer(emitted)?.answers.map(a => a.index), [0, 1, 2]);
 });
 
+// #455：机主 2026-10-29 改判，对齐 CLI 允许留题不答直接提交；没答的题按 skipped 发（服务端仍要整组覆盖）
+test('多题组卡：题都到了、留一题不答也能提交，那题以 skipped 发出', () => {
+  const { approvals, byId, emitted } = mount();
+  [0, 1, 2].forEach(i => approvals.enqueueQuestion(groupQ(i)));
+  approvals.cancelQuestionArming();
+  pickOption(byId, 1); // 第 1 题 → B
+  byId('questionTabs').children[2].onclick(); // 跳过第 2 题，直接去第 3 题
+  pickOption(byId, 0); // 第 3 题 → A，到复查页
+  assert.equal(byId('questionGroupSubmit').disabled, false, '题都到了，留一题没答也应可以提交');
+  byId('questionGroupSubmit').onclick();
+  assert.deepEqual(lastAnswer(emitted)?.answers, [{ index: 0, optionIndex: 1 }, { index: 1, skipped: true }, { index: 2, optionIndex: 0 }]);
+  assert.equal(approvals.hasPending(), false);
+});
+
 
 // ── #388：作答路由到审批/提问所属实例，不是当前查看实例 ──────────────────────
 // nav-escape 允许审批卡开着切会话；若 emit 仍带 viewingInstanceId，服务端打到错误实例静默 no-op。
@@ -296,13 +310,47 @@ test('单题提问：断线点选项时浮层内可见错误，且不 emit', () 
   assert.equal(approvals.hasPending(), true);
 });
 
-test('提问跳过：断线时不 requestInterrupt，错误写在浮层内', () => {
-  const { approvals, byId, interrupts, sheetError } = mount({ connected: false });
+test('提问「不回答」「中止本轮」：断线时都不发，错误写在浮层内', () => {
+  const { approvals, byId, emitted, interrupts, sheetError } = mount({ connected: false });
   approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
   approvals.cancelQuestionArming();
   byId('questionSkip').onclick();
-  assert.equal(interrupts.length, 0, '断线时不应 emit/触发 interrupt');
+  assert.equal(emitted.length, 0, '断线时「不回答」不应 emit');
   assert.match(sheetError('questionSheetError') || '', /网络未连接/);
+  byId('questionInterrupt').onclick();
+  assert.equal(interrupts.length, 0, '断线时不应触发 interrupt');
+  assert.equal(approvals.hasPending(), true);
+});
+
+// #455：「跳过」原来复用 user:interrupt，用户只是不想答，整轮工作却被打断。拆成两个按钮：
+// 「不回答」关卡、本轮继续（服务端 allow + 空 answers）；「中止本轮」照旧 interrupt，等价终端 Esc。
+test('提问「不回答」：按整组 key 发 user:answer { dismiss }、本机关卡，不中止本轮', () => {
+  const { approvals, byId, emitted, interrupts } = mount({ getViewingInstanceId: () => 'inst-B' });
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] }, 'inst-A');
+  approvals.cancelQuestionArming();
+  byId('questionSkip').onclick();
+  assert.deepEqual(lastAnswer(emitted), { requestId: 'toolu_q', dismiss: true, instanceId: 'inst-A' });
+  assert.equal(interrupts.length, 0, '「不回答」不能顺带把这一轮停掉');
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('提问「中止本轮」：requestInterrupt，不发 user:answer', () => {
+  const { approvals, byId, emitted, interrupts } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
+  approvals.cancelQuestionArming();
+  byId('questionInterrupt').onclick();
+  assert.equal(interrupts.length, 1);
+  assert.equal(emitted.filter(e => e.name === 'user:answer').length, 0);
+});
+
+test('多题组卡「不回答」：整组一起关，不要求先答完', () => {
+  const { approvals, byId, emitted } = mount();
+  [0, 1, 2].forEach(i => approvals.enqueueQuestion(groupQ(i)));
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0); // 只答了第 1 题
+  byId('questionSkip').onclick();
+  assert.deepEqual(lastAnswer(emitted), { requestId: 'toolu_g', dismiss: true, instanceId: null });
+  assert.equal(approvals.hasPending(), false);
 });
 
 test('空「其他答案」提示写在提问浮层内', () => {
@@ -340,13 +388,15 @@ test('提问弹出后 questionModal 带 sheet-arming；cancelQuestionArming 解�
     '刚弹出时应处于防误触期（对齐 #permModal.sheet-arming）');
   assert.equal(byId('questionOptions').children[0].children[0].disabled, true,
     '防误触期内选项应 native disabled（挡键盘 Enter，不只靠 pointer-events）');
-  assert.equal(byId('questionSkip').disabled, true, '防误触期内跳过应 disabled');
+  assert.equal(byId('questionSkip').disabled, true, '防误触期内「不回答」应 disabled');
+  assert.equal(byId('questionInterrupt').disabled, true, '防误触期内「中止本轮」应 disabled');
   approvals.cancelQuestionArming();
   assert.equal(byId('questionModal').classList.contains('sheet-arming'), false,
     'cancelQuestionArming 应清掉 sheet-arming，与计时器到点同效');
   assert.equal(byId('questionOptions').children[0].children[0].disabled, false,
     '解除后选项应恢复可点');
-  assert.equal(byId('questionSkip').disabled, false, '解除后跳过应恢复可点');
+  assert.equal(byId('questionSkip').disabled, false, '解除后「不回答」应恢复可点');
+  assert.equal(byId('questionInterrupt').disabled, false, '解除后「中止本轮」应恢复可点');
 });
 
 test('提问防误触期内选项点击与跳过不 emit', () => {
@@ -358,9 +408,10 @@ test('提问防误触期内选项点击与跳过不 emit', () => {
   // 程序化 onclick 仍会跑到 handler；arming 守卫必须 no-op，不能只靠 CSS pointer-events
   pickOption(byId, 0);
   byId('questionSkip').onclick();
+  byId('questionInterrupt').onclick();
   assert.equal(emitted.filter(e => e.name === 'user:answer').length, 0,
-    '防误触期内点选项不得 emit user:answer');
-  assert.equal(interrupts.length, 0, '防误触期内跳过不得 requestInterrupt');
+    '防误触期内点选项或「不回答」不得 emit user:answer');
+  assert.equal(interrupts.length, 0, '防误触期内「中止本轮」不得 requestInterrupt');
   assert.equal(approvals.hasPending(), true, '防误触期内误触不得关卡');
 });
 
