@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildAgentQueryOptions } from '../../app/src/agent/agent.js';
-import { makeSession } from '../helpers/agent-unit.mjs';
+import { makeSession, awaitTtlSettled } from '../helpers/agent-unit.mjs';
 
 const FORM = {
   serverName: 'notes', message: '新笔记叫什么', mode: 'form',
@@ -122,7 +122,8 @@ test('TTL 到期 → cancel，广播 expired（不让 canUseTool 那样永久悬
   const { s, events, dispose } = makeSession({ approvalTtlMs: 30 });
   try {
     const p = s.handleElicitation(FORM, { signal: new AbortController().signal, requestId: 't1' });
-    assert.deepEqual(await p, { action: 'cancel' });
+    // 到期 timer 是 unref 的：直接 await，Node 20 上事件循环会先收尾，本条连同后面几条报 cancelledByParent（见 helper 注释）
+    assert.deepEqual(await awaitTtlSettled(p), { action: 'cancel' });
     assert.equal(resolvedOf(events, 't1')[0].payload.outcome, 'expired');
     assert.equal(s.pendingElicitations.size, 0);
   } finally { dispose(); }
