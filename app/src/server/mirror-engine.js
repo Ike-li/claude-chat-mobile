@@ -1,3 +1,4 @@
+import { transcriptCwdOf } from '../sessions/session-location.js';
 // mirror-engine.js —— 只读镜像 / catchUp 追平引擎：状态与编排的唯一所有者。
 //
 // 【为什么收敛】此前 15 个 mirror*/catchUp* 模块级可变量散在 src/server/app.js 顶层，与当时 32 个 socket
@@ -39,6 +40,8 @@ export function createMirrorEngine({
   sessionRegistryDir = null,
   // 读 transcript 的注入点（仅单测用；生产恒为 getSessionHistory）。测「tick 读盘 await 期间」的竞态靠它。
   readHistory = getSessionHistory,
+  recoverLocation = null,
+  onObserved = () => {},
 } = {}) {
   // 展开进各 reader 的 options；null 时为空对象 = 走 reader 自己的默认根。
   const diskOpts = transcriptBaseDir ? { baseDir: transcriptBaseDir } : {};
@@ -192,14 +195,14 @@ export function createMirrorEngine({
     if (reload) {
       metrics.inc('catch_up_reloads');
       room.emit('agent:event', {
-        seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),
+        seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: transcriptCwdOf(a), ts: Date.now(),
         type: 'history_append', payload: { messages, external: true, replace: true, reason: 'sliding_window' },
       });
     }
     if (emit.length > 0) {                                               // 观察到外部写入 → 追平尾巴
       metrics.inc('catch_up_hits'); // 补齐命中（catchUpTick 成功推了终端侧外部增量的次数）
       room.emit('agent:event', {
-        seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),
+        seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: transcriptCwdOf(a), ts: Date.now(),
         type: 'history_append', payload: { messages: emit, external: true },
       });
     }
@@ -209,7 +212,10 @@ export function createMirrorEngine({
     const id = getViewingInstanceId();
     const a = id ? agents.get(id) : null;
     if (!a || !a.sessionId) { catchUpKey = null; rebaselineSocketIds.clear(); mirrorRelease = { readonly: false, quietTicks: 0 }; mirrorLastSize = -1; setMirror(false, null, false, false, undefined, id, 'no_session'); return; } // 无查看会话：停、复位释放态（catchUpKey 已空，下次重定基线走切入分支，攒的 socket id 用不上）
-    const key = `${a.cwd}\x00${a.sessionId}`;
+    const recovered = recoverLocation ? await recoverLocation(a) : null;
+    if (recoverLocation && recovered?.status !== 'found') return;
+    if (getViewingInstanceId() !== id || agents.get(id) !== a) return;
+    const key = `${transcriptCwdOf(a)}\x00${a.sessionId}`;
     const st = instanceState(id);
     const localBusy = st === 'busy' || st === 'permission';
     // BE-009：处理「客户端（重）连要求重定基线」。旧实现连接时直接 `catchUpKey = null` 强制下方 switch 分支重建
@@ -233,10 +239,10 @@ export function createMirrorEngine({
       if (key === catchUpKey) {                                        // 同一会话重连（非真切换）
         rebaselineSameSession = true;
         // SS-NEW-002：保留 messages 算 tailKey——满窗滑动时 length 不变，仅比 length 会漏标 externalDirty
-        const curMsgs = await readHistory(a.sessionId, a.cwd, undefined, diskOpts).catch(() => null);
+        const curMsgs = await readHistory(a.sessionId, transcriptCwdOf(a), undefined, diskOpts).catch(() => null);
         const curLen = Array.isArray(curMsgs) ? curMsgs.length : -1;
         const curTailKey = Array.isArray(curMsgs) ? historyTailKey(curMsgs) : null;
-        if (getViewingInstanceId() === id && agents.get(id) === a && `${a.cwd}\x00${a.sessionId}` === key
+        if (getViewingInstanceId() === id && agents.get(id) === a && `${transcriptCwdOf(a)}\x00${a.sessionId}` === key
             && takeOverGeneration === takeOverAtEntry) { // R2：接管已 dispose+resume 吸收过磁盘，旧观察不得重新标脏
           if (rebaselineAbsorbedExternal({
             sameSession: true,
@@ -275,7 +281,7 @@ export function createMirrorEngine({
     if (key !== catchUpKey) {                                           // 切了会话：以现有历史长度定基线，本 tick 不推
       let seedMsgs = rebaselineSeed;
       if (!seedMsgs) {
-        try { seedMsgs = await readHistory(a.sessionId, a.cwd, undefined, diskOpts); }
+        try { seedMsgs = await readHistory(a.sessionId, transcriptCwdOf(a), undefined, diskOpts); }
         catch { return; }
       }
       const seedLen = seedMsgs.length;
@@ -291,17 +297,19 @@ export function createMirrorEngine({
       // 判据 mtime 不可信（web resume 自身刷 mtime）；尾部形态是语义判据、可信。localBusy 豁免见 mirrorEntryLock。
       let tail = { verdict: 'settled', lastChainTs: null };
       let observedCli = { model: null, permissionMode: null };
-      try { tail = await classifyTranscriptTail(a.sessionId, a.cwd, diskOpts); } catch { /* 读失败保守不锁 */ }
-      try { observedCli = await readCliObservedState(a.sessionId, a.cwd, diskOpts); } catch { /* 读失败显未知 */ }
-      observedCli = mergeCliObserved(observedCli, a.sessionId, a.cwd);
+      try { tail = await classifyTranscriptTail(a.sessionId, transcriptCwdOf(a), diskOpts); } catch { /* 读失败保守不锁 */ }
+      try { observedCli = await readCliObservedState(a.sessionId, transcriptCwdOf(a), diskOpts); } catch { /* 读失败显未知 */ }
+      observedCli = mergeCliObserved(observedCli, a.sessionId, transcriptCwdOf(a));
       // P1（7/26 CCD 调研吸收）：CLI 进程注册表权威自报，比尾部形态猜测强一档；读失败/无条目 fail-open null → 完全回落既有判定
-      const entryRegistryEntry = await readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null);
+      const entryRegistryEntry = await readSessionRegistry(a.sessionId, transcriptCwdOf(a), registryOpts).catch(() => null);
       const registryBusy = registryIndicatesTerminalBusy(entryRegistryEntry);
       const registryWaiting = registryIndicatesTerminalWaiting(entryRegistryEntry);
-      if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key
+      if (getViewingInstanceId() !== id || agents.get(id) !== a || `${transcriptCwdOf(a)}\x00${a.sessionId}` !== key
           || takeOverGeneration !== takeOverAtEntry) return; // R2：接管也是一种「世界已变」
                                           // await 让出后视图/实例/session 可能已变：旧观察结果与待提交基线全部作废，不提交
       catchUpKey = key;
+      onObserved(a, observedCli);
+      if (recovered?.changed) emitCatchUp(a, id, { emit: [], reload: true, messages: seedMsgs });
       catchUpState = seededState;
       mirrorCliSeen = cliPresenceStep(false, entryRegistryEntry).seen; // 切入=负证据观察期重开：只记本次是否见到 cli，vanished 从此往后才可能成立
       mirrorLastSize = -1;                                 // 基线未建立：切入首个正常 tick 只记 size、不判增长
@@ -348,11 +356,11 @@ export function createMirrorEngine({
       // registryBusy 与切入/正常两个分支同口径：缺了它，注册表证明终端活着时这里仍可能把长编译误判成 stale。
       try {
         [busyTail, busySize, busyRegistryEntry, busyScan] = await Promise.all([
-          classifyTranscriptTail(a.sessionId, a.cwd, diskOpts).catch(() => ({ verdict: 'settled', lastChainTs: null })),
-          sessionFileSize(a.sessionId, a.cwd, diskOpts).catch(() => -1),
-          readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null),
+          classifyTranscriptTail(a.sessionId, transcriptCwdOf(a), diskOpts).catch(() => ({ verdict: 'settled', lastChainTs: null })),
+          sessionFileSize(a.sessionId, transcriptCwdOf(a), diskOpts).catch(() => -1),
+          readSessionRegistry(a.sessionId, transcriptCwdOf(a), registryOpts).catch(() => null),
           // 审批窗里上一拍之后新写的那段：挂起集合变过时靠它分辨有没有终端写入（O122）
-          st === 'permission' && mirrorLastSize >= 0 ? appendedForeignWrite(a.sessionId, a.cwd, mirrorLastSize, diskOpts) : null,
+          st === 'permission' && mirrorLastSize >= 0 ? appendedForeignWrite(a.sessionId, transcriptCwdOf(a), mirrorLastSize, diskOpts) : null,
         ]);
         // 扫描与基线用同一份快照：size 取扫描那次打开时的 fstat，而不是并行的另一次 stat（Codex review）
         if (busyScan) {
@@ -362,7 +370,7 @@ export function createMirrorEngine({
       } catch { /* 读失败保守 settled：不误标 stale */ }
       const busyRegistryBusy = registryIndicatesTerminalBusy(busyRegistryEntry);
       const busyRegistryWaiting = registryIndicatesTerminalWaiting(busyRegistryEntry);
-      if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key
+      if (getViewingInstanceId() !== id || agents.get(id) !== a || `${transcriptCwdOf(a)}\x00${a.sessionId}` !== key
           || takeOverGeneration !== takeOverAtEntry) return; // R2：接管也是一种「世界已变」
                                           // await 让出后视图/实例/session 可能已变：待提交状态全部作废，不提交
       const busyCliPresence = cliPresenceStep(mirrorCliSeen, busyRegistryEntry);
@@ -412,18 +420,18 @@ export function createMirrorEngine({
     let registryBusy;
     let registryWaiting;
     try {
-      const sizeP = sessionFileSize(a.sessionId, a.cwd, diskOpts).catch(() => -1);
-      const histP = readHistory(a.sessionId, a.cwd, undefined, diskOpts);
-      const regP = readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null);
+      const sizeP = sessionFileSize(a.sessionId, transcriptCwdOf(a), diskOpts).catch(() => -1);
+      const histP = readHistory(a.sessionId, transcriptCwdOf(a), undefined, diskOpts);
+      const regP = readSessionRegistry(a.sessionId, transcriptCwdOf(a), registryOpts).catch(() => null);
       curSize = await sizeP;
       const sizeOpt = { ...diskOpts, size: curSize >= 0 ? curSize : null };
       // 尾部形态（2026-07-12 单驾驶员核心判据）：轮次未完结(pending)期间维持锁——罩住「终端卡在一条几分钟的
       // 长工具上、磁盘零写入」窗（keepAlive 罩不住，原 12.5s 静默窗在此误判解锁、横幅熄灭="感觉没在跑"真实报障）。
-      const tailP = classifyTranscriptTail(a.sessionId, a.cwd, sizeOpt).catch(() => ({ verdict: 'settled', lastChainTs: null }));
-      const cliP = readCliObservedState(a.sessionId, a.cwd, sizeOpt).catch(() => ({ model: null, permissionMode: null }));
+      const tailP = classifyTranscriptTail(a.sessionId, transcriptCwdOf(a), sizeOpt).catch(() => ({ verdict: 'settled', lastChainTs: null }));
+      const cliP = readCliObservedState(a.sessionId, transcriptCwdOf(a), sizeOpt).catch(() => ({ model: null, permissionMode: null }));
       messages = await histP;
       tail = await tailP;
-      observedCli = mergeCliObserved(await cliP, a.sessionId, a.cwd);
+      observedCli = mergeCliObserved(await cliP, a.sessionId, transcriptCwdOf(a));
       registryEntry = await regP;
       registryBusy = registryIndicatesTerminalBusy(registryEntry);
       registryWaiting = registryIndicatesTerminalWaiting(registryEntry);
@@ -431,11 +439,12 @@ export function createMirrorEngine({
       return; // history 失败则整 tick 放弃（与旧 try/catch return 一致）
     }
     const { emit, state, reload } = catchUpStep(catchUpState, { messages, localBusy: false });
-    if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key
+    if (getViewingInstanceId() !== id || agents.get(id) !== a || `${transcriptCwdOf(a)}\x00${a.sessionId}` !== key
         || takeOverGeneration !== takeOverAtEntry) return;
                                                                       // await 让出后视图/实例/session/驾驶方可能已变：作废旧 tick，不提交 baseline/size/观察态
     catchUpState = state;                                              // 视图仍在才提交 baseline——移到切走判断之后，防切走瞬间污染 baseline 致那段外部写入在 catchUp 路径漏推
     const cliPresence = cliPresenceStep(mirrorCliSeen, registryEntry); // 负证据推进也在守卫后：切走瞬间的旧观察不得污染新会话的 seen 槽
+    onObserved(a, observedCli);
     mirrorCliSeen = cliPresence.seen;
     // keep-alive：transcript 文件比上 tick 大 = 终端在写盘（含跑工具/思考的 tool_use/tool_result，被 text-only 过滤挡在 catchUpStep len 外）。
     // 仅基线已建立(lastSize≥0)时判增长；切入 / localBusy 后首 tick 只记 size 不判（避免把切入前既有体量或己方写盘误当终端活跃）。

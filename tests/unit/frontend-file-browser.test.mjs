@@ -45,6 +45,17 @@ function harness() {
   return { ctl, dom, pending, rowNamed };
 }
 
+test('#473 同名相对目录的旧回执不得覆盖新 worktree', () => {
+  const { ctl, pending, rowNamed } = harness();
+  ctl.open('/old');
+  ctl.open('/new');
+  const requests = pending('browse:list');
+  requests[1].ack({ ok: true, entries: [{ name: 'NEW_CODE', kind: 'file', size: 1 }], truncated: false, totalCount: 1 });
+  requests[0].ack({ ok: true, entries: [{ name: 'OLD_CODE', kind: 'file', size: 1 }], truncated: false, totalCount: 1 });
+  assert.ok(rowNamed('NEW_CODE'));
+  assert.equal(rowNamed('OLD_CODE'), undefined);
+});
+
 test('打开文件、返回、再打开同一个文件：两次读请求的回执都到了，正文和保存出去的内容都只有一份', async t => {
   const editors = [];
   globalThis.CodeMirror = (_holder, opts) => {

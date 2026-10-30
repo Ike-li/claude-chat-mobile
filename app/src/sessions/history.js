@@ -988,7 +988,7 @@ const memberRowFields = m => ({
 // 并不并由 memberOptions.authorize 决定，也就是 server 判 cwd 用的那一份——列表与「点开能不能打开」
 // 同口径，不在这里另写一套会漂移的规则。平级 worktree 被 `git worktree remove/prune` 之后仓库侧的
 // 回链没了，它的会话就不再归到仓库（已知边界：没有非有损的证据能把它们认回来）。
-async function listProjectMemberDirs(cwd, baseDir, memberOptions) {
+export async function listProjectMemberDirs(cwd, baseDir = CLAUDE_DIR, memberOptions) {
   const authorize = memberOptions?.authorize;
   if (typeof authorize !== 'function') return listManagedWorktreeDirs(cwd, baseDir);
   const self = authorize(cwd);
@@ -1121,7 +1121,7 @@ const mapWithReadSlots = (items, fn) => Promise.all(items.map(item => withTransc
 const OWNER_CACHE_CAP = 8192;
 const _ownerCache = new Map(); // file → { owner, size, mtimeMs }
 
-async function transcriptOwnerCwd(file, dirName) {
+export async function transcriptOwnerCwd(file, dirName) {
   let st;
   try { st = await stat(file); } catch { return null; }
   const hit = _ownerCache.get(file);

@@ -62,7 +62,9 @@ export function createGitChangesPanel(context, {
     const loading = createElement('<div class="text-ink-faint text-[11px] px-1 py-1"></div>');
     loading.textContent = t('加载中…');
     preview.appendChild(loading);
+    const token = loadToken;
     context.socket.emit('browse:read', { cwd, relPath, offset: 0 }, response => {
+      if (token !== loadToken) return;
       preview.replaceChildren();
       if (!response?.ok) {
         const m = createElement('<div class="text-danger text-[11px]"></div>');
@@ -90,7 +92,9 @@ export function createGitChangesPanel(context, {
     const loading = createElement('<div class="text-ink-faint text-[11px] px-1 py-1"></div>');
     loading.textContent = t('加载中…');
     preview.appendChild(loading);
+    const token = loadToken;
     context.socket.emit('git:diff', { cwd, path: relPath, side }, response => {
+      if (token !== loadToken) return;
       preview.replaceChildren();
       if (!response?.ok) {
         const m = createElement(`<div class="text-[11px] ${response?.code === 'scope' || response?.code === 'bad_path' ? 'text-danger' : 'text-ink-faint'}"></div>`);

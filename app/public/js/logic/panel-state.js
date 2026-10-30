@@ -254,7 +254,8 @@ export function sessionRowMenuItems({ hasId = false, live = false, unread = fals
 // 【为什么优先 panelCwd 而不是直接读 cwd】worktree 目录被删掉之后（2026-09-13 真机形态），
 // 实例的 cwd 仍指向那条已不存在的路径，而且**必须保持原样**——transcript 就落在按它算出的
 // project 目录里，改掉 cwd 就是「历史消息加载失败」。所以服务端另发一个 panelCwd 承担
-// 展示/文件/git 轴：路径还在时它恒等于 cwd，悬空时回落父仓。前端只管认它。
+// 展示/文件/git 轴：路径还在时它恒等于记录位置（外部进程搬家后 SDK cwd 会暂时留在旧目录），
+// 悬空时回落父仓。前端只管认它。
 // 旧 server 不下发这个字段 → 回落 cwd，与引入它之前逐字同形。
 //
 // 无当前实例（空首页、实例刚关）→ 回落工作区 cwd，与引入本函数之前逐字同形。
@@ -265,6 +266,7 @@ export function resolvePanelCwd({ instances, viewingInstanceId, workspaceCwd } =
 }
 
 // transcript 轴：「按 cwd 去磁盘找这个会话的东西」时该用哪个目录（loadHistory 拿它算 project 目录）。
+// 外部进程把会话搬到别的 worktree 后，服务端先恢复记录位置（transcriptCwd），发送前再在新位置续接 SDK。
 //
 // 【为什么不能和 resolvePanelCwd 合成一个】worktree 目录被删掉那一档两者必然分叉，而合并之后
 // 无论偏向哪一侧都是静默出错、且两种错法毫无相似之处：
@@ -275,7 +277,7 @@ export function resolvePanelCwd({ instances, viewingInstanceId, workspaceCwd } =
 export function resolveSessionCwd({ instances, viewingInstanceId, workspaceCwd } = {}) {
   const list = Array.isArray(instances) ? instances : [];
   const inst = list.find(i => i && i.instanceId === viewingInstanceId);
-  return inst?.cwd || workspaceCwd || null;
+  return inst?.transcriptCwd || inst?.cwd || workspaceCwd || null;
 }
 
 // worktree 目录被删掉之后，文件/改动面板会静悄悄地改看父仓（见 resolvePanelCwd）。
@@ -287,7 +289,7 @@ export function resolveWorktreeGoneNotice({ instances, viewingInstanceId } = {})
   const list = Array.isArray(instances) ? instances : [];
   const inst = list.find(i => i && i.instanceId === viewingInstanceId);
   if (!inst?.worktreeGone) return null;
-  return { worktree: projectDisplayName(inst.cwd), parent: projectDisplayName(inst.panelCwd) };
+  return { worktree: projectDisplayName(inst.transcriptCwd || inst.cwd), parent: projectDisplayName(inst.panelCwd) };
 }
 
 // 一个实例 cwd 归哪个工作区。托管 worktree 的 cwd 是 `<父仓>/.claude/worktrees/<name>`，

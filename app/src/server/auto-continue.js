@@ -49,6 +49,7 @@ export function createAutoContinue({
   listTerminalStates,
   getLiveInstance,
   resumeInstance,
+  resolveCwd = async cwd => cwd,
   onChange = () => {},
   log = () => {},
 } = {}) {
@@ -119,7 +120,10 @@ export function createAutoContinue({
   }
 
   async function fire(entry) {
-    const { sessionId, cwd } = entry;
+    const { sessionId } = entry;
+    const cwd = await resolveCwd(entry.cwd, sessionId);
+    if (entries.get(sessionId) !== entry) return;
+    if (!cwd) { toStale(entry, 'unverified'); onChange(); return; }
     if (entry.origin === 'auto' && !isAutoEnabled(cwd)) {
       if (remove(sessionId, 'setting_off')) onChange();
       return;

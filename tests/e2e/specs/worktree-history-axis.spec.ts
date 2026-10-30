@@ -128,6 +128,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(notice).toBeVisible({ timeout: 10_000 });
     await expect(notice).toContainText('wt-x');
     await expect(notice).toContainText('已删除');
+    await expect(notice).toContainText('主仓「claude-chat-mobile」'); // 说清现在看的是哪棵树
     // 面板本身必须真的改看主仓：只出提示条而路径还指着那棵已删的树，等于什么都没修。
     await expect(page.locator('#fileBrowsePath')).not.toContainText('wt-x');
     await page.locator('#workspaceClose').click();
