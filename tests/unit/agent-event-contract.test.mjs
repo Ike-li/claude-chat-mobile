@@ -368,7 +368,9 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        与 deletePermanent 同口径校验；不新增出向事件：别的设备靠 instances 快照与 session:list 刷新跟上。入向 71→72）
   //      + task:background（2026-10-29，#459 转后台＝终端 Ctrl+B：SDK Query.backgroundTasks(toolUseId?)。
   //        不并进 task:stop：一个杀任务、一个只换前后台，载荷与失败原因都不同。入向 72→73）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 73);
+  //      + elicitation:respond（2026-10-29，#460 MCP 服务器要表单输入 / URL 授权时手机作答。不并进 user:answer：
+  //        那条是 AskUserQuestion 的选项下标 / 自由文本，这条是 accept|decline|cancel + 按 schema 校验的表单内容。入向 73→74）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 74);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:removeMissing'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('about:get'));
@@ -428,7 +430,9 @@ test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 32 种一致', () => {
   //        DEFAULT_REPLAY_OOB_TYPES——否则回放缓冲会把它排队再整批丢弃。出向 30→31）
   //      + foreground_tasks（2026-10-29，#459：此刻挡着本轮、可转后台的前台任务全量快照。瞬时、不进环形缓冲，
   //        切回 / 重连由 sync:since 补推；同样走 outOfBand、登记进 DEFAULT_REPLAY_OOB_TYPES。出向 31→32）
-  assert.equal(AGENT_EVENT_TYPES.length, 32);
+  //      + elicitation（2026-10-29，#460：MCP 表单 / URL 授权卡片。与 question 同族：进环形缓冲、走普通 handle，
+  //        进 pending 快照与 eventsSince 过滤；URL 授权完成走既有 system 信封的 kind:'elicitation_complete'，不另开 type。出向 32→33）
+  assert.equal(AGENT_EVENT_TYPES.length, 33);
   assert.ok(AGENT_EVENT_TYPES.includes('rewind_applied'));
   // trusted_devices（2026-09-09）：已受信任设备列表的下发面。载荷里没有全量 token，
   // 只有 shortId + kind/ua/ip/approvedAt + isCurrent（DEVICE-03）。

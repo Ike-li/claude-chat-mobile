@@ -31,6 +31,11 @@
 //   turn-local-command → 同 turn，但不吐助手正文，改吐一条本地 slash 命令的输出（system/local_command_output，
 //             content 带 <local-command-stdout> 包装，形态照 sdk.d.ts SDKLocalCommandOutputMessage）再收尾——
 //             /context、/cost 这类命令在 CLI 本地算完、不经模型。
+//   turn-elicitation → MCP 服务器要用户填表 / 去浏览器授权（#460）：init 之后先发一条 control_request
+//             （subtype:'elicitation'，形状照 sdk.d.ts 的 SDKControlElicitationRequest），等 SDK 回 control_response，
+//             再把收到的结果原样写进助手正文（`elicitation → {…}`）后收尾。SDK 没接 onElicitation 时它自己就回
+//             {action:'decline'}，所以「回调接上了没有」从正文就能看出来。CCM_FAKE_CLAUDE_ELICIT=url 发 URL 模式，
+//             accept 之后再吐一条 system/elicitation_complete。
 //   turn-fg-task → 一条跑得久的前台 Bash 挡着本轮（#459）：吐 assistant tool_use 与
 //             system/task_started{is_backgrounded:false}，然后不收尾，直到收到 background_tasks 控制请求
 //             （SDK Query.backgroundTasks，终端 Ctrl+B）。收到后照 SDK d.ts 描述的次序吐：
@@ -114,6 +119,23 @@ let fgPendingMsg = null; // turn-fg-task：被前台任务挡着、还没收尾�
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 
 let announcedInit = false;
+const ELICIT_REQUEST_ID = 'fake-elicit-1';
+const ELICIT_URL_MODE = process.env.CCM_FAKE_CLAUDE_ELICIT === 'url';
+let elicitTurn = null;
+
+function sendElicitation(msg) {
+  elicitTurn = msg;
+  out({
+    type: 'control_request',
+    request_id: ELICIT_REQUEST_ID,
+    request: ELICIT_URL_MODE
+      ? { subtype: 'elicitation', mcp_server_name: 'fake-notes', message: '去浏览器授权', mode: 'url', url: 'https://auth.example.com/authorize?state=1', elicitation_id: 'fake-el-1' }
+      : {
+        subtype: 'elicitation', mcp_server_name: 'fake-notes', message: '新笔记叫什么？', mode: 'form',
+        requested_schema: { type: 'object', properties: { name: { type: 'string', minLength: 2 }, pin: { type: 'boolean' } }, required: ['name'] },
+      },
+  });
+}
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 
@@ -123,6 +145,17 @@ rl.on('line', (line) => {
 
   // 任何 control_request 一律回 success。不认的子类型也要应答——SDK 在
   // pendingControlResponses 里等着，不回它会把调用方挂死（比产出错内容更难查）。
+  if (msg.type === 'control_response' && msg.response?.request_id === ELICIT_REQUEST_ID && elicitTurn) {
+    const result = msg.response.subtype === 'success' ? msg.response.response : { error: msg.response.error };
+    if (ELICIT_URL_MODE && result?.action === 'accept') {
+      out({ type: 'system', subtype: 'elicitation_complete', mcp_server_name: 'fake-notes', elicitation_id: 'fake-el-1', uuid: randomUUID(), session_id: SESSION_ID });
+    }
+    const turn = elicitTurn;
+    elicitTurn = null;
+    finishTurn(turn, `elicitation → ${JSON.stringify(result)}`);
+    return;
+  }
+
   if (msg.type === 'control_request' && msg.request?.subtype === 'background_tasks') {
     answerBackgroundTasks(msg);
     return;
@@ -166,6 +199,7 @@ rl.on('line', (line) => {
     });
   }
 
+  if (MODE === 'turn-elicitation') { sendElicitation(msg); return; }
   if (MODE === 'turn-fg-task') {
     startForegroundTask(msg);
     return;
@@ -213,7 +247,7 @@ function answerBackgroundTasks(msg) {
   finishTurn(pending);
 }
 
-function finishTurn(msg) {
+function finishTurn(msg, reply = REPLY) {
   if (MODE === 'turn-screenshot') {
     out({
       type: 'assistant',
@@ -240,7 +274,7 @@ function finishTurn(msg) {
       subtype: 'local_command_output',
       session_id: SESSION_ID,
       uuid: randomUUID(),
-      content: `<local-command-stdout>${REPLY}</local-command-stdout>`,
+      content: `<local-command-stdout>${reply}</local-command-stdout>`,
     });
   } else {
     out({
@@ -248,7 +282,7 @@ function finishTurn(msg) {
       session_id: SESSION_ID,
       uuid: randomUUID(),
       parent_tool_use_id: null,
-      message: { role: 'assistant', content: [{ type: 'text', text: REPLY }] },
+      message: { role: 'assistant', content: [{ type: 'text', text: reply }] },
     });
   }
   if (MODE === 'turn-bg') {
@@ -272,7 +306,7 @@ function finishTurn(msg) {
     duration_ms: 1,
     duration_api_ms: 1,
     num_turns: 1,
-    result: REPLY,
+    result: reply,
     total_cost_usd: 0,
   });
   if (MODE === 'turn-autoreport') {

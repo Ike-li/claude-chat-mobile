@@ -454,6 +454,9 @@ let trustedDevices = createTrustedDevices(); // 函数声明已提升；resetMoc
 let accessBypassActive = false;
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
+// MCP elicitation（#460）：test:elicitation-* 挂起的那张卡（null = 没有），以及收到的作答（GET /__elicitation-log）
+let mockElicitation = null;
+let mockElicitationLog = [];
 // 转后台（#459）：test:fg-task 起的那条前台 Bash（null = 没有），以及会话是否禁用了后台任务（-disabled 那档）
 let mockFgTask = null;
 let mockBgTasksDisabled = false;
@@ -803,6 +806,8 @@ function resetMockState() {
   pendingDevices = [];
   alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
+  mockElicitation = null;
+  mockElicitationLog = [];
   mockFgTask = null;
   mockBgTasksDisabled = false;
   deniedDeviceRetryPending = false;
@@ -966,6 +971,8 @@ function emitTrustedDevices() {
 }
 
 app.get('/__approve-log', (_req, res) => res.json(mockApproveLog));
+
+app.get('/__elicitation-log', (_req, res) => res.json(mockElicitationLog));
 
 app.get('/__held-renames', (_req, res) => res.json(heldRenameAcks.map(r => r.title)));
 
@@ -5557,6 +5564,41 @@ io.on('connection', socket => {
       },
     },
     {
+      // MCP elicitation（#460）：服务器要表单输入 / URL 授权，本轮挂着等作答（真 server 的字段描述由
+      // app/src/agent/elicitation.js 从 schema 归一，这里直接给归一后的形状）。-html 那档的 message 夹着 HTML，
+      // 卡片必须按纯文本显示。作答走下面的 elicitation:respond。
+      // -defaults 那档：date-time 字段带 Z 结尾的默认值、名字上限 2 个字（服务端按码点数）
+      commands: ['test:elicitation-form', 'test:elicitation-url', 'test:elicitation-html', 'test:elicitation-defaults'],
+      run: async ({ activeInst, cmd }) => {
+        const createdAt = Date.now();
+        const base = { serverName: 'mock-notes', createdAt, expiresAt: createdAt + 30 * 60_000 };
+        const card = cmd === 'test:elicitation-url'
+          ? { ...base, requestId: 'mock-elicit-url', message: '去浏览器授权 mock-notes', mode: 'url',
+            url: 'https://auth.example.com/authorize?state=1', urlOrigin: 'https://auth.example.com', elicitationId: 'mock-el-1' }
+          : cmd === 'test:elicitation-html'
+            ? { ...base, requestId: 'mock-elicit-html', message: '<img src=x onerror="window.__elicitXss=1"><b>粗体</b>', mode: 'form', fields: [] }
+            : cmd === 'test:elicitation-defaults'
+              ? { ...base, requestId: 'mock-elicit-defaults', message: '确认提醒', mode: 'form', fields: [
+                { name: 'name', type: 'string', title: '图标', required: true, minLength: 2, maxLength: 2 },
+                { name: 'at', type: 'string', format: 'date-time', title: '提醒时间', required: true, default: '2026-10-29T08:30:00Z' },
+              ] }
+            : { ...base, requestId: 'mock-elicit-form', message: '新笔记叫什么？', mode: 'form', title: '新建笔记', fields: [
+              { name: 'name', type: 'string', title: '名字', required: true, minLength: 2 },
+              { name: 'pin', type: 'boolean', title: '置顶', required: false },
+              { name: 'color', type: 'enum', title: '颜色', required: false, options: [{ value: 'r', label: '红' }, { value: 'g', label: '绿' }] },
+            ] };
+        mockElicitation = { ...card, epoch: activeEpoch, instanceId: viewingInstanceId };
+        // 真 server 的 pendingRequestsSnapshot 同样带上它：刷新 / 重连后前端据此重建卡片
+        syncPendingSnapshot = { permissions: [], questions: [], elicitations: [card] };
+        if (activeInst) activeInst.state = 'permission';
+        broadcastMockInstances();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'elicitation', payload: card,
+        });
+      },
+    },
+    {
       // 转后台（#459）：一条跑得久的前台 Bash 挡着本轮——工具卡 + foreground_tasks 快照，本轮不收尾，
       // 等 task:background（handler 在下面，照 SDK d.ts 描述的次序回事件）。-disabled 那档的会话禁用了后台任务。
       commands: ['test:fg-task', 'test:fg-task-disabled'],
@@ -7210,6 +7252,35 @@ io.on('connection', socket => {
     const first = !mockStoppedTaskIds.has(taskId);
     mockStoppedTaskIds.add(taskId);
     if (typeof ack === 'function') ack({ ok: first });
+  });
+
+  // MCP elicitation 作答（#460，真 server：app.js 的 elicitation:respond → agent.resolveElicitation）。
+  // 只模拟一条校验（名字至少 2 个字）好让「拒收、卡片不关」可测。URL 模式 accept 后只发 elicitation_complete、
+  // 本轮不收尾（真 CLI 里授权完 MCP 工具接着跑）——result 会清掉所有卡片，收尾了就看不出「等待完成」是被谁关的。
+  socket.on('elicitation:respond', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    mockElicitationLog.push(payload || null);
+    const card = mockElicitation;
+    if (!card || payload?.requestId !== card.requestId) { ack({ ok: false, error: '这个请求已经结束了' }); return; }
+    if (payload.action === 'accept' && card.mode === 'form' && card.fields.length
+      && !(typeof payload.content?.name === 'string' && [...payload.content.name].length >= 2)) {
+      ack({ ok: false, error: '「名字」至少 2 个字' });
+      return;
+    }
+    mockElicitation = null;
+    syncPendingSnapshot = null;
+    const base = { epoch: card.epoch, sessionId: 'mock-session-visual-test', instanceId: card.instanceId };
+    io.emit('agent:event', { ...base, seq: 2, ts: Date.now(), type: 'request_resolved', payload: { requestId: card.requestId, kind: 'elicitation', outcome: payload.action } });
+    ack({ ok: true });
+    if (card.mode === 'url' && payload.action === 'accept') {
+      await delay(300);
+      io.emit('agent:event', { ...base, seq: 3, ts: Date.now(), type: 'system', payload: { kind: 'elicitation_complete', serverName: card.serverName, elicitationId: card.elicitationId, message: `${card.serverName} 已确认授权完成` } });
+      return;
+    }
+    const inst = mockInstances.find(i => i.instanceId === card.instanceId);
+    if (inst) inst.state = 'idle';
+    broadcastMockInstances();
+    io.emit('agent:event', { ...base, seq: 4, ts: Date.now(), type: 'result', payload: { messageId: 'msg_elicit_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] } });
   });
 
   // 转后台（#459，真 server：app.js 的 task:background → agent.backgroundTasks）。ack 形状照真 server。

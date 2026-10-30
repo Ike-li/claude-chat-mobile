@@ -50,7 +50,7 @@ export function createInstanceManager() {
   function stateOf(id) {
     const agent = agents.get(id);
     if (!agent) return 'idle';
-    if (agent.pendingPermissions.size > 0 || agent.pendingQuestions.size > 0) return 'permission';
+    if (agent.pendingPermissions.size > 0 || agent.pendingQuestions.size > 0 || agent.pendingElicitations?.size > 0) return 'permission';
     if (agent.pendingTurns > 0 || agent.hasBgTasks?.()) return 'busy';
     if (aborted.has(id)) return 'aborted';
     if (errors.has(id)) return 'error';
