@@ -105,7 +105,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   //
   // 这一条守的是纯函数层照不到的那半截：**服务端下发的 panelCwd / worktreeGone 有没有真的被
   // 接到 DOM 上**。判据全落在用户看得见的东西上（面板路径、提示条文本、列表行副文本）。
-  test('P0-WT-GONE 会话开着时那棵树被删：面板保留目标并说明不可访问', async ({ page }) => {
+  test('P0-WT-GONE 会话开着时那棵树被删：面板改看主仓并说明原因', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
     await openSessionsSidebar(page);
@@ -128,9 +128,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(notice).toBeVisible({ timeout: 10_000 });
     await expect(notice).toContainText('wt-x');
     await expect(notice).toContainText('已删除');
+    await expect(notice).toContainText('主仓「claude-chat-mobile」'); // 说清现在看的是哪棵树
     // 面板本身必须真的改看主仓：只出提示条而路径还指着那棵已删的树，等于什么都没修。
-    await expect(page.locator('#fileBrowsePath')).toContainText('wt-x');
-    await expect(notice).toContainText('无法访问');
+    await expect(page.locator('#fileBrowsePath')).not.toContainText('wt-x');
     await page.locator('#workspaceClose').click();
 
     await expectNoBrowserErrors(page);

@@ -1445,15 +1445,17 @@ function instancesPayload() {
   const list = [];
   for (const [id, a] of agents) {
     const state = instanceState(id);
-    // 外部进程搬家后，SDK 进程 cwd 与记录位置暂时不同。代码面板跟实际记录目录，
-    // 已删除的工作树明确不可访问，不能把父仓代码当成这个会话的工作树。
+    // 外部进程搬家后，SDK 进程 cwd 与记录位置暂时不同，代码面板跟记录位置。
+    // 驾驶轴与展示轴在「worktree 目录已删」这一档分叉（见 panelCwdOf）。两个都下发，前端的
+    // 文件/改动面板走 panelCwd，而算 transcript 目录的那条路仍走 cwd —— 合成一个字段必然
+    // 有一侧要错，且两种错法都静默（历史空白 / 面板报路径越界）。
     const recordCwd = transcriptCwdOf(a);
-    const panelCwd = recordCwd;
+    const panelCwd = panelCwdOf(recordCwd);
     list.push({
       instanceId: id, cwd: a.cwd, transcriptCwd: a.transcriptCwd ?? null, externalObserved: a.externalObserved ?? null, sessionId: a.sessionId,
       // 抽屉按项目分组，在跑的这一行挂在哪个项目下：worktree 归所属仓库，scratch 目录归「无文件夹」
       projectKey: workspaceCwdOf(recordCwd),
-      panelCwd, worktreeGone: Boolean(resolveGoneWorktreeParent(recordCwd, workDirs)),
+      panelCwd, worktreeGone: panelCwd !== recordCwd,
       title: sessions.getSession(a.sessionId)?.title ?? null, state,
       // busy 时携带当前活跃工具信息，供后台 tab 角标细化（🤖 Agent / 🖥 Bash / ⏳ 其他）。
       // 前台轮（pendingTurns>0）优先真实 lastToolName；纯后台任务用 task_type 映射 → 前端 TOOL_BADGE 出 🤖/🖥，未知→null→⏳。
@@ -2019,8 +2021,11 @@ async function refreshStatusLine(reason = 'event') {
     // cwd 取当前查看实例（per-instance）——va 为空（无 live 实例的工作区/新会话懒创建期）时不回退全局
     // lastInit（那是「最后一次任意实例 init」，会跨工作区泄漏上个会话的模型/目录）。
     const cwd = transcriptCwdOf(va) ?? currentCwd;
-    // Git 与项目名描述已验证的目标工作树；目录已删时明确缺失，不回落父仓。
-    const statusCwd = cwd;
+    // statusline 里 cwd 的全部用途是 p.cwd / p.project / gitStatus（两个 build 函数里都只有这三处），
+    // 全在展示轴上，所以走 panelCwdOf：worktree 目录被删之后驾驶轴悬空，gitStatus 的每条 git 命令
+    // 都会失败 → 整个 git 段静默消失，而 project 名还挂着那棵已不存在的树。
+    // readCliSnapshotForSession **不在此列**——它按 cwd 算 CLI 快照的落点，不能回落父仓。
+    const statusCwd = panelCwdOf(cwd);
     const owner = statusOwnerFor(va, currentInstanceId);
     let payload;
     if (owner === 'sdk') {
@@ -2686,6 +2691,10 @@ function dedupedWorktreeCreate(cwd, sourceBranch, firstMessage, composeId = null
 // 那一节再也看不到这个会话（用户报的「工作区抽屉没有会话」正是这条）。
 const workspaceCwdOf = (c, extraRoots = []) => routableAuth(c, extraRoots)?.projectKey
   || resolveGoneWorktreeParent(c, workDirs) || c;
+// 展示轴：文件面板 / 改动面板 / statusline 的 git 段该读哪个目录。与驾驶轴（instance.cwd）的**唯一**
+// 分叉点是「worktree 目录已删」——那时驾驶轴必须原样保留（transcript 落在按它算出的 project 目录里，
+// 改掉就是历史加载失败），而展示轴回落父仓，否则三个消费点各报一条互不相干的技术错误。
+const panelCwdOf = c => resolveGoneWorktreeParent(c, workDirs) || c;
 // 会话所在的托管 worktree 已被删掉时给用户的那句话：是哪一棵、记录还在、怎么救。打开 / 分叉 / 回退共用，
 // consequence 说这一步因此做不成什么。
 const worktreeGoneError = (cwd, consequence) => `这个会话的 worktree「${projectNameFromCwd(cwd)}」已被删除，${consequence}。`

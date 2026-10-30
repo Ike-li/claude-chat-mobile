@@ -209,3 +209,26 @@ test('发送前找不到会话记录：回执是永久失败，前端回填草�
   assert.equal(shown.requeue, false, '换个时间重发结果一样');
   assert.equal(shown.restoreDraft, true);
 });
+
+test('会话开着时那棵 worktree 被删：代码面板回落父仓并标已删，记录位置不动', async () => {
+  const gone = join(repo, '.claude/worktrees/gone'), goneSid = randomUUID();
+  git('worktree', 'add', '-b', 'gone-branch', gone);
+  const dir = join(homedir(), '.claude/projects', encodeProjectDir(gone));
+  mkdirSync(dir, { recursive: true }); projectDirs.push(dir);
+  writeFileSync(join(dir, `${goneSid}.jsonl`), JSON.stringify({ type: 'user', uuid: 'u-gone', parentUuid: null, sessionId: goneSid, cwd: gone, message: { role: 'user', content: 'GONE_TREE_HISTORY' } }) + '\n');
+  const opened = await emit('session:switch', { sessionId: goneSid, cwd: gone });
+  assert.equal(opened.ok, true);
+  git('worktree', 'remove', '--force', gone);
+  const refreshed = new Promise(resolve => {
+    const on = e => { if (e.type === 'instances') { sock.off('agent:event', on); resolve(e.payload); } };
+    sock.on('agent:event', on);
+  });
+  sock.emit('user:setViewing', { instanceId: opened.instanceId }); // 正在看的那个：服务端单发一份当前快照
+  const inst = (await refreshed).instances.find(a => a.instanceId === opened.instanceId);
+  assert.equal(inst.worktreeGone, true);
+  assert.equal(inst.panelCwd, repo, '文件/改动面板改看主仓（2026-09-13），前端提示条说明那棵树没了');
+  assert.equal(inst.cwd, gone, '驾驶轴保持悬空：transcript 按它算 project 目录');
+  const history = await emit('session:history', { sessionId: goneSid, cwd: gone });
+  assert.equal(history.error, undefined);
+  assert.ok(history.messages.some(m => m.content === 'GONE_TREE_HISTORY'));
+});

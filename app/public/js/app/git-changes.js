@@ -264,7 +264,7 @@ export function createWorkspacePanel(context, {
     const el = dom.workspaceWorktreeGone;
     if (!el) return;
     if (!notice) { el.classList.add('hidden'); el.textContent = ''; return; }
-    el.textContent = `worktree「${notice.worktree}」${t('已删除，无法访问该工作树的代码')}`;
+    el.textContent = `worktree「${notice.worktree}」${t('已删除，下面显示的是主仓')}「${notice.parent}」`;
     el.classList.remove('hidden');
   }
 

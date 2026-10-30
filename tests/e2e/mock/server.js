@@ -4737,7 +4737,7 @@ io.on('connection', socket => {
         worktreeGoneArmed = true;
         const inst = mockInstances.find(i => i.instanceId === 'inst_worktree');
         if (inst) {
-          inst.panelCwd = inst.transcriptCwd || inst.cwd; // 驾驶轴 cwd 刻意不动
+          inst.panelCwd = '/Users/you/code/claude-chat-mobile'; // 驾驶轴 cwd 刻意不动
           inst.worktreeGone = true;
         }
         io.emit('agent:event', {
