@@ -3574,10 +3574,12 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // 点过或新会话：resolveSendModel pin wire，再按 S5 回贴网关后缀——仅对「不在 supportedModels 候选里的
     // 自设名」(如 /model 手设并剥离了后缀的)；判据同时认 value 与 resolvedModel，只比 value 会让守卫恒失效、
     // 每次选模型都送出 grok-4.5[1m][1m]。
+    // 外部会话记录只做展示：renderCliPanelState 已把 currentModel 换成外部模型，带它会让服务端 setModel 切过去
+    const viewedInst = instancesList.find(x => x.instanceId === viewingInstanceId);
     const model = resolveOutgoingModel({
       running: Boolean(viewingInstanceId),
       picked: modelIntent.isPicked(),
-      loadedModel: currentModel ? currentModel + currentGatewaySuffix : '',
+      loadedModel: viewedInst?.externalObserved ? (viewedInst.model || '') : (currentModel ? currentModel + currentGatewaySuffix : ''),
       selectValue: modelInput.value,
       fullModel: modelInput.dataset.fullModel || '',
       gatewaySuffix: currentGatewaySuffix,

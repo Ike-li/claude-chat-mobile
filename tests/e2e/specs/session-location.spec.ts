@@ -60,3 +60,32 @@ test('P0-473-SIDEBAR 侧栏点已开会话只切视图，点正在看的那行�
   await expect.poll(() => sent).toEqual(['session:switch', 'user:setViewing']);
   await expectNoBrowserErrors(page);
 });
+
+// 外部模型只做展示：面板显示 external-model-473，续聊仍带网页自己在跑的模型，否则服务端会 setModel 切过去。
+// 搬家命令在另一个会话里发：test:relocate-worktree 不收尾回合，在本会话发会让发送钮一直停在 stop。
+test('P0-473-MODEL 搬家后续聊不把外部模型带进发送', async ({ page }) => {
+  const sent: { text?: string; model?: string }[] = [];
+  page.on('websocket', ws => ws.on('framesent', frame => {
+    const m = typeof frame.payload === 'string' && /^\d+(\["user:message",.*)$/s.exec(frame.payload);
+    if (m) sent.push(JSON.parse(m[1])[1]);
+  }));
+  const echoes = page.locator('#messages').getByText(/^设置回显：/);
+  await gotoMock(page); await ensureComposerReady(page);
+  await openSessionsSidebar(page); await expandWorkspace(page, MAIN_WORKSPACE);
+  await openWorkspaceSession(page, MAIN_WORKSPACE, 'Worktree Driving Session');
+  await expect(page.locator('#messages')).toContainText('WORKTREE_HISTORY_LOADED');
+  await sendChatMessage(page, 'test:settings-echo');
+  await expect(echoes).toHaveCount(1);
+  await openSessionsSidebar(page); await expandWorkspace(page, MAIN_WORKSPACE);
+  await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+  await sendChatMessage(page, 'test:relocate-worktree');
+  await openSessionsSidebar(page); await expandWorkspace(page, MAIN_WORKSPACE);
+  await openWorkspaceSession(page, MAIN_WORKSPACE, 'Worktree Driving Session');
+  await expect(page.locator('#pillModelText')).toContainText('external-model-473');
+  await sendChatMessage(page, 'test:settings-echo');
+  await expect.poll(() => sent.filter(p => p.text === 'test:settings-echo').length).toBe(2);
+  const [before, after] = sent.filter(p => p.text === 'test:settings-echo');
+  expect(before.model).toBeTruthy();
+  expect(after.model).toBe(before.model);
+  await expectNoBrowserErrors(page);
+});
