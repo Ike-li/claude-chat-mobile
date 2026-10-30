@@ -251,8 +251,9 @@ export const EN_DICT = Object.freeze({
   '其他…': 'Other…',
   '输入你的答案': 'Type your answer',
   '提交其他答案': 'Submit other answer',
-  '跳过并中止本轮': 'Skip and interrupt turn',
-  '可点选项、多选确认、填「其他」，或跳过中止本轮': 'Tap an option, confirm a multi-select, fill in "Other", or skip to interrupt the turn',
+  '不回答': "Don't answer",
+  '可点选项、多选确认、填「其他」；不回答时本轮照常继续': 'Tap an option, confirm a multi-select, or fill in "Other". If you don\'t answer, the turn carries on',
+  '已选择不回答，本轮继续': 'Not answering — the turn carries on',
   // 多题提问的组卡（对齐 CLI 的题目标签栏与 Review your answers）
   '可多选': 'Multiple choices allowed',
   '下一题': 'Next',
@@ -261,7 +262,9 @@ export const EN_DICT = Object.freeze({
   '提交': 'Submit',
   '检查你的回答，点一题可回去改': 'Review your answers — tap a question to change it',
   '未作答': 'Not answered',
-  '还有 {n} 题没答，答完才能提交': '{n} unanswered — answer all questions to submit',
+  '还有 {n} 题没答，提交后按跳过处理': '{n} unanswered — they will be skipped when you submit',
+  '还有 {n} 题没送到，收齐后才能提交': '{n} still loading — submit once they arrive',
+  '跳过': 'Skipped',
   '提交回答': 'Submit answers',
 
   // —— 删除会话 / 通用确认 ——
@@ -708,7 +711,6 @@ export const EN_DICT = Object.freeze({
   '、': ', ',
   '请先输入其他答案': 'Type your other answer first',
   '已回答（其他）：': 'Answered (other): ',
-  '已跳过提问（中止本轮）': 'Question skipped (turn interrupted)',
   '已请求中止本轮': 'Interrupt requested',
 
   // —— 发送 / 停止 ——
@@ -1074,6 +1076,7 @@ export const EN_DICT = Object.freeze({
   // —— /rewind 面板（app/rewind-command.js）与回退结果 ——
   // 三个模式名与终端 /rewind 第二步逐字一致；其余沿用上面「回退 = revert」的叫法。
   '把代码和/或对话恢复到某条消息发出之前……': 'Restore the code and/or conversation to the point before one of your messages…',
+  '把代码和/或对话恢复到之前的某个时间点': 'Restore the code and/or conversation to a previous point', // 斜杠菜单里 /rewind 的说明
   '正在读取会话…': 'Reading the session…',
   '这个会话还没有可回退的轮次': 'This session has no turns to revert yet',
   '代码改动待确认': 'Code changes not known yet',

@@ -365,6 +365,22 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
+  // #455 作答走 allow 后，AskUserQuestion 的 tool_use_result 是 {questions, answers}（CLI 2.1.309 + Sonnet 5.5 冒烟实测）。
+  // 卡片要的是 CLI 写给模型的那句话（与历史回放同取 block.content）：取结构化结果的话直播卡显示整段 JSON，
+  // 「不回答」也会因为认不出 "The user did not answer" 而被显成已回答
+  test('tool_result：AskUserQuestion 的结构化结果 → 摘要与全文是 CLI 回给模型的文本，不是 JSON', () => {
+    const { s, events } = makeSession();
+    const q = '请选择一个代号:FALCON 还是 PENGUIN?';
+    const text = `Your questions have been answered: "${q}"="FALCON". You can now continue with these answers in mind.`;
+    s.map({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-ask', name: 'AskUserQuestion', input: { questions: [{ question: q }] } }] } });
+    s.map({ type: 'user', tool_use_result: { questions: [{ question: q, header: '代号', options: [{ label: 'FALCON' }, { label: 'PENGUIN' }], multiSelect: false }], answers: { [q]: 'FALCON' } },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tool-ask', content: text }] } });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload.toolUseId === 'tool-ask');
+    assert.equal(tr.payload.outputSummary, text);
+    assert.equal(s.getToolOutput('tool-ask'), text);
+    s.dispose();
+  });
+
   // PR #332 review：MCP / 动态工具可以返回任意结构，带个字符串 stdout 不等于它是 Bash——照旧展示整个结构化结果
   test('tool_result：别的工具的结构化结果碰巧带 stdout → 仍展示结构化结果，不丢字段', () => {
     const { s, events } = makeSession();

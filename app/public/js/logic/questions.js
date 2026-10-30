@@ -30,18 +30,24 @@ export function questionDraftLabel(q, draft) {
   return '';
 }
 
-// 整组提交的回程 answers（每项带 questionIndex），以及还没答的题；missing 非空时不该提交。
-// openIndexes 是服务端说仍未作答的各题：各题分开送达，还没到的题同样算没答——只交已到的那几题会被服务端整组拒收。
+// 整组提交的回程 answers（每项带 questionIndex）。#455 起允许留题不答（对齐 CLI）：看过但没答的题列进 missing、
+// 并以 { index, skipped: true } 写进 answers——服务端要整组覆盖每一道未答题，不发那一项会被整组拒收。
+// openIndexes 是服务端说仍未作答的各题：各题分开送达，还没送到的列进 undelivered；用户没见过的题不能替他跳过，
+// undelivered 非空时不该提交。
 export function buildQuestionGroupAnswers(questions, drafts, openIndexes = []) {
   const answers = [];
   const missing = [];
+  const undelivered = [];
   const byIndex = new Map(questions.map(q => [q.questionIndex, q]));
   const indexes = [...new Set([...openIndexes, ...byIndex.keys()])].sort((a, b) => a - b);
   for (const i of indexes) {
     const q = byIndex.get(i);
     const draft = drafts.get(i);
-    if (!q || !questionDraftLabel(q, draft)) {
+    if (!q) {
+      undelivered.push(i);
+    } else if (!questionDraftLabel(q, draft)) {
       missing.push(i);
+      answers.push({ index: i, skipped: true });
     } else if (typeof draft.freeText === 'string') {
       answers.push({ index: q.questionIndex, freeText: draft.freeText.trim() });
     } else if (Array.isArray(draft.optionIndexes)) {
@@ -50,5 +56,21 @@ export function buildQuestionGroupAnswers(questions, drafts, openIndexes = []) {
       answers.push({ index: q.questionIndex, optionIndex: draft.optionIndex });
     }
   }
-  return { answers, missing };
+  return { answers, missing, undelivered };
+}
+
+// AskUserQuestion 结果卡的状态与正文（直播、历史回放、终端镜像同一个判法）。#455 起答案走 allow 通道，tool_result
+// 是 CLI 自己的非错误文案；旧 transcript 里是 deny 通道写进错误文案的中文，回放时不能把答过的卡显成红色 ❌。
+// 取消 / 中止仍走 deny（「问题已取消」），与审批拒绝同显「已取消」。其余错误照旧是错误。
+const LEGACY_ERROR_PREFIX = /^Error:\s*/i;
+export function askQuestionResultView({ ok, text } = {}) {
+  const raw = String(text ?? '');
+  if (ok !== false) {
+    return { kind: raw.startsWith('The user did not answer') ? 'unanswered' : 'answered', text: raw };
+  }
+  const body = raw.replace(LEGACY_ERROR_PREFIX, '');
+  if (body.startsWith('用户选择了：')) return { kind: 'answered', text: body };
+  if (body.startsWith('提问已过期')) return { kind: 'unanswered', text: body };
+  if (body.startsWith('问题已取消')) return { kind: 'denied', text: body };
+  return { kind: 'error', text: raw };
 }

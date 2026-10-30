@@ -380,7 +380,7 @@ export function formatSubagentCardTitle({
   // 失败计数排在用量之前：出没出错比跑了多少 token 更该先看见。
   // 【为什么放标题不放单行动作槽】那个槽由 task_progress 心跳驱动、每隔几秒被当前工具覆盖一次——
   // 失败写在那里会闪一下就没，而"闪过"等于没显示。计数只增不减，折叠着扫一眼就知道里面出没出过错。
-  // 【只数真错误】denyKind 那几档（已回答/已拒绝/已取消）是用户自己的动作，他知道，不算异常。
+  // 【只数真错误】denyKind 那两档（已拒绝/已取消）是用户自己的动作，他知道，不算异常。
   const failed = Number(failures);
   if (Number.isFinite(failed) && failed > 0) parts.push(`❌ ${failed}`);
   const uses = Number(toolUses);

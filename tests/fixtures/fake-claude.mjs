@@ -87,6 +87,10 @@ const LISTED_MODEL = process.env.CCM_FAKE_CLAUDE_MODEL_LIST_FILE
 const MCP_STATUS = process.env.CCM_FAKE_CLAUDE_MCP_STATUS ? JSON.parse(process.env.CCM_FAKE_CLAUDE_MCP_STATUS) : null;
 const MCP_RECONNECT_ERROR = process.env.CCM_FAKE_CLAUDE_MCP_RECONNECT_ERROR || '';
 const CONTROL_LOG = process.env.CCM_FAKE_CLAUDE_CONTROL_LOG || '';
+// 斜杠命令清单（#456）。SDK 的 supportedCommands() 同样读 initialize 响应（commands 字段），真 CLI 的 system/init
+// 只带名字（slash_commands: string[]）。显式 opt-in（CCM_FAKE_CLAUDE_COMMANDS=<SlashCommand[] 的 JSON>）才两处都带；
+// 不置位时 initialize 响应与 init 逐字不变。
+const COMMANDS = process.env.CCM_FAKE_CLAUDE_COMMANDS ? JSON.parse(process.env.CCM_FAKE_CLAUDE_COMMANDS) : null;
 const EXIT_APPEND = process.env.CCM_FAKE_CLAUDE_EXIT_APPEND || '';
 // turn-screenshot 档的截图：固定 id 与 1×1 PNG，用例据此拼引用 t:<id>:0、比对取回的数据
 const SCREENSHOT_TOOL_USE_ID = 'toolu_fake_screenshot';
@@ -116,10 +120,11 @@ rl.on('line', (line) => {
       out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { mcpServers: MCP_STATUS } } });
       return;
     }
-    const payload = msg.request?.subtype !== 'initialize' ? {}
+    const models = msg.request?.subtype !== 'initialize' ? {}
       : LISTED_MODEL ? { models: [{ value: LISTED_MODEL, displayName: LISTED_MODEL, resolvedModel: LISTED_MODEL }] }
         : GATEWAY_MODEL ? { models: [{ value: MODEL_VALUE_FROM_GATEWAY ? GATEWAY_MODEL : 'opus', displayName: GATEWAY_MODEL, resolvedModel: GATEWAY_MODEL }] }
           : {};
+    const payload = msg.request?.subtype === 'initialize' && COMMANDS ? { ...models, commands: COMMANDS } : models;
     out({
       type: 'control_response',
       response: { subtype: 'success', request_id: msg.request_id, response: payload },
@@ -140,6 +145,7 @@ rl.on('line', (line) => {
       tools: [],
       model: (INIT_EACH_TURN && GATEWAY_MODEL) || 'fake-claude',
       permissionMode: 'default',
+      ...(COMMANDS ? { slash_commands: COMMANDS.map(c => c.name) } : {}),
     });
   }
 

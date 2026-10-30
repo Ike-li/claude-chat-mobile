@@ -47,16 +47,43 @@ export function createModelsCache(opts) {
   return createCwdKeyedCache(opts);
 }
 
-// 从 init payload 抽出可缓存的斜杠命令列表。非数组 / 空 → null（不缓存空列表，避免抹掉更好的缓存）。
-// 元素归一为字符串名（兼容 mock 的 {name, description} 与 SDK 的 string[]）。
+// 一条命令 → { name, description?, argumentHint?, aliases? }（字段名照 SDK SlashCommand，空字段不带）。
+// 裸字符串来自 init.slash_commands 与 #456 之前落盘的缓存，只有名字。
+function normalizeSlashCommand(item) {
+  if (typeof item === 'string') return item ? { name: item } : null;
+  if (!item || typeof item.name !== 'string' || !item.name) return null;
+  const cmd = { name: item.name };
+  if (typeof item.description === 'string' && item.description) cmd.description = item.description;
+  if (typeof item.argumentHint === 'string' && item.argumentHint) cmd.argumentHint = item.argumentHint;
+  const aliases = Array.isArray(item.aliases) ? item.aliases.filter(a => typeof a === 'string' && a) : [];
+  if (aliases.length) cmd.aliases = aliases;
+  return cmd;
+}
+
+// 可缓存、可下发的斜杠命令列表。非数组 / 空 → null（不缓存空列表，避免抹掉更好的缓存）。
+// 同名多行只留一行：SDK 说 /name 执行标了 builtin 的那行，菜单上的说明要跟它一致。
 export function normalizeSlashCommands(raw) {
   if (!Array.isArray(raw) || raw.length === 0) return null;
-  const names = [];
+  const byName = new Map();
   for (const item of raw) {
-    if (typeof item === 'string' && item) names.push(item);
-    else if (item && typeof item.name === 'string' && item.name) names.push(item.name);
+    const cmd = normalizeSlashCommand(item);
+    if (cmd && (!byName.has(cmd.name) || item.builtin === true)) byName.set(cmd.name, cmd);
   }
-  return names.length ? names : null;
+  return byName.size ? [...byName.values()] : null;
+}
+
+// 只要名字的那几处（terminal 隐藏名单）：仍是 string[]。
+export function slashCommandNames(raw) {
+  return normalizeSlashCommands(raw)?.map(c => c.name) ?? null;
+}
+
+// init.slash_commands 只有名字，直接覆盖会把 supportedCommands() 拿到的说明抹掉（每轮 init 都会）。
+// 成员以 init 为准，只有名字的那几条沿用缓存里同名命令的详情；init 里没有的不残留（skill 删了就该消失）。
+export function mergeInitSlashCommands(initList, cachedList) {
+  const next = normalizeSlashCommands(initList);
+  if (!next) return null;
+  const known = new Map((normalizeSlashCommands(cachedList) ?? []).map(c => [c.name, c]));
+  return next.map(c => (Object.keys(c).length === 1 ? known.get(c.name) ?? c : c));
 }
 
 // 解析某 cwd 应下发的斜杠命令：优先 per-cwd 缓存；仅当 lastInit.cwd 命中当前 cwd 才回落 lastInit
@@ -73,12 +100,12 @@ export function resolveSlashCommandsForCwd(cache, cwd, lastInit = null) {
   const hit = cache?.get?.(cwd);
   const fromCache = normalizeSlashCommands(hit?.slashCommands ?? hit);
   if (fromCache) {
-    return { slashCommands: fromCache, terminalSlashCommands: normalizeSlashCommands(hit?.terminalSlashCommands) ?? [] };
+    return { slashCommands: fromCache, terminalSlashCommands: slashCommandNames(hit?.terminalSlashCommands) ?? [] };
   }
   if (cwd && lastInit?.cwd === cwd) {
     const cmds = normalizeSlashCommands(lastInit.slashCommands);
     if (!cmds) return null;
-    return { slashCommands: cmds, terminalSlashCommands: normalizeSlashCommands(lastInit.terminalSlashCommands) ?? [] };
+    return { slashCommands: cmds, terminalSlashCommands: slashCommandNames(lastInit.terminalSlashCommands) ?? [] };
   }
   return null;
 }

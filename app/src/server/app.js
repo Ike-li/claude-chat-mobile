@@ -66,9 +66,11 @@ import {
   createModelsCache,
   createCwdKeyedCache,
   isCwdDefaultModel,
+  mergeInitSlashCommands,
   modelListSignature,
   normalizeSlashCommands,
   resolveSlashCommandsForCwd,
+  slashCommandNames,
 } from '../agent/models-cache.js';
 import { createCfAccessStrategy } from '../auth/auth-strategy.js';
 import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
@@ -1845,7 +1847,7 @@ refreshStatuslineInstallState();
 const INIT_CACHE = join(DATA_DIR, 'init-cache.json');
 let lastInit = null;
 const modelsCache = createModelsCache();
-const slashCommandsCache = createCwdKeyedCache(); // cwd → { slashCommands: string[] }
+const slashCommandsCache = createCwdKeyedCache(); // cwd → { slashCommands: {name, description?, argumentHint?, aliases?}[], terminalSlashCommands: string[] }
 // per-cwd「CLI 默认模型」缓存：新会话/无记录续接在 init 返回前显它、而非笼统「沿用当前」（只显示、不改发送）。
 // 仅由「未 resume 且未 pin model」的启动填充（scout / fresh 首 init，判据 isCwdDefaultModel）。
 const defaultModelByCwd = new Map();
@@ -1920,6 +1922,22 @@ function pushSlashCommandsForCwd(cwd) {
       terminalSlashCommands: cmds.terminalSlashCommands, // 与命令列表同批下发，前端才不会拿旧名单过滤新列表
     },
   });
+}
+
+// supportedCommands() / commands_changed 拿到的全量清单落缓存（实例与 scout 共用），返回归一后的列表，空则 null。
+// 同 init 那条「空列表不写」。故意不为 REPLACE 语义单开一条清空路径——空推送只可能来自 skill 被删这种极罕见场景，
+// 而放行空写会让「CLI 未就绪时报空」也一并冲掉好缓存，两害相权取轻。
+// 【terminal 名单沿用上一条 init，不跟着一起重置】SDK 的 SlashCommand[]（name/description/argumentHint/aliases）
+// **不带** terminalOriented 标记——这条路根本拿不到名单。整条覆盖会把 init 存下的名单抹成空，于是 /color /statusline
+// 会在任何一次 skill 变动后重新冒回补全菜单（而那正是本功能要挡的）。名单是 CLI 版本级的量、不随 skill 增删而变，
+// 沿用是正确语义而非将就。
+function adoptSlashCommands(cwd, raw) {
+  const cmds = normalizeSlashCommands(raw);
+  if (!cmds) return null;
+  const keptTerminal = slashCommandNames(slashCommandsCache.get(cwd)?.terminalSlashCommands) ?? [];
+  slashCommandsCache.set(cwd, { slashCommands: cmds, terminalSlashCommands: keptTerminal });
+  saveInitCache();
+  return cmds;
 }
 
 // ---- statusline 单一来源路由：Web 驾驶用 SDK；CLI 镜像/外部脏上下文用按 session 隔离的 CLI 快照 ----
@@ -2217,14 +2235,19 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
       metrics.inc('events'); // 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
       const drivingCwd = instance.cwd; // 见 onSessionId 里的说明：闭包 cwd 会在 EnterWorktree 后过期
       if (envelope.type === 'init') {
+        // slash 命令按本实例 cwd 归键（project/local skill 随区变）；空列表不写，避免冲掉更好缓存。
+        // init 只带名字（#456）：成员以它为准，说明沿用缓存里 supportedCommands() 拿到的那份。转发前把信封里的
+        // 换成合并后的——原样转发会让手机菜单每轮 init 都降级成光秃秃的名字。agent 的环形缓冲存的是同一个
+        // 信封对象，sync:since 回放拿到的也是这份。
+        const cached = slashCommandsCache.get(drivingCwd);
+        const cmds = mergeInitSlashCommands(envelope.payload?.slashCommands, cached?.slashCommands ?? cached);
+        if (cmds) envelope.payload = { ...envelope.payload, slashCommands: cmds };
         lastInit = envelope.payload;
-        // slash 命令按本实例 cwd 归键（project/local skill 随区变）；空列表不写，避免冲掉更好缓存
-        const cmds = normalizeSlashCommands(envelope.payload?.slashCommands);
         // terminal 名单【只有 init 这条路带得到】（commands_changed 的 SlashCommand[] 无此标记），
-        // 所以随命令一起落缓存，供下面 slash_commands 分支沿用。无名单显式落成 []（= 没有要隐藏的）。
+        // 所以随命令一起落缓存，供 adoptSlashCommands 沿用。无名单显式落成 []（= 没有要隐藏的）。
         if (cmds) slashCommandsCache.set(drivingCwd, {
           slashCommands: cmds,
-          terminalSlashCommands: normalizeSlashCommands(envelope.payload?.terminalSlashCommands) ?? [],
+          terminalSlashCommands: slashCommandNames(envelope.payload?.terminalSlashCommands) ?? [],
         });
         saveInitCache();
       }
@@ -2237,22 +2260,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
           saveInitCache();
         }
       }
-      // CLI 中途发现新命令/skill 的全量推送（SDK commands_changed）。缓存策略与上面 init 那条**共用同一条**：
-      // 同样按 cwd 归键、同样「空列表不写」。故意不在这里为 REPLACE 语义单开一条清空路径——空推送
-      // 只可能来自 skill 被删这种极罕见场景，而放行空写会让「CLI 未就绪时报空」也一并冲掉好缓存，
-      // 两害相权取轻。前端那侧收到空数组仍会清当前补全列表，下次 init 修正。
+      // 全量命令清单：CLI 中途发现新命令/skill 的推送（SDK commands_changed），或 supportedCommands() 拉到的（#456）。
+      // 按 cwd 归键落缓存，规则见 adoptSlashCommands。转发前同 init 换成归一后的（同名只留 builtin 那行）。
+      // 前端那侧收到空数组仍会清当前补全列表，下次 init 修正。
       else if (envelope.type === 'slash_commands') {
-        const cmds = normalizeSlashCommands(envelope.payload?.slashCommands);
-        if (cmds) {
-          // 【terminal 名单沿用上一条 init，不跟着一起重置】SDK 的 commands_changed 只带
-          // SlashCommand[]（name/description/argumentHint/aliases），**不带** terminalOriented 标记——
-          // 这条路根本拿不到名单。整条覆盖会把 init 存下的名单抹成空，于是 /color /statusline
-          // 会在任何一次 skill 变动后重新冒回补全菜单（而那正是本功能要挡的）。
-          // 名单是 CLI 版本级的量、不随 skill 增删而变，沿用是正确语义而非将就。
-          const keptTerminal = normalizeSlashCommands(slashCommandsCache.get(drivingCwd)?.terminalSlashCommands) ?? [];
-          slashCommandsCache.set(drivingCwd, { slashCommands: cmds, terminalSlashCommands: keptTerminal });
-          saveInitCache();
-        }
+        const cmds = adoptSlashCommands(drivingCwd, envelope.payload?.slashCommands);
+        if (cmds) envelope.payload = { ...envelope.payload, slashCommands: cmds };
       }
       // 批准内含的 mode 切换（ExitPlanMode 等经 agent.resolvePermission emit）：同步 per-instance 权威档，
       // 使重连 / instances 重放与手机端权限档图标一致（envelope 随后照常 io.emit → 前端 setPermMode）。
@@ -2694,7 +2707,15 @@ function openScoutInstance(cwd) {
         cliConfigGen.noteListGen(cwd, spawnGen);
         saveInitCache();
         pushModelsForCwd(cwd);
-        cleanup();
+        // 命令清单与模型同出一次 initialize、回调紧随其后：当场 dispose 的话它到达时实例已 disposed、被丢掉（#456）
+        instance.commandsFetch.then(cleanup);
+      } else if (envelope.type === 'slash_commands') {
+        // 从没聊过的新工作区，发消息之前的完整命令清单就靠这一下（init 要等首条消息之后才来）。
+        // 只在它仍是新会话页 / 当前查看的目标时才推（判据同 session:new 的补播）：用户已切到别区的话，前端的 init handler
+        // 不看 cwd，推了就把那边的菜单换成这一区的（PR #466 review）。缓存照落，切回来时 pushSlashCommandsForCwd 会用上。
+        if (adoptSlashCommands(cwd, envelope.payload?.slashCommands) && (composeCwdNow() ?? viewingCwdOf()) === cwd) {
+          pushSlashCommandsForCwd(cwd);
+        }
       } else if (envelope.type === 'init') {
         // CLI 启动完成，init 已到 → 补调 fetchModels（首次在 start() 中可能因 CLI 未就绪静默失败）
         instance.fetchModels();
@@ -3556,9 +3577,14 @@ registerSocketConnection(io, socket => {
   });
 
   on(socket, 'user:answer', payload => {
-    const { requestId, optionIndex, optionIndexes, freeText, answers, instanceId } = payload || {};
+    const { requestId, optionIndex, optionIndexes, freeText, answers, dismiss, instanceId } = payload || {};
     if (typeof requestId !== 'string') return;
-    // 多题整组提交：requestId 是整组的 toolUseID，逐项校验在 resolveQuestionGroup
+    // 「不回答」（#455）：关掉整张卡、本轮继续。按整组结算，单题卡发来的 `${toolUseID}#0` 也认
+    if (dismiss === true) {
+      routeInstance(instanceId)?.dismissQuestion(requestId.replace(/#\d+$/, ''));
+      return;
+    }
+    // 多题整组提交：requestId 是整组的 toolUseID，逐项校验在 resolveQuestionGroup（含 { index, skipped: true }）
     if (Array.isArray(answers)) {
       routeInstance(instanceId)?.resolveQuestionGroup(requestId, answers);
       return;
