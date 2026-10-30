@@ -995,6 +995,7 @@ test('effortUiState: CLI 镜像档位未知时保持未知，不得从候选列�
       level: null,
       selected: '',
       label: 'CLI 档位未知',
+      pillLabel: 'CLI 档位未知',
       placeholder: 'CLI 当前档未知',
     },
   );

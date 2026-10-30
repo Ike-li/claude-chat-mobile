@@ -312,10 +312,13 @@ export function effortUiState(level, supportedLevels, { mirrorReadonly = false, 
   const selected = normalized && levels.includes(normalized) ? normalized : '';
   const actual = fromCli || effective;
   const inherited = actual ? `${actual} · ${t('CLI 默认')}` : t('CLI 默认');
+  const label = normalized || (mirrorReadonly ? t('CLI 档位未知') : inherited);
   return {
     level: raw,
     selected,
-    label: normalized || (mirrorReadonly ? t('CLI 档位未知') : inherited),
+    label,
+    // 底栏胶囊宽度有上限，「· CLI 默认」后缀放进去会被截断；胶囊只留档名，完整文案走 title
+    pillLabel: !normalized && !mirrorReadonly && actual ? actual : label,
     placeholder: normalized
       ? `${normalized}${t('（当前模型不可选）')}`
       : (mirrorReadonly ? t('CLI 当前档未知') : inherited),

@@ -157,8 +157,8 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 |----|------|
 | **候选来源** | 当前模型条目的 `supportedEffortLevels`；解析不到 → 全候选并集；明确不支持 → 隐藏整行 |
 | **auto** | 有档可调就在末位追加 `auto`（`withAutoTier`，顺序同 CLI usage `[…\|ultracode\|auto]`）；wire 上原样发 `'auto'` |
-| **没指定（null）** | **不高亮任何磁贴**（尤其不高亮 auto）；pill / 占位显「`<实际档> · CLI 默认`」，实际档未知时只显「CLI 默认」 |
-| **CLI settings 来的档** | 没在 Web 上选过档时，L3（settings 的 `effortLevel`）照常当显式档下发（`--effort`，跑起来同终端读 settings），但用户没选过它，**视同没指定**：pill / 占位显「`<档> · CLI 默认`」、不高亮磁贴。发之前（空首页）与发之后（实例）一致，不能发完一条就变成光秃的档（验收 O15）。点同一档 = 钉成用户自选：服务端只改来源与落盘，不置换实例（`user:setEffort` 的幂等闸按「档 + 来源」判） |
+| **没指定（null）** | **不高亮任何磁贴**（尤其不高亮 auto）；占位与空首页摘要显「`<实际档> · CLI 默认`」，实际档未知时只显「CLI 默认」；底栏胶囊只显档名（`effortUiState().pillLabel`），完整文案放 `#pillDefaults` 的 title——后缀放进胶囊会被宽度上限截成「medium · C…」 |
+| **CLI settings 来的档** | 没在 Web 上选过档时，L3（settings 的 `effortLevel`）照常当显式档下发（`--effort`，跑起来同终端读 settings），但用户没选过它，**视同没指定**：占位与空首页摘要显「`<档> · CLI 默认`」（胶囊只显档名，同上）、不高亮磁贴。发之前（空首页）与发之后（实例）一致，不能发完一条就变成光秃的档（验收 O15）。点同一档 = 钉成用户自选：服务端只改来源与落盘，不置换实例（`user:setEffort` 的幂等闸按「档 + 来源」判） |
 | **来源字段** | `effortSource`：`user`（Web 上点的）/ `cli-settings`（L3）/ `default`（没指定）。随 instances（实例的 `effortSource`、空首页的 `defaultEffortSource`）与 `effort_mode.source` 下发，随 sessions.json 落盘。缺字段（旧回执、本字段之前落盘的会话）按 `user` 显示，与改动前一致 |
 | **续接时的来源** | `resolveResumeEffort` 随取值的那一层带出来源。存的是 `cli-settings` 来的档时，settings 此刻读得到就跟它（终端 `claude --resume` 也每次现读 settings），读不到（缓存冷 / 读失败）才沿用记下的档 |
 | **实际档来源** | 只能问 CLI：`AgentSession.refreshEffectiveEffort()` 调 `get_settings` 取 `applied.effort`（init 后、切模型后，仅在没指定时问）；server 经 `effort_mode.effective` 与 instances 的 `effortEffective` 下发。只进文案，不当成钉住的档 |

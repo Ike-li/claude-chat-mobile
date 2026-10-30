@@ -123,7 +123,7 @@ export function createEmptySurfaces(context, {
     return {
       modelLabel,
       modeLabel: (pillPermText?.textContent || '').trim(),
-      effortLabel: (pillEffortText?.textContent || '').trim(),
+      effortLabel: (pillEffortText?.dataset.full || pillEffortText?.textContent || '').trim(),
     };
   }
   function refreshComposeDefaultsSummary() {

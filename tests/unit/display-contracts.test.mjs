@@ -174,6 +174,18 @@ test.describe('契约 §2 Effort：UI 档 vs SDK 档；ultracode 映射', () => 
     assert.match(mirror.label, /CLI|未知|unknown/i, '镜像态的 null 是「观察不到」，Web 实例的实际档不能拿来补');
   });
 
+  // 底栏胶囊只有「模型 · 权限 · 思考」三段、宽度有上限：「· CLI 默认」后缀放进去会被截成「medium · C…」。
+  // 胶囊只留档名；完整文案（label）仍给 title、设置面板占位和空首页摘要。
+  test('effortUiState：胶囊短标只留档名，「CLI 默认」后缀不进胶囊', () => {
+    const levels = withAutoTier(['low', 'medium', 'high']);
+    assert.equal(effortUiState(null, levels, { effective: 'medium' }).pillLabel, 'medium');
+    assert.equal(effortUiState('high', levels, { source: 'cli-settings' }).pillLabel, 'high');
+    assert.equal(effortUiState('high', levels, { source: 'user' }).pillLabel, 'high');
+    assert.equal(effortUiState(null, levels, {}).pillLabel, 'CLI 默认', '实际档未知时没有档名可显');
+    assert.equal(effortUiState(null, levels, { mirrorReadonly: true, effective: 'high' }).pillLabel, 'CLI 档位未知');
+    assert.equal(effortUiState('high', levels, { source: 'cli-settings' }).label, 'high · CLI 默认', '完整文案不变');
+  });
+
   test("effortUiState：'auto' 是显式选中的档，照常高亮", () => {
     const ui = effortUiState('auto', withAutoTier(['low', 'high']), { mirrorReadonly: false, effective: 'medium' });
     assert.equal(ui.selected, 'auto');
