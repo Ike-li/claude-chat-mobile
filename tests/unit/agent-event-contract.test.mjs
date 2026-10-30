@@ -364,7 +364,9 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        不复用 folders:remove：那条只认当前有效连接根，缺失路径恰不在 workDirs 里；也不走 env:set 整份覆盖。入向 67→68）
   //      + mcp:status / mcp:reconnect / mcp:toggle（2026-10-29，#457：「宿主机」页的 MCP 服务器对应终端 /mcp——现查状态、
   //        重连、启停。三条都是对当前实例的控制请求，不开 HTTP 端点；toggle 会写项目配置，所以只认指定实例、不静默回落。入向 68→71）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 71);
+  //      + session:rename（2026-10-29，#458：网页端给会话改名，对应终端 /rename。写的是 transcript 而不是授权面，
+  //        与 deletePermanent 同口径校验；不新增出向事件：别的设备靠 instances 快照与 session:list 刷新跟上。入向 71→72）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 72);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:removeMissing'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('about:get'));

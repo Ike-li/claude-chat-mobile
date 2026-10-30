@@ -48,6 +48,8 @@
 //   cost-state 等几行、0.6–2s 进程才退；文件已被删掉时这次追加会把它重新建出来。
 //   隔 500ms（比真 CLI 慢）是为了把窗口撑开，但必须短于 SDK 关 stdin 后约 2s 的宽限——过了宽限
 //   SDK 会 SIGTERM，写入就不会发生了。
+//   CCM_FAKE_CLAUDE_EXIT_TITLE=<标题> → 收尾时先追加一条 custom-title。模拟真 CLI 把内存里的会话标题
+//   当元数据再写一遍（CLI 2.1.312 源码：追加会话元数据时写 currentSessionTitle），网页刚改的名字就被盖回去（#458）。
 //
 // 【它仍然不是真 CLI】不跑模型、不认工具、不落 transcript（上面那一行收尾写入除外）。
 // 任何需要真回合语义的断言仍归 S5。
@@ -96,6 +98,7 @@ const EXIT_APPEND = process.env.CCM_FAKE_CLAUDE_EXIT_APPEND || '';
 const SCREENSHOT_TOOL_USE_ID = 'toolu_fake_screenshot';
 const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X2Xb0AAAAASUVORK5CYII=';
 const EXIT_MARKER = process.env.CCM_FAKE_CLAUDE_EXIT_MARKER || '';
+const EXIT_TITLE = process.env.CCM_FAKE_CLAUDE_EXIT_TITLE || '';
 const RESULT_DELAY_MS = Number(process.env.CCM_FAKE_CLAUDE_RESULT_DELAY_MS) || 0;
 
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -243,6 +246,7 @@ function finishTurn(msg) {
 rl.on('close', () => {
   if (!EXIT_APPEND) process.exit(0);
   setTimeout(() => {
+    if (EXIT_TITLE) appendFileSync(EXIT_APPEND, `${JSON.stringify({ type: 'custom-title', customTitle: EXIT_TITLE, sessionId: SESSION_ID })}\n`);
     appendFileSync(EXIT_APPEND, `${JSON.stringify({ type: 'cost-state', sessionId: SESSION_ID })}\n`);
     if (EXIT_MARKER) writeFileSync(EXIT_MARKER, '');
     process.exit(0);
