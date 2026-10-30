@@ -23,6 +23,7 @@ export function createHostMcp({ emit, appConfirm, getInstanceId, getSnapshot, on
   let live = null;              // { instanceId, servers }：现查结果，只对拉取时的那个实例有效
   const rowErrors = new Map();  // name → 上一次处置失败的原因
   const busy = new Set();       // 正在处置的名字
+  let refreshSeq = 0;           // 现查代次：只认最后一次发出的。查看实例从 A 切到 B 时两次都在途，A 晚到的回执不得顶掉 B 的
 
   function view() {
     const servers = live && live.instanceId === getInstanceId() ? live.servers : null;
@@ -30,8 +31,10 @@ export function createHostMcp({ emit, appConfirm, getInstanceId, getSnapshot, on
   }
 
   async function refresh() {
+    const seq = ++refreshSeq;
     const instanceId = getInstanceId();
     const res = await emit('mcp:status', { instanceId });
+    if (seq !== refreshSeq) return;
     if (live?.instanceId !== instanceId) rowErrors.clear();
     live = res?.ok === true && res.live === true && Array.isArray(res.servers) ? { instanceId, servers: res.servers } : null;
     onChange();
