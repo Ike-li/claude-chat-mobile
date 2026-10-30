@@ -687,7 +687,7 @@ footer a { color: var(--ink-soft); }
     phone: { name: '手机 PWA', where: 'app/public/ · 零构建', items: [
       '浏览器直接加载 ES 模块；js/logic/ 的纯函数模块与单测共用同一份文件',
       'js/app.js 是存量的顶层状态与派发表（近万行），新状态按约定进 js/app/ 下的模块',
-      '派发表 handle + outOfBand 必须恰好覆盖 32 种 agent:event，少一个就静默丢事件，npm run check 会拦',
+      '派发表 handle + outOfBand 必须恰好覆盖 33 种 agent:event，少一个就静默丢事件，npm run check 会拦',
       'sw.js 接收离线推送；会话图片进入可视区才经 image:get 取'
     ]},
     cf: { name: 'Cloudflare Tunnel + Access（可选）', where: 'app/src/auth/cf-access.js · auth-strategy.js', items: [

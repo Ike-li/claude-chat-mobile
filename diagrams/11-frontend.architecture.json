@@ -304,7 +304,7 @@
       "items": [
         "canonicalize.js 是「前后端互不 import」的唯一豁免",
         "i18n key 就是中文原文，改文案即改 key",
-        "handle 表 + outOfBand 表的键并集必须精确等于 32 种事件类型"
+        "handle 表 + outOfBand 表的键并集必须精确等于 33 种事件类型"
       ]
     }
   ]
