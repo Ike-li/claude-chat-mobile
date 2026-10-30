@@ -5,7 +5,7 @@
 // 槽位：S1（纯函数）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { questionGroupKey, isGroupedQuestion, questionDraftLabel, buildQuestionGroupAnswers } from '../../app/public/js/logic/questions.js';
+import { questionGroupKey, isGroupedQuestion, questionDraftLabel, buildQuestionGroupAnswers, askQuestionResultView } from '../../app/public/js/logic/questions.js';
 
 const q = (questionIndex, extra = {}) => ({
   requestId: `toolu_1#${questionIndex}`,
@@ -35,7 +35,7 @@ test('questionDraftLabel：单选、多选、其他三种草稿各自显示成�
   assert.equal(questionDraftLabel(q(0), { freeText: '   ' }), '');
 });
 
-test('buildQuestionGroupAnswers：全答完 → 每题一项、按 questionIndex 标号，missing 为空', () => {
+test('buildQuestionGroupAnswers：全答完 → 每题一项、按 questionIndex 标号，missing / undelivered 为空', () => {
   const questions = [q(0), q(1, { multiSelect: true }), q(2)];
   const drafts = new Map([
     [0, { optionIndex: 2 }],
@@ -49,22 +49,46 @@ test('buildQuestionGroupAnswers：全答完 → 每题一项、按 questionIndex
       { index: 2, freeText: '其他答案' },
     ],
     missing: [],
+    undelivered: [],
   });
 });
 
-// 各题分开送达，后几题可能还在路上：没到的题也算没答，否则只答了已到的就能提交，被服务端整组拒收（PR #413 review）
-test('buildQuestionGroupAnswers：openIndexes 里还没送到的题也列进 missing', () => {
+// 各题分开送达，后几题可能还在路上：用户没见过的题不能替他跳过，收齐之前不放行提交（PR #413 review）
+test('buildQuestionGroupAnswers：openIndexes 里还没送到的题列进 undelivered，不写进 answers', () => {
   const drafts = new Map([[0, { optionIndex: 0 }]]);
   assert.deepEqual(buildQuestionGroupAnswers([q(0)], drafts, [0, 1, 2]), {
     answers: [{ index: 0, optionIndex: 0 }],
-    missing: [1, 2],
+    missing: [],
+    undelivered: [1, 2],
   });
 });
 
-test('buildQuestionGroupAnswers：没答的题（含勾了又全取消的多选、只填空白的其他）列进 missing', () => {
+// #455 起允许留题不答直接提交（机主 2026-10-29 改判，对齐 CLI）。服务端要求整组覆盖每一道未答题，
+// 所以没答的题要显式写成 { skipped: true }，不能只是不发——不发会被整组拒收，这一轮挂到 TTL。
+test('buildQuestionGroupAnswers：看过但没答的题（含勾了又全取消的多选、只填空白的其他）列进 missing，并按 skipped 提交', () => {
   const questions = [q(0), q(1, { multiSelect: true }), q(2)];
   const drafts = new Map([[1, { optionIndexes: [] }], [2, { freeText: '  ' }]]);
-  assert.deepEqual(buildQuestionGroupAnswers(questions, drafts).missing, [0, 1, 2]);
+  const none = buildQuestionGroupAnswers(questions, drafts);
+  assert.deepEqual(none.missing, [0, 1, 2]);
+  assert.deepEqual(none.answers, [{ index: 0, skipped: true }, { index: 1, skipped: true }, { index: 2, skipped: true }]);
   drafts.set(0, { optionIndex: 0 });
-  assert.deepEqual(buildQuestionGroupAnswers(questions, drafts).missing, [1, 2]);
+  const some = buildQuestionGroupAnswers(questions, drafts);
+  assert.deepEqual(some.missing, [1, 2]);
+  assert.deepEqual(some.answers, [{ index: 0, optionIndex: 0 }, { index: 1, skipped: true }, { index: 2, skipped: true }]);
+});
+
+// AskUserQuestion 结果卡的状态：#455 起答案走 allow，tool_result 是 CLI 自己的非错误文案；旧 transcript 里是
+// deny 通道写的错误文案，回放时不能把答过的卡显成红色 ❌。取消 / 中止仍是 deny（已取消，和审批拒绝同一个图标）。
+test('askQuestionResultView：新格式按 CLI 文案判已回答 / 没回答，旧 deny 格式按已回答 / 已取消 / 没回答回放', () => {
+  assert.deepEqual(askQuestionResultView({ ok: true, text: 'Your questions have been answered: "Q"="A". You can now continue with these answers in mind.' }),
+    { kind: 'answered', text: 'Your questions have been answered: "Q"="A". You can now continue with these answers in mind.' });
+  assert.equal(askQuestionResultView({ ok: true, text: 'The user answered: …' }).kind, 'answered');
+  assert.equal(askQuestionResultView({ ok: true, text: 'The user did not answer the questions.' }).kind, 'unanswered');
+  // 旧 transcript：SDK / CLI 可能给错误文案加了 Error: 前缀，判定与展示都要剥掉
+  assert.deepEqual(askQuestionResultView({ ok: false, text: 'Error: 用户选择了：「A」、「B」' }), { kind: 'answered', text: '用户选择了：「A」、「B」' });
+  assert.equal(askQuestionResultView({ ok: false, text: '用户选择了：「A」' }).kind, 'answered');
+  assert.deepEqual(askQuestionResultView({ ok: false, text: '提问已过期，操作未作答' }), { kind: 'unanswered', text: '提问已过期，操作未作答' });
+  assert.equal(askQuestionResultView({ ok: false, text: 'Error: 问题已取消' }).kind, 'denied');
+  // 其余错误照旧是错误：真出错的不能被洗成已回答
+  assert.deepEqual(askQuestionResultView({ ok: false, text: 'Error: tool crashed' }), { kind: 'error', text: 'Error: tool crashed' });
 });

@@ -210,6 +210,11 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armHistoryLongTool(); },
     },
     {
+      // P0-08-HIST：武装「Timeline Session 的历史里多四张 AskUserQuestion 卡」（#455 新旧两种结果格式的回放），下一次拉历史生效。
+      command: 'test:arm-history-ask-question',
+      run: async () => { getContext().armHistoryAskQuestion(); },
+    },
+    {
       // P0-40c：武装「下一条 user:message 回一个可重试的负 ack」，前端会把它转进 outbox 自动重发。
       command: 'test:arm-send-transient-fail',
       run: async () => { getContext().armSendTransientFail(); },

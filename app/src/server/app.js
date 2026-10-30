@@ -3556,9 +3556,14 @@ registerSocketConnection(io, socket => {
   });
 
   on(socket, 'user:answer', payload => {
-    const { requestId, optionIndex, optionIndexes, freeText, answers, instanceId } = payload || {};
+    const { requestId, optionIndex, optionIndexes, freeText, answers, dismiss, instanceId } = payload || {};
     if (typeof requestId !== 'string') return;
-    // 多题整组提交：requestId 是整组的 toolUseID，逐项校验在 resolveQuestionGroup
+    // 「不回答」（#455）：关掉整张卡、本轮继续。按整组结算，单题卡发来的 `${toolUseID}#0` 也认
+    if (dismiss === true) {
+      routeInstance(instanceId)?.dismissQuestion(requestId.replace(/#\d+$/, ''));
+      return;
+    }
+    // 多题整组提交：requestId 是整组的 toolUseID，逐项校验在 resolveQuestionGroup（含 { index, skipped: true }）
     if (Array.isArray(answers)) {
       routeInstance(instanceId)?.resolveQuestionGroup(requestId, answers);
       return;

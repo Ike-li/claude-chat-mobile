@@ -23,6 +23,7 @@ import { invalidateCtxOccupancy, clearCtxWindowCache } from '../ops/statusline.j
 import * as metrics from '../ops/metrics.js';
 import { uploadsRoot, ensureUploadsRoot } from '../files/uploads.js';
 import { normalizeSideAnswer, shouldRecap, shouldSuggest, RECAP_PROMPT, SUGGEST_PROMPT } from './side-question.js';
+import { questionAnswerValue, buildQuestionUpdatedInput } from './question-answers.js';
 
 // 出向 type 自检：契约（src/shared/protocol.js）此前只被 npm run check 的门禁脚本消费，运行时看不见它，
 // 漏登记的 type 会一路发到前端再被 handle 表静默丢弃。这里【只记录不拦截】——门禁负责挡提交，运行时
@@ -331,27 +332,8 @@ function normalizeQuestionOption(o) {
   if (o.preview != null && String(o.preview)) out.preview = String(o.preview);
   return out;
 }
-// 一道题的作答 → 回给模型的文案；不合法（空 Other、空/全非法多选、越界下标）返回 null，调用方据此不作答。
-function questionAnswerLabel(q, { optionIndex, optionIndexes, freeText } = {}) {
-  // Other：自由文本优先（即使同时传了 optionIndex 也用 freeText，对齐「用户最终写的内容」）
-  const free = typeof freeText === 'string' ? freeText.trim() : '';
-  if (free) return free;
-  const qopts = q.options || [];
-  if (Array.isArray(optionIndexes)) {
-    const labels = [];
-    const seen = new Set();
-    for (const idx of optionIndexes) {
-      if (!Number.isInteger(idx) || idx < 0 || idx >= qopts.length || seen.has(idx)) continue;
-      seen.add(idx);
-      const opt = qopts[idx];
-      labels.push(typeof opt === 'string' ? opt : (opt?.label ?? String(idx)));
-    }
-    return labels.length ? labels.join('、') : null;
-  }
-  if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= qopts.length) return null; // S6：越界 optionIndex 不作答
-  const opt = qopts[optionIndex];
-  return typeof opt === 'string' ? opt : (opt?.label ?? String(optionIndex));
-}
+// AskUserQuestion 的 annotations[题目].unanswered：只能发给 init 时声明了这项能力的 CLI（#455，见 question-answers.js）
+const ASK_UNANSWERED_CAPABILITY = 'ask_user_question_unanswered_v1';
 const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn 的有效期（2min）：宽于任何真实自动汇报延迟、
                                      // 窄于长尾——超时不合成，防滞留 flag 被无关的 message_start（如 auto-compact fork）误触发。
 // 后台任务 TTL 分两档（按 key 是否为真实 SDK task_id，而非 taskType）：
@@ -444,8 +426,10 @@ function mergeMessageUsage(prev, next) {
 // logic/tool-cards.js）。Bash 例外：它的结构是 {stdout,stderr,interrupted,…}，要显示的是终端里那份纯文本，
 // 取 block.content，与历史折叠态、历史「展开全文」同口径；否则换行成了字面 \n、整段挤成一行 JSON（验收 O116）。
 // 按工具名判，不按形状：MCP / 动态工具可以返回任意结构，带个 stdout 字段不等于它是 Bash（PR #332 review）。
+// AskUserQuestion 同理（#455）：结构是 {questions, answers}，卡片要的是 CLI 回给模型的那句话，前端据它判已答 / 未作答。
+const CONTENT_FIRST_TOOLS = new Set(['Bash', 'AskUserQuestion']);
 function toolResultRaw(toolName, structured, content) {
-  if (toolName === 'Bash' && content != null) return content;
+  if (CONTENT_FIRST_TOOLS.has(toolName) && content != null) return content;
   return structured ?? content;
 }
 
@@ -548,7 +532,7 @@ export class AgentSession {
     this._interruptSettleTimer = null;
     this.pendingPermissions = new Map(); // requestId → { resolve, suggestions, input }
     this.pendingQuestions = new Map();   // toolUseID → { resolve, questions, answers, remaining }
-    this.denyKinds = new Map();          // toolUseID → 'answered'|'denied'|'cancelled'：deny+message 通道的真实语义，供前端区分 ☑️/🚫（is_error 不足以分辨）
+    this.denyKinds = new Map();          // toolUseID → 'denied'|'cancelled'：deny+message 通道的真实语义，供前端显 🚫 而非红 ❌（is_error 不足以分辨）
     this.permSeq = 0;
     this.lastActivity = Date.now();
     this.lastViewedAt = 0;   // 用户「切进本会话看」的时刻（touchActivity）。只喂空闲回收看护，
@@ -1819,8 +1803,11 @@ export class AgentSession {
     return decision;
   }
 
-  // ---- AskUserQuestion（F2）：实验证明 deny+message 通道有效（2026-06-11）----
-  // 模型将 tool_result 的 error content 识别为答案（is_error:true, content:'用户选择了：「…」'）
+  // ---- AskUserQuestion（F2）----
+  // 作答、留题不答、「不回答」、过期都走 allow 通道（#455）：updatedInput = 原始 input + answers（格式见
+  // question-answers.js），CLI 回给模型的是它自己的文案、tool_result 不是错误，与终端里答的同形，回放也不再显 ❌。
+  // 只有取消 / 中止本轮 / dispose / 进程退出仍是 deny + interrupt，等价终端 Esc。
+  // 2026-06-11 起曾用 deny+message 把答案塞进错误文案，靠实验成立、不是协议保证，回放时还会把答过的卡显成失败。
   handleQuestion(input, { signal, toolUseID }) {
     const rawQuestions = input?.questions;
     if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
@@ -1829,6 +1816,7 @@ export class AgentSession {
     // 归一 + 过滤空 label 只做【一次】，下发与回读共用同一份。此前 emit 用过滤后的数组、resolveQuestion
     // 却回读原始数组：模型只要给出一个不带 label 的选项（normalizeQuestionOption 产出 ''），后续所有项
     // 下标整体前移，两侧下标空间错位 —— 用户点「取消」，模型收到「删除全部」。multiSelect 与快照重建同源。
+    // 这份归一化结果只用于 UI 与下标映射：回给 CLI 的必须是原始 input（存进 pending.input），改了原始字段整份拒收。
     const questions = rawQuestions.map(q => ({
       ...q,
       options: (q?.options || []).map(normalizeQuestionOption).filter(o => o.label),
@@ -1854,7 +1842,8 @@ export class AgentSession {
       const expiryTimer = setTimeout(() => this._expireQuestion(toolUseID), this.approvalTtlMs);
       expiryTimer.unref?.();
       // createdAt：供 AttentionDeriver 的"等我输入"悬置起点（waitingSince），镜像 pendingPermissions 已有的 createdAt 模式。
-      this.pendingQuestions.set(toolUseID, { resolve, questions, answers, remaining, signal, abortHandler, createdAt, expiresAt, expiryTimer });
+      // answers[i]：null 还没答 / { value } 已答 / { unanswered: 'skipped'|'dismissed' } 显式没答
+      this.pendingQuestions.set(toolUseID, { resolve, input, questions, answers, remaining, signal, abortHandler, createdAt, expiresAt, expiryTimer });
 
       const openQuestionIndexes = questions.map((_, k) => k);
       for (let i = 0; i < questions.length; i++) {
@@ -1881,22 +1870,19 @@ export class AgentSession {
     });
   }
 
-  // AG-001：提问到期无人作答时的主动结算（由 handleQuestion 的 expiryTimer 触发）。fail-closed deny +
-  // emit expired，与 _expirePermission 等义。已被用户/abort 结算则 pending 不在、直接返回（幂等）。
+  // AG-001：提问到期无人作答时的主动结算（由 handleQuestion 的 expiryTimer 触发）。已被用户/abort 结算则
+  // pending 不在、直接返回（幂等）。对提问来说「用户没答」就是如实的结果（#455）：allow + 只含已答题的 answers，
+  // 模型看到 The user did not answer the questions.，本轮继续——与原先 deny + interrupt:false 同效，只是不再伪装成错误。
+  // 不带 unanswered 标注：skipped / replied_in_chat / dismissed 都不准确，表示「人不在」的 afkTimeoutMs 宿主又不能写。
   _expireQuestion(toolUseID) {
     const pending = this.pendingQuestions.get(toolUseID);
     if (!pending) return;
-    pending.signal?.removeEventListener('abort', pending.abortHandler);
-    if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
-    this.pendingQuestions.delete(toolUseID);
-    setCapped(this.denyKinds, toolUseID, 'denied', TOOL_INPUT_MAX);
     for (let i = 0; i < pending.questions.length; i++) {
       if (pending.answers[i] === null) {
         this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'expired' });
       }
     }
-    this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome: 'expired' });
-    pending.resolve({ behavior: 'deny', message: '提问已过期，操作未作答', interrupt: false });
+    this._settleQuestions(toolUseID, pending, 'expired', { annotate: false });
   }
 
   // requestId 格式：`${toolUseID}#${questionIndex}`（server 的 user:answer handler 透传）
@@ -1916,9 +1902,9 @@ export class AgentSession {
       return;
     }
 
-    const label = questionAnswerLabel(pending.questions[qIdx], { optionIndex, ...opts });
-    if (label == null) return;
-    pending.answers[qIdx] = label;
+    const value = questionAnswerValue(pending.questions[qIdx], { optionIndex, ...opts });
+    if (value == null) return;
+    pending.answers[qIdx] = { value };
     pending.remaining--;
 
     // 单题落定立刻广播（requestId=toolUseID#i）。multi-Q 只答了一题时若等整组 remaining===0 才
@@ -1926,12 +1912,16 @@ export class AgentSession {
     // 虽已跳过 answers[i]!=null，但 buffer 回放仍会送 question——单题 resolved + eventsSince 过滤双保险。
     this.emit('request_resolved', { requestId, kind: 'question', outcome: 'answered' });
 
-    if (pending.remaining === 0) this._settleAnsweredQuestions(toolUseID, pending);
+    if (pending.remaining === 0) {
+      this.lastActivity = Date.now(); // 用户答题是主动操作，续期静默看护
+      this._settleQuestions(toolUseID, pending, 'answered');
+    }
   }
 
   // 多题整组提交（对齐 CLI：答案在手机上攒着、可来回改，最后一次交出）。items 是 [{ index, optionIndex |
-  // optionIndexes | freeText }]，必须覆盖每一道仍未作答的题、且每项都合法才写入，任一项不收就整组不收：
-  // 半组写入后快照只补发未答项，已写入的题在重连后消失，用户再也改不回来——正是整组提交要避免的。
+  // optionIndexes | freeText }]，或 { index, skipped: true }（留着不答，#455 起对齐 CLI 允许缺题提交）。
+  // 必须覆盖每一道仍未作答的题、且每项都合法才写入，任一项不收就整组不收：半组写入后快照只补发未答项，
+  // 已写入的题在重连后消失，用户再也改不回来——正是整组提交要避免的。所以「没答」也得显式写成 skipped。
   // 别处已答掉的题（没刷新的旧页面逐题即交，广播还在路上）那一条忽略、不改写，与逐题路径的防重复一致：
   // 若因此整组拒收，本机早已乐观关卡、把整组标成已答，剩下的题连重连快照都被吞掉，这一轮挂到 TTL。
   resolveQuestionGroup(toolUseID, items) {
@@ -1942,35 +1932,54 @@ export class AgentSession {
       return;
     }
     const seen = new Set();
-    const labels = new Map();
+    const entries = new Map();
     for (const item of items) {
       const i = item?.index;
       if (!Number.isInteger(i) || i < 0 || i >= pending.questions.length || seen.has(i)) return;
       seen.add(i);
       if (pending.answers[i] !== null) continue; // 别处已答：先到先得
-      const label = questionAnswerLabel(pending.questions[i], item);
-      if (label == null) return;
-      labels.set(i, label);
+      if (item.skipped === true) { entries.set(i, { unanswered: 'skipped' }); continue; }
+      const value = questionAnswerValue(pending.questions[i], item);
+      if (value == null) return;
+      entries.set(i, { value });
     }
-    if (labels.size !== pending.remaining) return; // 缺题不收
-    for (const [i, label] of labels) {
-      pending.answers[i] = label;
+    if (entries.size !== pending.remaining) return; // 缺题不收
+    for (const [i, entry] of entries) {
+      pending.answers[i] = entry;
       pending.remaining--;
-      this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'answered' });
+      this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: entry.unanswered || 'answered' });
     }
-    this._settleAnsweredQuestions(toolUseID, pending);
+    this.lastActivity = Date.now();
+    this._settleQuestions(toolUseID, pending, 'answered');
   }
 
-  _settleAnsweredQuestions(toolUseID, pending) {
+  // 「不回答」（#455）：关掉整张卡、本轮继续——模型看到 The user did not answer the questions.（或只看到已答的题）。
+  // 与「中止本轮」（user:interrupt → abort → deny + interrupt）是两回事：用户只是不想答，不该连这一轮的活一起停掉。
+  dismissQuestion(toolUseID) {
+    const pending = this.pendingQuestions.get(toolUseID);
+    if (!pending) return;
+    if (pending.expiresAt != null && Date.now() > pending.expiresAt) {
+      this._expireQuestion(toolUseID);
+      return;
+    }
+    for (let i = 0; i < pending.questions.length; i++) {
+      if (pending.answers[i] !== null) continue;
+      pending.answers[i] = { unanswered: 'dismissed' };
+      this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'dismissed' });
+    }
+    pending.remaining = 0;
+    this.lastActivity = Date.now();
+    this._settleQuestions(toolUseID, pending, 'dismissed');
+  }
+
+  // 整组终态：allow + 原始 input + answers。annotations 只发给声明了能力的 CLI——旧 CLI 在严格宿主下会整份拒收。
+  _settleQuestions(toolUseID, pending, outcome, { annotate = this.hasCliCapability(ASK_UNANSWERED_CAPABILITY) } = {}) {
     // 移除 abort 监听器防僵尸累积
     pending.signal?.removeEventListener('abort', pending.abortHandler);
     if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
     this.pendingQuestions.delete(toolUseID);
-    this.lastActivity = Date.now(); // 用户答题是主动操作，续期静默看护
-    const msg = '用户选择了：' + pending.answers.map(a => `「${a}」`).join('、');
-    this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome: msg }); // M4 整组终态
-    setCapped(this.denyKinds, toolUseID, 'answered', TOOL_INPUT_MAX); // 已回答：前端显 ☑️（is_error 来自 deny 通道、非真错误）
-    pending.resolve({ behavior: 'deny', message: msg, interrupt: false });
+    this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome }); // M4 整组终态
+    pending.resolve({ behavior: 'allow', updatedInput: buildQuestionUpdatedInput(pending.input, pending.questions, pending.answers, { annotate }) });
   }
 
   // 静默看护豁免留痕：只在【豁免原因变化】时记一条（无→有、一种→另一种、有→无）。
@@ -3482,8 +3491,9 @@ export class AgentSession {
           if (block?.type === 'tool_result') {
             const toolName = this.toolNames.get(block.tool_use_id); // 展示原文与摘要上限按它定；驾驶轴判据也要用
             const raw = toolResultRaw(toolName, msg.tool_use_result, block.content);
-            // denyKind：deny+message 通道（审批拒绝/取消、AskUserQuestion 作答/取消）的真实语义，
-            // 这类结果 is_error=true 但非工具报错——前端据此显 ☑️/🚫 并剥 "Error:" 前缀，不靠字符串匹配。
+            // denyKind：deny+message 通道（审批拒绝/取消、AskUserQuestion 取消）的真实语义，
+            // 这类结果 is_error=true 但非工具报错——前端据此显 🚫 并剥 "Error:" 前缀，不靠字符串匹配。
+            // AskUserQuestion 的作答 #455 起走 allow，结果本身不是错误，不经这张表。
             const denyKind = this.denyKinds.get(block.tool_use_id);
             this.denyKinds.delete(block.tool_use_id);
             this.cacheToolOutput(block.tool_use_id, raw);        // 缓存原始结构，getToolOutput 返回时红线

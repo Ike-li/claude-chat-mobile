@@ -213,6 +213,7 @@ import { readThemePref, writeThemePref, applyThemeToDocument } from './theme.js'
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
 // 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
 import { resolveDirUnreadBadge, unreadSessionsInGroup } from './logic/unread.js';
+import { askQuestionResultView } from './logic/questions.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
 import { createAlertController } from './app/alerts.js';
@@ -3325,7 +3326,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
       // 机制 4 错误显性化：子工具真错误累进聚合卡标题的 ❌ 计数。折叠态下嵌套卡的红图标看不见，
       // 而移动端多数时候就是折叠着的——不往上报一层，子代理内部报错在手机上等于隐瞒。
-      // 【只数真错误】denyKind 的三档（已回答/已拒绝/已取消）是用户自己的动作，他知道，不是异常。
+      // 【只数真错误】denyKind 的两档（已拒绝/已取消）是用户自己的动作，他知道，不是异常。
       // 【不染聚合卡的状态图标】那个图标表达的是 Agent 工具【自身】的结果（下方 tool_result 在管）：
       // 一次失败的 Read 不该让整张卡看起来失败了——子代理完全可能照常得出结论。
       if (isSubagentPayload(p) && p.ok === false && !p.denyKind) {
@@ -3343,17 +3344,20 @@ import { createGateFocusController } from './app/focus-layers.js';
         }
         return;
       }
-      // deny+message 通道结果被 SDK 标 is_error（ok:false），但真实语义由 denyKind 决定（agent.js）：
-      // answered=已回答 ☑️ / denied=已拒绝 🚫 / cancelled=已取消 🚫——均非工具报错；无 denyKind 才按 ok 显 ✅/❌。
+      // 审批的 deny+message 通道结果被 SDK 标 is_error（ok:false），真实语义由 denyKind 决定（agent.js）：
+      // denied=已拒绝 🚫 / cancelled=已取消 🚫——均非工具报错。AskUserQuestion 的作答 #455 起走 allow，结果本身就是
+      // 成功的，按 CLI 文案分已回答 / 没回答（askQuestionResultView，与历史回放同一个判法）；其余按 ok 显 ✅/❌。
       // UI-007：结果态 SVG
-      const statusKind = p.denyKind === 'answered' ? 'answered'
+      const askView = !p.denyKind && card.dataset.toolName === 'AskUserQuestion'
+        ? askQuestionResultView({ ok: p.ok, text: p.outputSummary }) : null;
+      const statusKind = askView ? askView.kind
         : (p.denyKind === 'denied' || p.denyKind === 'cancelled') ? 'denied'
         : (p.ok ? 'ok' : 'error');
       setStatusIcon(card.querySelector('.t-status'), statusKind); // 语义色随 kind 一起落，见 setStatusIcon
       if (p.outputSummary) {
         const out = card.querySelector('.t-out');
         // deny 通道正文带 SDK 加的 "Error:" 前缀（非真错误），剥掉只留语义文本
-        const raw = p.denyKind ? p.outputSummary.replace(/^Error:\s*/i, '') : p.outputSummary;
+        const raw = askView ? askView.text : p.denyKind ? p.outputSummary.replace(/^Error:\s*/i, '') : p.outputSummary;
         const code = out.querySelector('code') || out;
         // Task 清单工具结果 → ☐/◐/☒ 清单文本（deny/报错走通用路径保留原文）
         const taskText = (!p.denyKind && p.ok) ? renderTaskToolResultText(card.dataset.toolName, raw) : null;
@@ -9608,13 +9612,15 @@ import { createGateFocusController } from './app/focus-layers.js';
           appendNode(orphan, msg);
           return;
         }
-        setStatusIcon(card.querySelector('.t-status'), msg.ok === false ? 'error' : 'ok');
+        // AskUserQuestion 同 live：按 CLI 文案分已回答 / 没回答；旧 transcript 的 deny 格式答案不再显成 ❌（#455）
+        const askView = card.dataset.toolName === 'AskUserQuestion' ? askQuestionResultView({ ok: msg.ok, text: msg.outputSummary }) : null;
+        setStatusIcon(card.querySelector('.t-status'), askView ? askView.kind : msg.ok === false ? 'error' : 'ok');
         if (msg.outputSummary) {
           const out = card.querySelector('.t-out');
           const code = out.querySelector('code') || out;
           // Task 清单工具结果 → ☐/◐/☒ 清单文本（同 live；历史是 block.content 文本形态）
           const taskText = msg.ok !== false ? renderTaskToolResultText(card.dataset.toolName, msg.outputSummary) : null;
-          code.textContent = taskText ?? formatToolSummary(msg.outputSummary);
+          code.textContent = taskText ?? formatToolSummary(askView ? askView.text : msg.outputSummary);
           if (!taskText && code !== out) {
             code.className = toolOutputHighlightClass(code.textContent);
             codeBlocks.push(code);
