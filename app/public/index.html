@@ -377,8 +377,12 @@
       </div>
       <!-- #371：断线/校验失败写在浮层内，与选项/跳过按钮同层可见 -->
       <div id="questionSheetError" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2" role="alert" data-testid="question-sheet-error"></div>
-      <button type="button" id="questionSkip" class="w-full py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium">跳过并中止本轮</button>
-      <div class="text-xs text-ink-faint mt-2 text-center">可点选项、多选确认、填「其他」，或跳过中止本轮</div>
+      <!-- #455：「不回答」关卡、本轮继续；「中止本轮」等价终端 Esc。原先只有一个「跳过」，复用的是中止 -->
+      <div class="flex gap-2">
+        <button type="button" id="questionSkip" class="flex-1 py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium">不回答</button>
+        <button type="button" id="questionInterrupt" class="flex-1 py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium">中止本轮</button>
+      </div>
+      <div class="text-xs text-ink-faint mt-2 text-center">可点选项、多选确认、填「其他」；不回答时本轮照常继续</div>
     </div>
   </div>
 

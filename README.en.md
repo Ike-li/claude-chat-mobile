@@ -49,7 +49,7 @@ Walking away from the desk, the fear isn't losing sight of the output — it's t
 | In the terminal | On the phone |
 | --- | --- |
 | **Tool approval** (y / n) | An approval card: Allow / Deny / **Interrupt turn** (mirrors `Esc`). Tick "always allow" and pick this session only, or permanently |
-| **It asks you something** (`AskUserQuestion`) | Tap the option. Multi-select, a free-form "Other…", and "skip and interrupt turn" are all there |
+| **It asks you something** (`AskUserQuestion`) | Tap the option. Multi-select and a free-form "Other…" are there; "Don't answer" lets it carry on, "Interrupt turn" stops it |
 | **Did it finish, or is it stuck?** | Pushed to your lock screen. Approvals, questions and background-task completions are pushed **unconditionally**, whether or not you have it open |
 
 The rest is about getting work done:
@@ -60,7 +60,7 @@ The rest is about getting work done:
 | `Esc` to interrupt | Stop button in the composer |
 | `/model`, permission mode, effort | Tap the composer chip; takes effect from the next message. All six permission modes |
 | `@` to reference a file | Type `@` to search the workspace and insert `@path` (same as the terminal; the CLI attaches the file contents) |
-| `/` slash commands | Type `/` for candidates, including the skills you installed |
+| `/` slash commands | Type `/` for candidates, including the skills you installed, each with its description and argument hint; works in a new workspace before the first message |
 | Seeing what it actually changed | Open a tool card to preview the diff; each turn ends with a changed-files summary (± lines) |
 | A quick `git diff` | The "Changes" tab in the workspace panel |
 | Rewind or branch off | Type `/rewind` — two steps, as in the terminal: pick the turn to go back before, then restore the code and conversation, the conversation only, or the code only. Anything that touches the conversation forks a new session from that moment; the original survives. To just branch off, tap **Fork** under a reply (a reply that has just streamed in gets the button once you reopen the session): it copies the conversation only, leaving files alone |
