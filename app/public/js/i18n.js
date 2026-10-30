@@ -1063,6 +1063,7 @@ export const EN_DICT = Object.freeze({
   // —— /rewind 面板（app/rewind-command.js）与回退结果 ——
   // 三个模式名与终端 /rewind 第二步逐字一致；其余沿用上面「回退 = revert」的叫法。
   '把代码和/或对话恢复到某条消息发出之前……': 'Restore the code and/or conversation to the point before one of your messages…',
+  '把代码和/或对话恢复到之前的某个时间点': 'Restore the code and/or conversation to a previous point', // 斜杠菜单里 /rewind 的说明
   '正在读取会话…': 'Reading the session…',
   '这个会话还没有可回退的轮次': 'This session has no turns to revert yet',
   '代码改动待确认': 'Code changes not known yet',

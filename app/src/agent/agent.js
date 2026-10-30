@@ -711,6 +711,8 @@ export class AgentSession {
     this.q = q;
     this.idleTimer = setInterval(() => this.checkIdle(), 30_000);
     this.fetchModels(); // 提前拉取模型列表，不依赖 init 事件（CLI 首条消息前不输出 init）
+    // 同理：斜杠命令清单首条消息前就要有。scout 也走这里、靠它给新工作区种缓存，它等这个 Promise 落定再收工
+    this.commandsFetch = this.fetchCommands();
     this.consume(q); // 后台消费，不阻塞调用方
   }
 
@@ -723,6 +725,18 @@ export class AgentSession {
         this.emit('models', { models: Array.isArray(ms) ? ms : [] });
       })
       ?.catch?.(() => {});
+  }
+
+  // 拉取并广播斜杠命令清单（#456）。与 fetchModels 同走 initialize 响应：带说明 / 参数提示 / 别名，
+  // 首条消息之前就拿得到；init.slash_commands 只有名字。返回 Promise 供 scout 等它落定再收工，永不 reject。
+  // 空清单不发：前端按 REPLACE 语义会把菜单清空，而这里拿到空多半是「不知道」（总有内置命令）。
+  fetchCommands() {
+    return Promise.resolve(this.q?.supportedCommands?.())
+      .then(cmds => {
+        if (this.disposed || !Array.isArray(cmds) || cmds.length === 0) return;
+        this.emit('slash_commands', { slashCommands: cmds });
+      })
+      .catch(() => {});
   }
 
   // 会话中途换 cwd（SESSION-03）：CwdChanged hook 报上来的那一路。
@@ -2969,11 +2983,12 @@ export class AgentSession {
           });
           // F1：fire-and-forget 拉取模型列表（init 到达时兜底；start 中已提前调用，此轮通常幂等）
           this.fetchModels();
+          this.fetchCommands(); // init 只带名字，补发一次完整清单；server 那边已按名字沿用缓存的说明，这里是兜底
           this.refreshEffectiveEffort(); // 同为 fire-and-forget：没指定时问 CLI 实际生效的档
         } else if (msg.subtype === 'commands_changed') {
           // SDK 0.3.229 起：CLI 中途发现新命令/skill（如 agent 走进带 project skill 的子目录）时的
-          // **全量**推送。上游契约：`supportedCommands()` 只在 initialize 捕获一次、拿不到中途变化，
-          // 这条消息是唯一的增量来源；语义是 REPLACE 整份列表，不是增量合并。
+          // **全量**推送，语义是 REPLACE 整份列表，不是增量合并。事后再调 `supportedCommands()` 拿到的
+          // 也是这份（SDK 契约原文 "supportedCommands() tracks the latest push"），见 fetchCommands。
           //
           // 【为什么自成一型而不并进 init】server 对 init 有两个副作用，这条一个都不该触发：
           // 覆盖全局 lastInit（会把 model/cwd 冲掉）、映射成 latchEventType='new_activity'

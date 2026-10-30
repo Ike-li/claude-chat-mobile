@@ -171,6 +171,7 @@ import {
   detectAtMentionQuery,
   applyAtMentionPick,
   buildSlashCommandHints,
+  hasSlashCommand,
   composerHintOptionId,
   resolveComposerHintKeydown,
   unifiedDiffLines,
@@ -4311,7 +4312,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传。
     // /rewind 前端拦截——同 /model：TUI 命令不可透传（SDK 非交互，出不来那两步选择界面）。
     // 映射到本地的两步面板，最终仍落在 session:rewind:preview / confirm 上。
-    if (/^\/rewind(\s|$)/.test(rawText) && !(window.availableSkills || []).includes('rewind')) {
+    if (/^\/rewind(\s|$)/.test(rawText) && !hasSlashCommand(window.availableSkills, 'rewind')) {
       if (!displayedSessionId) { addBar(t('还没有会话可回退'), 'text-info'); return; }
       inputEl.value = '';
       inputEl.dispatchEvent(new Event('input'));
@@ -4320,7 +4321,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       rewindCommand.openPanel(displayedSessionId, drivingCwdOf(displayedInstanceId)); // 驾驶轴，同 requestSessionFork
       return;
     }
-    if (/^\/model(\s|$)/.test(rawText) && !(window.availableSkills || []).includes('model')) {
+    if (/^\/model(\s|$)/.test(rawText) && !hasSlashCommand(window.availableSkills, 'model')) {
       const arg = rawText.slice(6).trim();
       if (arg) {
         let nakedArg = arg;
@@ -4901,8 +4902,11 @@ import { createGateFocusController } from './app/focus-layers.js';
     autosize();
     updateSendButtonState();
   }
-  // 前端本地拦截命令（不透传后端），并入提示列表
-  const LOCAL_COMMANDS = ['model', 'rewind'];
+  // 前端本地拦截命令（不透传后端），并入提示列表。说明现取 t()：跟着当前语言走
+  const localCommandHints = () => [
+    { name: 'model', description: t('切换模型') },
+    { name: 'rewind', description: t('把代码和/或对话恢复到之前的某个时间点') },
+  ];
 
   inputEl.addEventListener('input', () => {
     const val = inputEl.value;
@@ -4914,15 +4918,18 @@ import { createGateFocusController } from './app/focus-layers.js';
       const matches = buildSlashCommandHints({
         commands: window.availableSkills || [],
         terminalCommands: window.terminalSlashCommands || [],
-        localCommands: LOCAL_COMMANDS,
+        localCommands: localCommandHints(),
         prefix: val.slice(1),
       });
       cmdHintActiveIndex = -1;
       if (matches.length > 0) {
+        // 说明与参数提示来自 skill / 插件 / MCP 文件，是第三方内容：一律 esc() 后才进 innerHTML
         hints.innerHTML = matches.map((cmd, i) => {
-          const safe = esc(cmd);
+          const safe = esc(cmd.name);
           const id = composerHintOptionId('cmd', i);
-          return `<div id="${id}" role="option" aria-selected="false" class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm font-mono" data-cmd="/${safe}">/${safe}</div>`;
+          const arg = cmd.argumentHint ? ` <span class="text-ink-soft">${esc(cmd.argumentHint)}</span>` : '';
+          const desc = cmd.description ? `<div class="slash-hint-desc text-xs text-ink-soft truncate">${esc(cmd.description)}</div>` : '';
+          return `<div id="${id}" role="option" aria-selected="false" class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm" data-cmd="/${safe}"><div class="font-mono truncate">/${safe}${arg}</div>${desc}</div>`;
         }).join('');
         hints.classList.remove('hidden');
         setComposerHintExpanded('cmdHints');

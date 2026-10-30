@@ -80,6 +80,10 @@ const MODEL_VALUE_FROM_GATEWAY = process.env.CCM_FAKE_CLAUDE_MODEL_VALUE_FROM_GA
 // 不置位时既有用例的前提逐字不变。
 const LISTED_MODEL = process.env.CCM_FAKE_CLAUDE_MODEL_LIST_FILE
   ? readFileSync(process.env.CCM_FAKE_CLAUDE_MODEL_LIST_FILE, 'utf8').trim() : '';
+// 斜杠命令清单（#456）。SDK 的 supportedCommands() 同样读 initialize 响应（commands 字段），真 CLI 的 system/init
+// 只带名字（slash_commands: string[]）。显式 opt-in（CCM_FAKE_CLAUDE_COMMANDS=<SlashCommand[] 的 JSON>）才两处都带；
+// 不置位时 initialize 响应与 init 逐字不变。
+const COMMANDS = process.env.CCM_FAKE_CLAUDE_COMMANDS ? JSON.parse(process.env.CCM_FAKE_CLAUDE_COMMANDS) : null;
 const EXIT_APPEND = process.env.CCM_FAKE_CLAUDE_EXIT_APPEND || '';
 // turn-screenshot 档的截图：固定 id 与 1×1 PNG，用例据此拼引用 t:<id>:0、比对取回的数据
 const SCREENSHOT_TOOL_USE_ID = 'toolu_fake_screenshot';
@@ -100,10 +104,11 @@ rl.on('line', (line) => {
   // 任何 control_request 一律回 success。不认的子类型也要应答——SDK 在
   // pendingControlResponses 里等着，不回它会把调用方挂死（比产出错内容更难查）。
   if (msg.type === 'control_request') {
-    const payload = msg.request?.subtype !== 'initialize' ? {}
+    const models = msg.request?.subtype !== 'initialize' ? {}
       : LISTED_MODEL ? { models: [{ value: LISTED_MODEL, displayName: LISTED_MODEL, resolvedModel: LISTED_MODEL }] }
         : GATEWAY_MODEL ? { models: [{ value: MODEL_VALUE_FROM_GATEWAY ? GATEWAY_MODEL : 'opus', displayName: GATEWAY_MODEL, resolvedModel: GATEWAY_MODEL }] }
           : {};
+    const payload = msg.request?.subtype === 'initialize' && COMMANDS ? { ...models, commands: COMMANDS } : models;
     out({
       type: 'control_response',
       response: { subtype: 'success', request_id: msg.request_id, response: payload },
@@ -124,6 +129,7 @@ rl.on('line', (line) => {
       tools: [],
       model: (INIT_EACH_TURN && GATEWAY_MODEL) || 'fake-claude',
       permissionMode: 'default',
+      ...(COMMANDS ? { slash_commands: COMMANDS.map(c => c.name) } : {}),
     });
   }
 

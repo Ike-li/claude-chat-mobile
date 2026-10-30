@@ -60,7 +60,7 @@ The rest is about getting work done:
 | `Esc` to interrupt | Stop button in the composer |
 | `/model`, permission mode, effort | Tap the composer chip; takes effect from the next message. All six permission modes |
 | `@` to reference a file | Type `@` to search the workspace and insert `@path` (same as the terminal; the CLI attaches the file contents) |
-| `/` slash commands | Type `/` for candidates, including the skills you installed |
+| `/` slash commands | Type `/` for candidates, including the skills you installed, each with its description and argument hint; works in a new workspace before the first message |
 | Seeing what it actually changed | Open a tool card to preview the diff; each turn ends with a changed-files summary (± lines) |
 | A quick `git diff` | The "Changes" tab in the workspace panel |
 | Rewind or branch off | Type `/rewind` — two steps, as in the terminal: pick the turn to go back before, then restore the code and conversation, the conversation only, or the code only. Anything that touches the conversation forks a new session from that moment; the original survives. To just branch off, tap **Fork** under a reply (a reply that has just streamed in gets the button once you reopen the session): it copies the conversation only, leaving files alone |
