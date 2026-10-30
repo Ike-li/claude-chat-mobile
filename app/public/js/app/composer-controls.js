@@ -505,6 +505,12 @@ export function createComposerControls(context, {
   // ---- 底栏会话档摘要 chip title（与 compose 页 formatComposeDefaultsSummary 同源）----
   // 三段文案由 setPermMode / setEffortMode / syncModelUI 各自维护 pillXxxText；title 只拼不另算，
   // 避免 CLI 镜像 / 网关别名边上两套文案漂移。
+  // 胶囊只放短标，完整文案（带「CLI 默认」）记在 dataset.full，title 与空首页摘要读它
+  function setPillEffort(ui, override = null) {
+    if (!pillEffortText) return;
+    pillEffortText.textContent = override || ui.pillLabel;
+    pillEffortText.dataset.full = override || ui.label;
+  }
   function syncDefaultsPillTitle() {
     if (!pillDefaults) return;
     const summary = formatComposeDefaultsSummary({
@@ -512,7 +518,7 @@ export function createComposerControls(context, {
       modeLabel: (pillPermText?.textContent || '').trim(),
       effortLabel: pillEffort?.classList.contains('hidden')
         ? ''
-        : (pillEffortText?.textContent || '').trim(),
+        : (pillEffortText?.dataset.full || pillEffortText?.textContent || '').trim(),
     });
     pillDefaults.title = summary || t('会话设置');
   }
@@ -604,7 +610,7 @@ export function createComposerControls(context, {
     });
     effortSelect.value = ui.selected;
 
-    if (pillEffortText) pillEffortText.textContent = ui.label;
+    setPillEffort(ui);
 
     if (customEffortGrid) {
       const activeLevel = ui.selected;
@@ -723,9 +729,7 @@ export function createComposerControls(context, {
       }
     }
     // 同步 pill 文案（没指定显「CLI 默认」，已知实际档时带上它）
-    if (pillEffortText) {
-      pillEffortText.textContent = getUltracodeArmed() ? 'ultracode' : ui.label;
-    }
+    setPillEffort(ui, getUltracodeArmed() ? 'ultracode' : null);
     syncDefaultsPillTitle();
     if (getComposeReady()) refreshComposeDefaultsSummary();
   }

@@ -289,7 +289,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 没指定（null）= CLI inherit：settings 里存了档就用存的。高亮 auto 就是替它声称「模型内置默认」，
     // 所以一块都不高亮，pill 如实报 CLI 此刻生效的档（mock 固定回 medium）。
     await expect(page.locator('.effort-tile.ring-accent')).toHaveCount(0);
-    await expect(page.locator('#pillEffortText')).toHaveText('medium · CLI 默认');
+    // 胶囊只留档名（「· CLI 默认」后缀会被宽度上限截成「medium · C…」），完整文案在 title
+    await expect(page.locator('#pillEffortText')).toHaveText('medium');
+    await expect(page.locator('#pillDefaults')).toHaveAttribute('title', /medium · CLI 默认/);
 
     await page.locator('.effort-tile[data-level="high"]').click();
     await expect(page.locator('#effortSelect')).toHaveValue('high');
@@ -318,13 +320,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.locator('#btnNew').click();
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
-    await expect(page.locator('#pillEffortText')).toHaveText('high · CLI 默认');
+    await expect(page.locator('#pillEffortText')).toHaveText('high');
+    await expect(page.locator('#pillDefaults')).toHaveAttribute('title', /high · CLI 默认/);
 
     await sendChatMessage(page, 'test:fresh-settings-echo');
     await waitForIdle(page);
     // 行为不变：settings 的档照样当显式档下发
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('effort=high');
-    await expect(page.locator('#pillEffortText')).toHaveText('high · CLI 默认');
+    await expect(page.locator('#pillEffortText')).toHaveText('high');
+    await expect(page.locator('#pillDefaults')).toHaveAttribute('title', /high · CLI 默认/);
 
     await page.locator('#pillDefaults').click();
     await openSettingsSection(page, 'effort');
