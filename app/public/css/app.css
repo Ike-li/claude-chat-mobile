@@ -745,6 +745,16 @@ header {
 }
 
 /* ── 桌面端响应式栅格布局 (Desktop Responsive Grid Layout) ── */
+/* #359：≥768px（平板竖屏、桌面窄窗、桌面）每条消息的阅读宽度与 composer 内层（max-w-2xl = 42rem）对齐居中。
+   #messages 自己仍铺满整列，滚动条留在列的最右；767 以下由上面那段把 #messages 本身收窄到 640px。 */
+@media (min-width: 768px) {
+  #messages > * {
+    max-width: 42rem;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
 @media (min-width: 1024px) {
   body {
     display: grid !important;
@@ -754,7 +764,7 @@ header {
        ★ 未显式定位的非 fixed body 子元素会被自动排版塞进隐式行（对横幅就是 300px 宽卡在侧栏底下，
        且新隐式行会从 1fr 消息行偷高度、被 overflow:hidden 裁掉 composer）——新增此类元素必须在这里定位。 */
     grid-template-rows: auto auto 1fr auto !important;
-    height: 100vh !important;
+    height: 100dvh !important; /* #359：同移动端用 dvh，iPad 横屏 Safari 地址栏伸缩时底部不被裁 */
     overflow: hidden !important;
   }
 
@@ -766,7 +776,7 @@ header {
     transform: none !important;
     width: 300px !important;
     max-width: 300px !important;
-    height: 100vh !important;
+    height: 100dvh !important; /* #359：同移动端用 dvh，iPad 横屏 Safari 地址栏伸缩时底部不被裁 */
     border-right: 1px solid var(--line) !important;
     box-shadow: none !important;
     background-color: var(--surface) !important;
@@ -814,6 +824,13 @@ header {
   }
   body.sidebar-collapsed #leftSidebar {
     display: none !important;
+  }
+
+  /* #359：等你答复的 sheet（审批 / 提问，带 .ccm-sheet-blocking）从常驻侧栏右边开始，挂着审批也能在侧栏切会话。
+     移动端靠 body.nav-escape 把侧栏抬到遮罩之上，桌面上面那句 z-index:10 !important 把它压死了；而抬 z-index
+     又会让侧栏盖住 sheet 面板最左 300px（按钮可能就在那里），所以让开而不是盖上。 */
+  body:not(.sidebar-collapsed) .ccm-sheet-blocking {
+    left: 300px;
   }
 }
 
@@ -1112,12 +1129,16 @@ details.thinking.thinking-live > summary::before {
   height: 13px;
 }
 
-/* 未读角标胶囊：#messages 的兄弟节点，viewport-fixed 悬浮于 composer 上方（避免依赖父级 position:relative，
-   composer 高度会随输入内容变化，固定偏移量取常见 1~2 行高度 + 安全距离，不追求逐像素贴合）。 */
+/* 未读角标胶囊（#359）：#composerFooter 的子节点，绝对定位在它顶边外侧——composer 长高（多行输入、横幅、
+   附件托盘、iOS 键盘 padding）时跟着上移。以前写死 viewport bottom:84px，composer 一高就叠在输入框上。
+   footer 是 body 的 flex / grid 子项，z-index 本来就生效，加 relative 不改层叠，只给胶囊当包含块。 */
+#composerFooter {
+  position: relative;
+}
 #unreadPill {
-  position: fixed;
+  position: absolute;
   right: 0.75rem;
-  bottom: calc(84px + env(safe-area-inset-bottom));
+  bottom: calc(100% + 12px);
   z-index: 15;
   border: none;
 }
@@ -1217,7 +1238,7 @@ details.thinking.thinking-live > summary::before {
    挂起期间（body.nav-escape，由 openSheet/closeSheet 同步）把顶栏与侧栏抬到 sheet 之上，
    答复完自动落回。刻意不改静态层级：deviceRequests 等页面级提示的 header < cards < modal
    契约（P0-15g 钉住）保持原样；登录门 / 确认弹窗（z-50）仍在最上，导航压不过它们。
-   注：≥1024px 桌面布局另有一套 !important 层级，未随此调整。 */
+   注：≥1024px 桌面布局另有一套 !important 层级，这几条压不过；桌面改由 .ccm-sheet-blocking 让开常驻侧栏（#359）。 */
 body.nav-escape header { z-index: 45; }
 body.nav-escape #sidebarScrim { z-index: 46; }
 body.nav-escape #leftSidebar { z-index: 47; }

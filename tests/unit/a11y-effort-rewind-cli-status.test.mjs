@@ -4,9 +4,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readAppJsSource } from '../helpers/frontend-source.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
-const appJs = readFileSync(join(root, 'app/public/js/app.js'), 'utf8');
+const appJs = readAppJsSource();
 const rewindJs = readFileSync(join(root, 'app/public/js/app/rewind-command.js'), 'utf8');
 const html = readFileSync(join(root, 'app/public/index.html'), 'utf8');
 

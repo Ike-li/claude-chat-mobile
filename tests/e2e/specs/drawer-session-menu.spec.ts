@@ -179,6 +179,85 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // #359 第 8 项：「⋯」视觉 32px，触控热区扩到 48（.hit-44，四周各 8px，伪元素不占布局）。
+  // 向左正好补满与行本体之间的 gap-2，不吞行本体的点击。
+  test('P0-ROW-MENU-7 「⋯」热区比视觉框大：框外 6px 仍点得中，行本体照样点得到', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = page.locator('#sessionPanel [data-testid="session-row"]').first();
+    await expect(row.locator('[data-testid="session-menu"]')).toBeVisible();
+    // 抽屉滑入有 transform 过渡：等它停稳再量
+    await expect.poll(() => page.locator('#leftSidebar').evaluate(el => el.getBoundingClientRect().left)).toBe(0);
+    const hit = await row.evaluate((rowEl) => {
+      const btn = rowEl.querySelector('[data-testid="session-menu"]')!;
+      const main = rowEl.querySelector('button:not([data-testid="session-menu"])')!;
+      const r = btn.getBoundingClientRect();
+      const m = main.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const onMenu = (x: number, y: number) => document.elementFromPoint(x, y)?.closest('[data-testid="session-menu"]') === btn;
+      return {
+        left: onMenu(r.left - 6, cy), top: onMenu(cx, r.top - 6), bottom: onMenu(cx, r.bottom + 6), right: onMenu(r.right + 6, cy),
+        mainEdge: document.elementFromPoint(m.right - 2, m.top + m.height / 2)?.closest('button') === main,
+      };
+    });
+    expect(hit, '「⋯」框外 6px 点不中').toEqual({ left: true, top: true, bottom: true, right: true, mainEdge: true });
+    await expectNoBrowserErrors(page);
+  });
+
+  // #359 第 8 项：抽屉的边缘右滑挂在 document 上，以前不看场合。真 Chromium 合成触摸：
+  // 先用对照组证明合成手势真能拉出抽屉，再验两种该让位的场合。
+  test('P0-DRAWER-GESTURE 边缘右滑：普通区域能呼出；sheet 开着、或起点在横向可滚的代码块里不呼出', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:stream');
+    const pre = page.locator('[data-testid="assistant-message"]').last().locator('pre').first();
+    await expect(pre).toContainText('tester', { timeout: 20_000 });
+    await waitForIdle(page);
+    // 起点 (x,y) 处的元素收到 touchstart，再向右移 100px；触发与否在 touchmove 里同步判定
+    const swipeRight = (x: number, y: number) => page.evaluate(([x0, y0]) => {
+      const target = document.elementFromPoint(x0, y0)!;
+      const fire = (type: string, x: number) => {
+        const touch = new Touch({ identifier: 1, target, clientX: x, clientY: y0 });
+        target.dispatchEvent(new TouchEvent(type, {
+          touches: type === 'touchend' ? [] : [touch], changedTouches: [touch], bubbles: true, cancelable: true,
+        }));
+      };
+      fire('touchstart', x0);
+      fire('touchmove', x0 + 100);
+      fire('touchend', x0 + 100);
+    }, [x, y]);
+    const drawerOpened = async () => !(await page.locator('#leftSidebar').getAttribute('class'))!.includes('-translate-x-full');
+
+    // 对照：从顶栏左缘右滑能拉出抽屉
+    await swipeRight(4, 28);
+    expect(await drawerOpened(), '对照组没拉出抽屉：合成触摸没生效，下面两条断言没有意义').toBe(true);
+    await page.locator('#sidebarScrim').click({ position: { x: 360, y: 400 } });
+    await expectSidebarClosed(page);
+
+    // 一：控制台 sheet 开着
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('body')).toHaveClass(/ccm-sheet-open/);
+    await swipeRight(4, 28);
+    expect(await drawerOpened(), 'sheet 开着时抽屉被拉到了 sheet 底下').toBe(false);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('body')).not.toHaveClass(/ccm-sheet-open/);
+
+    // 二：起点在横向溢出的代码块里。真正横滚的是 code.hljs（github 主题给它 display:block + overflow-x:auto），不是 pre
+    await pre.locator('code').evaluate(code => { code.textContent = 'x'.repeat(400); });
+    const box = await pre.evaluate(el => {
+      const scroller = [el, ...Array.from(el.querySelectorAll('*'))]
+        .find(n => n.scrollWidth > n.clientWidth && /^(auto|scroll)$/.test(getComputedStyle(n).overflowX));
+      const r = scroller?.getBoundingClientRect();
+      return { found: Boolean(scroller), x: (r?.left ?? 0) + 4, y: r ? r.top + r.height / 2 : 0 };
+    });
+    expect(box.found, '代码块里没有横向溢出的可滚元素，测试前提不成立').toBe(true);
+    expect(box.x, '可滚区左缘不在 45px 边缘区内，测试前提不成立').toBeLessThan(45);
+    await swipeRight(box.x, box.y);
+    expect(await drawerOpened(), '在代码块里横滑把抽屉拉出来了').toBe(false);
+
+    await expectNoBrowserErrors(page);
+  });
 });
 
 // 网页端改名（#458），对应终端 /rename。服务端那一侧（renameSession、清洗、活会话退出补写）由

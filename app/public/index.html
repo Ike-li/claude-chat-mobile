@@ -238,15 +238,8 @@
        「开始回了」「回完了 / 出错 / 中止」——只在这两个端点各写一次，中间过程不进 live region。 -->
   <div id="turnAnnouncer" class="sr-only" role="status" data-testid="turn-announcer"></div>
 
-  <!-- 未读角标：切回会话时若有未读顶层消息，悬浮于消息区右下角、composer 上方；点击跳转到第一条未读并高亮
-       （app.js jumpToUnreadAnchor）。#messages 的兄弟节点而非子节点——bindView/loadHistory 的整体清空/
-       替换逻辑（clearView、sessionDomCache 贴回等）会连带清掉子节点，故不能挂在 #messages 内部。 -->
-  <button id="unreadPill" type="button" class="hidden flex items-center gap-1 rounded-full bg-cta text-white text-xs font-semibold px-3.5 py-2 active:scale-95" style="box-shadow:var(--shadow-pop)" aria-label="定位到未读消息">
-    <span id="unreadPillCount">0</span> 条未读 ↑
-  </button>
-
-  <!-- 回到最新（#376）：上翻离开底部时出现；与未读胶囊分层（清除条件不同），左下角相对 #composerFooter 顶定位，
-       不复用未读胶囊的 bottom:84px。点击 force 落底；有新增顶层气泡时文案变为「N 条新内容」。
+  <!-- 回到最新（#376）：上翻离开底部时出现；与未读胶囊分层（清除条件不同），左下角相对 #composerFooter 顶定位。
+       点击 force 落底；有新增顶层气泡时文案变为「N 条新内容」。
        同为 #messages 的兄弟——bindView/loadHistory 会清空 #messages 子节点。 -->
   <button id="scrollToBottomBtn" type="button" class="hidden flex items-center gap-1 rounded-full bg-surface text-ink text-xs font-semibold px-3.5 py-2 active:scale-95 border border-line" style="box-shadow:var(--shadow-pop)" aria-label="回到最新" data-testid="scroll-to-bottom">
     <span id="scrollToBottomLabel">回到最新</span>
@@ -282,7 +275,7 @@
   </div>
 
   <!-- 权限审批弹窗（底部 sheet） -->
-  <div id="permModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="权限请求">
+  <div id="permModal" class="ccm-sheet ccm-sheet-blocking hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="权限请求">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
       <!-- #399：强拦截审批不画假拖拽把手（不可手势关闭） -->
       <div class="text-accent-deep font-semibold mb-1">⚠️ 权限请求</div>
@@ -348,7 +341,7 @@
   <!-- AskUserQuestion 弹窗（E7） -->
   <!-- 必须自带逃生舱：整屏 z-40 遮罩会盖住输入区「停止」按钮，不能只靠选选项才能走。
        跳过 = user:interrupt；Other = 对齐 CLI 自动提供的自由文本；multiSelect = 可多选。 -->
-  <div id="questionModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="需要你选择">
+  <div id="questionModal" class="ccm-sheet ccm-sheet-blocking hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="需要你选择">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
       <!-- #399：强拦截提问不画假拖拽把手（不可手势关闭） -->
       <div class="text-info font-semibold mb-1">❓ 需要你选择</div>
@@ -388,7 +381,7 @@
 
   <!-- MCP 服务器要表单输入或 URL 授权（#460），内容由 app/elicitation-sheet.js 按事件里的字段描述现画。
        与提问同为强拦截：只能提交 / 拒绝 / 取消，不画拖拽把手。第三方文本一律 textContent。 -->
-  <div id="elicitationModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="MCP 需要你">
+  <div id="elicitationModal" class="ccm-sheet ccm-sheet-blocking hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="MCP 需要你">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
       <div id="elicitationHeading" class="text-info font-semibold mb-1 break-words" data-testid="elicitation-heading"></div>
       <div id="elicitationServer" class="text-xs text-ink-faint mb-1 break-words" data-testid="elicitation-server"></div>
@@ -635,6 +628,13 @@
 
   <!-- 输入区：空首页枢纽默认隐藏（#composerFooter + app.js syncComposerVisibility）；点 ＋ / 进入会话后显示 -->
   <footer id="composerFooter" class="hidden shrink-0 bg-transparent px-3 pb-3 shrink-0 z-10 safe-bottom">
+    <!-- 未读角标：切回会话时若有未读顶层消息，悬浮于消息区右下角、composer 上方；点击跳转到第一条未读并高亮
+         （app.js jumpToUnreadAnchor）。挂在 composer 里、绝对定位在它顶边外侧（#359）：composer 因多行输入、
+         横幅、附件托盘、iOS 键盘 padding 长高时自动跟着上移，不必 JS 量高度；composer 隐藏（首页）时一起隐藏。
+         不能挂进 #messages——bindView/loadHistory 的整体清空/替换（clearView、sessionDomCache 贴回等）会连带清掉。 -->
+    <button id="unreadPill" type="button" class="hidden flex items-center gap-1 rounded-full bg-cta text-white text-xs font-semibold px-3.5 py-2 active:scale-95" style="box-shadow:var(--shadow-pop)" aria-label="定位到未读消息">
+      <span id="unreadPillCount">0</span> 条未读 ↑
+    </button>
     <div class="max-w-2xl mx-auto flex flex-col">
       <!-- web 状态栏（E16）：自有 SDK 数据 + git 结构化渲染，默认折叠为一行摘要 -->
       <!-- #403：复制按钮不得嵌在 <summary> 内（非法交互嵌套）；外层 flex 并排放 details + button -->

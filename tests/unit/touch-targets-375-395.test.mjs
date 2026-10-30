@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readAppJsSource } from '../helpers/frontend-source.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const css = readFileSync(join(root, 'app/public/css/app.css'), 'utf8');
-const appJs = readFileSync(join(root, 'app/public/js/app.js'), 'utf8');
+const appJs = readAppJsSource();
 
 function ruleBody(selector) {
   // Non-greedy body until the matching close brace (single-level rules only).

@@ -4,11 +4,11 @@
 // 页面 hidden 跳 tick、onToggle 只在显隐真变化时触发。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 
 import { createAppContext } from '../../app/public/js/app/context.js';
 import { createConnectionBannerController } from '../../app/public/js/app/connection-banner.js';
 import { setLang } from '../../app/public/js/i18n.js';
+import { readAppJsSource } from '../helpers/frontend-source.mjs';
 
 // 桩 DOM：只用 className / textContent 字符串赋值（对齐项目既有 connDot.className 整串覆盖风格），
 // 桩就不必实现 classList，保持与 frontend-app-modules.test.mjs 的 RTT monitor 用例同款极简。
@@ -254,7 +254,7 @@ test('顶栏角标用的连接快照住在横幅控制器里：首连中不点�
 // 它们的行为已由 tests/e2e/specs/connection-banner.spec.ts 覆盖。实证过——把 app.js 里那两个调用
 // 换成常量 true 之后，P0-02g 与 P0-02h 立刻变红。留着源码版只会在重构改名时无故变红。
 test('app.js 不得再持有 everConnected / headerSocketOnline 顶层状态', () => {
-  const src = readFileSync(new URL('../../app/public/js/app.js', import.meta.url), 'utf8');
+  const src = readAppJsSource();
   assert.doesNotMatch(src, /\blet everConnected\b/);
   assert.doesNotMatch(src, /\blet headerSocketOnline\b/);
 });

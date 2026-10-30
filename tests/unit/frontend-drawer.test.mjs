@@ -3,6 +3,7 @@
 // 覆盖：desktop 双向 no-op · open/close 的 class 与回调 · 关闭按钮与遮罩接线
 //       · 边缘右滑呼出（含 dragStartX===0 这个源码点名的坑）· 左滑收起 · 垂直滑动不误触
 //       · 单次手势只触发一次 · 控制器挂进 context.state
+//       · sheet 开着时手势让给 sheet（审批 / 提问的 nav-escape 例外）· 起点在横向可滚容器里不触发（#359）
 // 槽位：S1（纯逻辑 + 最小 DOM 替身，零 IO、不需要临时目录）
 //
 // 【为什么这个文件此前不存在】createDrawerController 是全仓两个「零测试引用」的前端工厂之一
@@ -53,8 +54,9 @@ function harness({ innerWidth = 400, drawerOpen = false } = {}) {
   els.drawerNotice.classList.add('hidden'); // 真实初始态：提示条默认不占位
 
   const handlers = new Map();
-  const doc = { addEventListener: (type, fn) => handlers.set(type, fn), activeElement: null };
-  const win = { innerWidth };
+  const body = fakeEl();
+  const doc = { addEventListener: (type, fn) => handlers.set(type, fn), activeElement: null, body };
+  const win = { innerWidth, getComputedStyle: (el) => ({ overflowX: el.overflowX || 'visible' }) };
   const calls = { haptic: [], opened: 0, closed: 0, fallback: [] };
   const context = createAppContext();
 
@@ -68,15 +70,17 @@ function harness({ innerWidth = 400, drawerOpen = false } = {}) {
     win,
   });
 
-  const touch = (type, clientX, clientY) => handlers.get(type)({ touches: [{ clientX, clientY }] });
+  // target：触点落在的元素。默认是不溢出、直接挂在 body 下的普通节点。
+  const plain = { parentElement: body, scrollWidth: 0, clientWidth: 0 };
+  const touch = (type, clientX, clientY, target = plain) => handlers.get(type)({ touches: [{ clientX, clientY }], target });
   // 一次完整手势：从 (x0,y0) 起，移到 (x1,y1)。
-  const swipe = (x0, y0, x1, y1) => { touch('touchstart', x0, y0); touch('touchmove', x1, y1); };
+  const swipe = (x0, y0, x1, y1, target) => { touch('touchstart', x0, y0, target); touch('touchmove', x1, y1, target); };
   const isOpen = () => !els.leftSidebar.classList.contains('-translate-x-full');
   // 判「提示是否显示」查 classList 而不是 textContent：文本留在 DOM 里但元素 hidden 时，
   // textContent 照样有值——那正是这套断言要区分开的两种状态。
   const noticeText = () => els.drawerNotice.classList.contains('hidden') ? null : els.drawerNotice.textContent;
 
-  return { ctl, els, calls, context, touch, swipe, isOpen, noticeText };
+  return { ctl, els, body, calls, context, touch, swipe, isOpen, noticeText };
 }
 
 // ── 桌面档：开合都是 no-op ───────────────────────────────────────────────────
@@ -226,6 +230,58 @@ test.describe('移动端边缘滑动', () => {
     h.touch('touchmove', 300, 300);
     assert.equal(h.isOpen(), false);
     assert.equal(h.calls.opened, 0);
+  });
+});
+
+// ── 手势让位（#359 第 8 项）────────────────────────────────────────────────
+// sheet 开着时侧栏会开在 sheet 下面：看不见，焦点却被拿走。判据用两套 sheet 控制器共用的 body.ccm-sheet-open；
+// 审批 / 提问挂着时 body.nav-escape 把侧栏抬到 sheet 之上，那是有意留的「挂着审批也能切会话」，照常可开。
+test.describe('手势让给 sheet 与横向滚动', () => {
+  test('有 sheet 开着时边缘右滑不呼出', () => {
+    const h = harness();
+    h.body.classList.add('ccm-sheet-open');
+    h.swipe(10, 300, 100, 300);
+    assert.equal(h.isOpen(), false, '侧栏会开在 sheet 下面');
+    assert.equal(h.calls.opened, 0);
+  });
+
+  test('审批 / 提问挂着（nav-escape 抬起了侧栏）时照常呼出', () => {
+    const h = harness();
+    h.body.classList.add('ccm-sheet-open', 'nav-escape');
+    h.swipe(10, 300, 100, 300);
+    assert.equal(h.isOpen(), true);
+  });
+
+  test('抽屉开着又叠了 sheet（会话行「⋯」菜单）时，在 sheet 上左滑不收抽屉', () => {
+    const h = harness({ drawerOpen: true });
+    h.body.classList.add('ccm-sheet-open');
+    h.swipe(200, 300, 100, 300);
+    assert.equal(h.isOpen(), true);
+    assert.equal(h.calls.closed, 0);
+  });
+
+  test('起点在横向可滚的容器里（代码块、diff、表格）不呼出：横滑是在滚它', () => {
+    const h = harness();
+    const pre = { parentElement: h.body, scrollWidth: 900, clientWidth: 340, overflowX: 'auto' };
+    const code = { parentElement: pre, scrollWidth: 0, clientWidth: 0 };
+    h.swipe(20, 300, 120, 300, code);
+    assert.equal(h.isOpen(), false);
+  });
+
+  test('同是 overflow-x:auto 但内容没溢出（短代码块）照常呼出', () => {
+    const h = harness();
+    const pre = { parentElement: h.body, scrollWidth: 340, clientWidth: 340, overflowX: 'auto' };
+    h.swipe(20, 300, 120, 300, pre);
+    assert.equal(h.isOpen(), true);
+  });
+
+  // 抽屉里截断的长标题（.truncate＝overflow:hidden）scrollWidth 同样大于 clientWidth，但它滚不动；
+  // 只看「溢出」不看 overflow-x，在标题上左滑就收不起抽屉了。
+  test('溢出但不可滚（truncate 的 overflow:hidden）照常响应：在截断标题上左滑收起', () => {
+    const h = harness({ drawerOpen: true });
+    const title = { parentElement: h.body, scrollWidth: 500, clientWidth: 180, overflowX: 'hidden' };
+    h.swipe(200, 300, 100, 300, title);
+    assert.equal(h.isOpen(), false);
   });
 });
 

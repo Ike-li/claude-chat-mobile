@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readAppJsSource } from '../helpers/frontend-source.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const html = readFileSync(join(root, 'app/public/index.html'), 'utf8');
-const appJs = readFileSync(join(root, 'app/public/js/app.js'), 'utf8');
+const appJs = readAppJsSource();
 
 test('#390 #envConfigSave 实底白字用 bg-cta（非 bg-accent）', () => {
   const m = html.match(/id="envConfigSave"[^>]*class="([^"]*)"/);
