@@ -4179,15 +4179,16 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     });
   }
 
-  function renderCliPanelState() {
+  // keepPickedModel：外部记录可写时点过的模型是发送意图（同 models 回执的 H2），刷新只重画权限与思考强度
+  function renderCliPanelState({ keepPickedModel = false } = {}) {
     const panel = resolvePanelState({
       mirrorReadonly: true,
       observedCli: mirrorObservedCli,
       web: mirrorWebPanelSnapshot,
     });
     const rawModel = panel.model || '';
-    updateModelAndSuffix(rawModel);
-    if (modelInput) {
+    if (!keepPickedModel) updateModelAndSuffix(rawModel);
+    if (modelInput && !keepPickedModel) {
       delete modelInput.dataset.fullModel;
       if (rawModel) {
         if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel, t('CLI 当前模型'));
@@ -4210,7 +4211,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     renderCliPermissionMode(panel.permissionMode);
     if (pillDefaults) pillDefaults.title = t('外部会话的最近记录；续接后由实际进程确认设置');
     setEffortMode(panel.effort, true);
-    rebuildEffortOptions(rawModel || cwdDefaultModel);
+    rebuildEffortOptions((keepPickedModel ? modelInput?.value : rawModel) || cwdDefaultModel);
   }
 
   function restoreWebPanelState() {
@@ -4549,7 +4550,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     }
     if (nextViewed?.externalObserved && newViewing === displayedInstanceId && !mirrorReadonlySid) {
       mirrorObservedCli = nextViewed.externalObserved;
-      renderCliPanelState();
+      renderCliPanelState({ keepPickedModel: modelIntent.isPicked() });
     }
     updateSessionsDot();
     updateServiceNotice(p?.service ?? null); // 服务健康与实例结构无关，无条件每次广播都刷新（不进下方判定分支）
