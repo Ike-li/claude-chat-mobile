@@ -2156,7 +2156,7 @@ function writeSessionEntrypoint(sessionId, cwd) {
 // 台阶3：显式建一个新实例（分配 instanceId、后台并行存活）。`resumeId` 缺省=新会话；调用方
 // （session:new/switch）负责去重（instanceForSession）与切 viewingInstanceId。返回实例。
 // 同步建（resumeId 由调用方解析，无需 await）——故无台阶2 的「await 让出窗口双实例」重入竞态。
-function openInstance({ cwd, resumeId = null, mode, effort, effortSource, model, authorizedRoot: retainedRoot = null, transcriptMode = null, transcriptModel = null }) {
+function openInstance({ cwd, resumeId = null, mode, effort, effortSource, authorizedRoot: retainedRoot = null, transcriptMode = null, transcriptModel = null }) {
   if (agents.size >= MAX_LIVE_SESSIONS) {
     // permanent：重试多少次都还是满，标不可重试，免得客户端离线队列空转（见 socket.js 负 ack）
     const err = new Error(`超过最大活跃会话数量 ${MAX_LIVE_SESSIONS}，请关闭一些会话后再尝试`);
@@ -2237,7 +2237,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, model,
   // （/model > --model > ANTHROPIC_MODEL > settings.model），不再用 effective.model 覆盖。
   // resolvedEnv 可含 ANTHROPIC_MODEL（worktree 的 settings.local.json env 块），
   // CLI 会自动采纳（优先级在 --model 之下、settings.model 之上），与 startModel=undefined 不冲突。
-  const startModel = model ?? saved?.model ?? undefined;
+  const startModel = saved?.model || undefined;
   // 本实例创建时所属的连接根（worktree 会话取其仓库所在的根）。只用于 onCwdChanged 的热移除保护——
   // 该根之后被移出 WORKDIRS 时，已发出去的授权不在会话半途收回（作为 extraRoots 传给 authorize）。
   const authorizedRoot = retainedRoot ?? authorize(cwd)?.root ?? workspaceCwdOf(cwd);
@@ -2561,19 +2561,12 @@ const RESUME_PRIOR_EXIT_WAIT_MS = 1500;
 async function openResumeInstance(cwd, resumeId, extra = {}) {
   const t0 = Date.now();
   let transcriptMode = null, transcriptModel = null, divergence = null;
-  let external = null;
   if (resumeId) {
     await instanceManager.waitForSessionExits(resumeId, RESUME_PRIOR_EXIT_WAIT_MS);
     const retained = extra.authorizedRoot ? { cwd, authorizedRoot: extra.authorizedRoot } : null;
     const location = await sessionRecovery.resolve(cwd, resumeId, retained);
     if (location.status !== 'found') throw new Error(locationError(location));
     cwd = location.cwd;
-    external = await sessionRecovery.observed(resumeId, cwd);
-    if (external) {
-      extra = { ...extra, model: extra.model ?? external.model ?? undefined,
-        mode: extra.mode ?? external.permissionMode ?? undefined,
-        ...(external.effort != null && extra.effort === undefined ? { effort: external.effort, effortSource: 'user' } : {}) };
-    }
     // 读末条权限档 / 读末条模型 / L3 CLI settings 兜底 / 分叉判定四路互无数据依赖，从入口就并发。
     const [[mode, model], , div] = await Promise.all([
       Promise.all([readLastPermissionMode(resumeId, cwd), readLastAssistantModel(resumeId, cwd)]),
@@ -2597,7 +2590,6 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
     ]);
   }
   const instance = openInstance({ cwd, resumeId, transcriptMode, transcriptModel, ...extra });
-  if (external) instance.externalObserved = external;
   if (divergence) {
     instance.resumeDivergence = divergence; // 发送闸（user:message）与自动继续据它拒发
     interactionLog.addSessionLog(resumeId, 'sys_info',
@@ -3151,7 +3143,8 @@ registerSocketConnection(io, socket => {
       }
       if (a.sessionId) {
         const location = await sessionRecovery.recover(a);
-        if (location.status !== 'found') return ack({ ok: false, error: locationError(location), retryable: false });
+        // 只有 stale（读盘期间实例变了）值得重发；多份记录 / 越界 / 不存在重发必再失败，客户端须停止重试
+        if (location.status !== 'found') return ack({ ok: false, error: locationError(location), permanent: location.status !== 'stale' });
       }
       // 陈旧上下文守卫（2026-07-12 单驾驶员，修「接管后的语义分叉」）：实例的 SDK 子进程上下文是进程内存态、
       // 只在启动(resume)那一刻读过磁盘；外部驱动方（终端 CLI）此后写的轮次，web 靠追平【显示】了、但子进程
@@ -3181,8 +3174,7 @@ registerSocketConnection(io, socket => {
         }
         const cwd = transcriptCwdOf(a), sid = a.sessionId;
         const mode = a.externalObserved?.permissionMode ?? a.permissionMode;
-        const eff = a.externalObserved ? (a.externalObserved.effort ?? undefined) : effortOf(a.instanceId);
-        const effSource = a.externalObserved?.effort != null ? 'user' : effortSourceOf(a.instanceId);
+        const eff = effortOf(a.instanceId), effSource = effortSourceOf(a.instanceId);
         const disposedId = a.instanceId;
         interactionLog.addSessionLog(sid, 'sys_info', '[SYS] 会话曾被外部（终端）驱动，发送前置换实例吸收外部轮次（防陈旧上下文分叉）');
         // 体感：置换会冷启动 resume，前端先收到 system 条再等 init，避免「点了没反应」
@@ -3465,7 +3457,11 @@ registerSocketConnection(io, socket => {
       }
       return permModeTo(socket);                       // 其他无实例情形：echo 拨回，不存储
     }
-    if (a.transcriptCwd) return sysTo(socket, '会话位置已变化，请先续接后再调整设置', true);
+    if (a.transcriptCwd) {
+      sysTo(socket, '会话位置已变化，请先续接后再调整设置', true);
+      // 面板此刻显示外部记录：回推 instances 让前端按 externalObserved 重画；permModeTo 会拿网页档盖掉它
+      return instancesTo(socket);
+    }
     const ok = await a.setPermissionMode(mode);
     if (!ok) return;
     interactionLog.addSessionLog(a.logKey(), 'sys_info', `[SYS] 切换权限档 (user:setPermissionMode): mode=${mode}, instanceId=${id}`);
@@ -3914,7 +3910,7 @@ registerSocketConnection(io, socket => {
       return;
     }
     let cwd = goneWorktree || live ? routed : ensureAuthorized(routed);
-    const location = live ? await sessionRecovery.recover(live, cwd, { observe: true }) : await sessionRecovery.resolve(cwd, sessionId);
+    const location = live ? await sessionRecovery.recover(live, cwd) : await sessionRecovery.resolve(cwd, sessionId);
     if (location.status !== 'found') return ack?.({ ok: false, error: locationError(location) });
     cwd = location.cwd;
     // 归属校验以「jsonl 存在于本 cwd 的 project 目录」为准：既拒跨 cwd / 失效 id，又接纳终端建的会话。
@@ -3941,7 +3937,8 @@ registerSocketConnection(io, socket => {
     const inst = live || await dedupedResume(cwd, sessionId);
     // B1：live 复用时把代次快照拉到当前——否则 /clear 后 onSessionId 因 generation 陈旧不写 currentByCwd
     if (inst) inst.routeGeneration = sessions.getGeneration(workspaceCwdOf(cwd));
-    if (socket.sessionOpening !== opening || viewingInstanceId !== viewingAtOpen) return ack?.({ ok: false, error: '会话位置已变化，请重试' });
+    // 打开期间用户点了别的会话：不抢焦点；也不回失败——前端对 ok:false 一律弹「打不开」
+    if (socket.sessionOpening !== opening || viewingInstanceId !== viewingAtOpen) return ack?.({ ok: true, superseded: true, instanceId: inst?.instanceId, sessionId });
     finishOpenFocus(inst, transcriptCwdOf(inst), sessionId, ack);
   });
 

@@ -24,10 +24,12 @@ export function createSessionRecovery({ agents, authorize, workspaceOf, onChange
     return { ...state, model: snapshot?.state === 'fresh' ? snapshot.snapshot?.model?.id ?? state.model : state.model,
       effort: snapshot?.state === 'fresh' ? snapshot.snapshot?.effort ?? null : null };
   }
-  async function recoverOnce(instance, requestedCwd, { observe = false } = {}) {
+  async function recoverOnce(instance, requestedCwd) {
     const { sessionId, cwd, transcriptCwd } = instance;
-    const result = await resolve(requestedCwd, sessionId, instance);
-    const external = result.status === 'found' && (observe || result.cwd !== transcriptCwdOf(instance)) ? await observed(sessionId, result.cwd) : null;
+    // 只有指向实例自身位置的请求能改写实例；别处的同 ID 副本只读定位（精确命中不查归属）。
+    if (requestedCwd !== cwd && requestedCwd !== transcriptCwd) return resolve(requestedCwd, sessionId, instance);
+    const result = await resolve(transcriptCwdOf(instance), sessionId, instance);
+    const external = result.status === 'found' && result.cwd !== transcriptCwdOf(instance) ? await observed(sessionId, result.cwd) : null;
     const stillExists = result.status === 'found' && await sessionFileExists(result.cwd, sessionId, diskOpts);
     if (agents.get(instance.instanceId) !== instance || instance.sessionId !== sessionId || instance.cwd !== cwd || instance.transcriptCwd !== transcriptCwd) return { status: 'stale' };
     if (result.status !== 'found') return result;
@@ -44,15 +46,17 @@ export function createSessionRecovery({ agents, authorize, workspaceOf, onChange
       delete instance.transcriptCwd;
     }
     if (accepted?.projectKey) instance.projectCwd = accepted.projectKey;
-    if (external || changed) instance.externalObserved = external || { model: null, permissionMode: null, effort: null };
-    if (changed) onChange(instance);
+    if (changed) {
+      instance.externalObserved = external || { model: null, permissionMode: null, effort: null };
+      onChange(instance);
+    }
     return { ...result, changed };
   }
-  function recover(instance, requestedCwd = transcriptCwdOf(instance), options = {}) {
-    const key = `${instance.sessionId}\0${instance.cwd}\0${requestedCwd}\0${Boolean(options.observe)}`;
+  function recover(instance, requestedCwd = transcriptCwdOf(instance)) {
+    const key = `${instance.sessionId}\0${instance.cwd}\0${requestedCwd}`;
     const pending = inFlight.get(instance);
     if (pending?.key === key) return pending.promise;
-    const promise = recoverOnce(instance, requestedCwd, options).finally(() => {
+    const promise = recoverOnce(instance, requestedCwd).finally(() => {
       if (inFlight.get(instance)?.promise === promise) inFlight.delete(instance);
     });
     inFlight.set(instance, { key, promise });

@@ -126,6 +126,21 @@ test('有效实例不能把另一个项目的显式请求重定向到自己的�
   assert.equal(a.transcriptCwd, undefined);
 });
 
+test('别处的同 ID 副本只读定位，不能改写活实例的记录位置', async () => {
+  const f = fixture(); f.write(f.old); f.write(f.repo); // 主仓残留同 ID 副本：精确命中不查归属
+  const a = { instanceId: 'ghost', sessionId: f.id, cwd: f.old, projectCwd: f.repo };
+  const recovery = createSessionRecovery({ agents: new Map([[a.instanceId, a]]), authorize: f.authorize, workspaceOf: () => f.repo, baseDir: f.baseDir });
+  assert.equal((await recovery.recover(a, f.repo)).cwd, f.repo, '明确请求的位置照常可读');
+  assert.equal(a.transcriptCwd, undefined);
+  assert.equal(a.externalDirty, undefined);
+
+  const g = fixture(); g.write(g.old); g.write(g.next); // 已迁到 next，旧目录又出现同 ID 文件
+  const b = { instanceId: 'moved', sessionId: g.id, cwd: g.old, transcriptCwd: g.next, projectCwd: g.repo, externalDirty: true };
+  const moved = createSessionRecovery({ agents: new Map([[b.instanceId, b]]), authorize: g.authorize, workspaceOf: () => g.repo, baseDir: g.baseDir });
+  assert.equal((await moved.recover(b, g.old)).cwd, g.next, '实例自己的记录还在，就不被旧目录的副本拨回');
+  assert.equal(b.transcriptCwd, g.next);
+});
+
 test('读取观察值期间文件再次迁移，不提交已经消失的位置', async () => {
   const f = fixture(); f.write(f.next);
   writeFileSync(join(f.baseDir, getProjectDir(f.next), `${f.id}.jsonl`), JSON.stringify({ type: 'user', cwd: f.next, entrypoint: 'claude-desktop', message: { role: 'user', content: 'moving again' } }) + '\n');

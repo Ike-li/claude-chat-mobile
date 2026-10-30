@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
+import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession, sessionButtonByTitle } from '../../helpers/sidebar-ui';
 
 test('P0-473 外部搬家：同一实例刷新历史，代码面板跟目标 worktree，保留 ID', async ({ page }) => {
   await gotoMock(page);
@@ -38,5 +38,25 @@ test('P0-473-LATE 点击已缓存会话时搬家，旧同步回执不得清掉�
   await openWorkspaceSession(page, MAIN_WORKSPACE, 'Worktree Driving Session');
   await expect(page.locator('#messages')).toContainText('RELOCATED_WORKTREE_HISTORY');
   await expect(page.locator('#messages')).not.toContainText('历史消息加载失败');
+  await expectNoBrowserErrors(page);
+});
+
+// 已开会话走 user:setViewing：session:switch 的聚焦收尾会清镜像锁，终端驾驶时点一下当前行就会先解锁
+test('P0-473-SIDEBAR 侧栏点已开会话只切视图，点正在看的那行什么都不发', async ({ page }) => {
+  const sent: string[] = [];
+  page.on('websocket', ws => ws.on('framesent', frame => {
+    const name = typeof frame.payload === 'string' && /^\d+\["(session:switch|user:setViewing)"/.exec(frame.payload)?.[1];
+    if (name) sent.push(name);
+  }));
+  await gotoMock(page); await ensureComposerReady(page);
+  await openSessionsSidebar(page); await expandWorkspace(page, MAIN_WORKSPACE);
+  await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+  await expect.poll(() => sent).toEqual(['session:switch']);
+  await openSessionsSidebar(page); await expandWorkspace(page, MAIN_WORKSPACE);
+  await expect(sessionButtonByTitle(page, 'Archived Planning Session').locator('xpath=ancestor::*[@data-testid="session-row"][1]')).not.toHaveAttribute('data-instance-id', '');
+  await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+  await openSessionsSidebar(page); await expandWorkspace(page, MAIN_WORKSPACE);
+  await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+  await expect.poll(() => sent).toEqual(['session:switch', 'user:setViewing']);
   await expectNoBrowserErrors(page);
 });

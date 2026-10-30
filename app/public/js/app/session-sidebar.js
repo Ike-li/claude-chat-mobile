@@ -484,10 +484,10 @@ export function createSessionSidebar(context, {
 
     btn.onclick = () => {
       haptic('tap');
-      if (liveInst && !s.id) {             // 未获 sessionId 的新会话只切视图
+      if (liveInst) {                      // 已打开：切视图，不重新 resume
         if (liveInst.instanceId !== getViewingInstanceId()) socket.emit('user:setViewing', { instanceId: liveInst.instanceId });
         closeLeftSidebar();
-      } else {                             // 有 ID：服务端统一核对位置并打开/聚焦
+      } else {                             // 未打开：resume 打开（同步关面板 + 4s 兜底，不把反馈压在 ack 上）
         closeLeftSidebar();
         let acked = false;
         const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: rowCwd, title: s.title, message });
