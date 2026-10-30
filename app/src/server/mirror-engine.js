@@ -370,7 +370,7 @@ export function createMirrorEngine({
       // 等审批（可长达 APPROVAL_TTL_MS 30min）期间 web 不写盘 → 磁盘长大必是终端写的，必须标脏，
       // 否则下一条手机消息会送进停在 30 分钟前的 SDK 子进程、从旧 parentUuid 分叉出第二条链。
       // 挂起的审批 / 提问集合：两拍之间变过 = 有审批结算、SDK 写了 tool_result；那段增长要看有没有别人写的（O122）
-      const pendingKey = [...a.pendingPermissions.keys(), ...a.pendingQuestions.keys()].sort().join('\n');
+      const pendingKey = [...a.pendingPermissions.keys(), ...a.pendingQuestions.keys(), ...(a.pendingElicitations?.keys() ?? [])].sort().join('\n');
       if (externalGrowthWhilePaused({ state: st, prevSize: mirrorLastSize, curSize: busySize, prevPending: mirrorLastPendingKey, curPending: pendingKey, appendedForeign: busyAppendedForeign })) {
         a.externalDirty = true;
       }

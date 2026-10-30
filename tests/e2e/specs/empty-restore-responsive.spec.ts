@@ -276,4 +276,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     expect(hit.allow, '「允许」被盖住了').toBe(true);
     await expectNoBrowserErrors(page);
   });
+
+  // 同上，MCP 表单 / 授权卡（#460）也是「等你答复」那类 sheet，同样不能把常驻侧栏压在遮罩底下
+  test('P0-19k 桌面挂着 MCP 表单卡时，常驻侧栏仍点得到，表单也没被侧栏盖住', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:elicitation-form');
+    await expect(page.locator('#elicitationModal')).toHaveClass(/sheet-open/);
+    await expect(page.locator('#elicitationModal')).not.toHaveClass(/sheet-arming/);
+    const hit = await page.evaluate(() => {
+      const at = (el, x = 0.5) => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.left + Math.max(4, r.width * x), r.top + r.height / 2); };
+      const sidebarTarget = document.querySelector('#leftSidebar [data-testid="session-row"]') || document.getElementById('leftSidebar');
+      const nameInput = document.querySelector('[data-testid="elicitation-field-name"] input');
+      return {
+        sidebar: Boolean(at(sidebarTarget)?.closest('#leftSidebar')),
+        // 输入框铺满面板宽度，被侧栏盖住的会是它的左半截。它常在视口折线以下（表单比审批卡高），
+        // elementFromPoint 打不到，所以比几何：左缘不得落在侧栏右缘以左
+        nameLeft: nameInput.getBoundingClientRect().left,
+        sidebarRight: document.getElementById('leftSidebar').getBoundingClientRect().right,
+      };
+    });
+    expect(hit.sidebar, '侧栏被 MCP 卡的遮罩盖住了').toBe(true);
+    expect(hit.nameLeft, '表单输入框的左半截被侧栏盖住了').toBeGreaterThanOrEqual(hit.sidebarRight);
+    await expectNoBrowserErrors(page);
+  });
 });

@@ -16,7 +16,7 @@ export function createSessionSidebar(context, {
   composePage, connBanner, connDot, connDotWrap, dismissBlockedSurfaceIfTarget, drawer, el,
   ensureEmptySurface, enterComposeReady, envConfigPanel, folderPicker, haptic, inputEl, leftSidebar,
   newSessionWorktree, noticeDismissals, openDeleteSession, projectsState, renderHooksBridgeSection,
-  renderStatuslineBridgeSection, SESSION_PANEL_REVALIDATE_MS, sessionPanel, sessionRowMenu, sessionsCache,
+  renderStatuslineBridgeSection, SESSION_PANEL_REVALIDATE_MS, sessionPanel, sessionRename, sessionRowMenu, sessionsCache,
   sessionsDot, sessionSearchQueryByDir, sessionWorkspaceState, setStatusIcon, showSessionBlockedSurface,
   socket, syncDashNoFolders, unread, getAvailableDirs, getCurrentCwd, getDirSectionNodes,
   getDisplayedSessionId, getExpandedDirs, getGeneralNav, getInstancesList, getLatestServiceHealth,
@@ -530,6 +530,9 @@ export function createSessionSidebar(context, {
           socket.emit('session:close', { instanceId: liveInst.instanceId });
           closeLeftSidebar();
         }
+      } else if (action === 'rename') {
+        haptic('tap');
+        sessionRename.open({ sessionId: s.id, cwd: rowCwd, title: displaySessionTitle(s.title, ''), sectionKey: workspaceCwd });
       } else if (action === 'delete') {
         haptic('warning');
         openDeleteSession(s.id, rowCwd, displaySessionTitle(s.title, ''), workspaceCwd); // 空串 → 内部回落 sessionId

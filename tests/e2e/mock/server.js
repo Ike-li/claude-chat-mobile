@@ -119,6 +119,8 @@ let mockListHardTop = 12;
 // 缓存秒开会让行先画出来，只看 DOM 判不出 revalidate 带没带次数，所以用例直接看请求。
 let mockSessionListLog = [];
 const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔除
+const renamedSessionTitles = new Map(); // session:rename 后列表行显示的新标题（sessionId → title）
+const heldRenameAcks = []; // 标题以 MOCK_RENAME_HELD 开头的改名回执先扣住，POST /__release-renames 按到达顺序放
 // P3 抽屉局部重建 + SWR 保鲜回归夹具（test:reconnect-drawer-quiet / test:reconnect-drawer-refresh）：
 // reconnectDrawerTitleChanged 让 mainCwdSessions() 返回改过名的主工作区会话标题，模拟"断线期间被自主
 // 续跑改名"；reconnectSettleMarkerArmed 让下一次 connection handler 在 emitHydration() 之后再追加一条
@@ -304,6 +306,8 @@ let mockResetGeneration = 0;
 let mockApproveLog = [];
 // P0-05-HIST-FULL：武装后 Timeline Session 的历史里多一对被截断的 Bash 工具卡（tl-bash-long）。一次性。
 let historyLongToolArmed = false;
+// test:arm-history-ask-question：Timeline Session 的历史里多四张 AskUserQuestion 卡（#455 回放：旧 deny 格式与新 allow 格式）
+let historyAskQuestionArmed = false;
 const MOCK_BUILD_LOG = Array.from({ length: 120 }, (_, i) => `Compiling module ${i}: auth\nWarning: unused variable x in line ${i}`).join('\n') + '\nBUILD DONE';
 let orphanReplayArmed = false;    // test:busy-orphan-replay：inst_orphan 回放 user_message+text_delta 但【缺】配对 result（模拟终止事件遗失）
 let orphanMixedArmed = false;     // test:busy-orphan-mixed：inst_orphan_mixed 回放【旧轮完整 FIFO + 当前轮 delta】，实例仍 busy
@@ -450,6 +454,12 @@ let trustedDevices = createTrustedDevices(); // 函数声明已提升；resetMoc
 let accessBypassActive = false;
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
+// MCP elicitation（#460）：test:elicitation-* 挂起的那张卡（null = 没有），以及收到的作答（GET /__elicitation-log）
+let mockElicitation = null;
+let mockElicitationLog = [];
+// 转后台（#459）：test:fg-task 起的那条前台 Bash（null = 没有），以及会话是否禁用了后台任务（-disabled 那档）
+let mockFgTask = null;
+let mockBgTasksDisabled = false;
 let deniedDeviceRetryPending = false;
 let mockSessionLogsByInstance = new Map();
 let mockDiagLogsByInstance = new Map(); // 镜像/排队/停止诊断时间线（test:diag-sample 注入）
@@ -627,6 +637,10 @@ let mockFolderTree = createMockFolderTree();
 let mockAddedFolders = []; // folders:add 加进来的（绝对路径），并进 mockDirs()
 let mockFoldersAddError = null; // test:folders-readonly：模拟工作区列表来自环境变量的安装（真 server 回 source_readonly）
 let mockAutoModeDisabled = false; // /__arm-auto-mode-disabled：本区 settings 写了 disableAutoMode（#461）
+// /__arm-mcp-live（#457）：mcp:status 现查得到（真 server 有活实例时）。null = 没有活实例，回 live:false，前端用 init 快照
+let mockMcpLive = null;
+let mockMcpLog = []; // 每条 mcp:* 请求的 { event, instanceId, name }：断言处置落在哪个实例上（#467 review）
+let mockMcpReconnectTries = 0;
 const mockFolderAbs = rel => (rel ? `${MOCK_HOME}/${rel}` : MOCK_HOME);
 function mockFolderReason(rel) {
   if (!Object.hasOwn(mockFolderTree, rel)) return 'not_found';
@@ -645,6 +659,7 @@ function resetMockState() {
   resetAuthCooldown();
   mockApproveLog = [];
   historyLongToolArmed = false;
+  historyAskQuestionArmed = false;
   mockScenarioErrors = [];
   mockDirsOverride = null;
   mockSubProjects = [];
@@ -655,6 +670,9 @@ function resetMockState() {
   mockReorderFail = false;
   mockFoldersAddError = null;
   mockAutoModeDisabled = false;
+  mockMcpLive = null;
+  mockMcpLog = [];
+  mockMcpReconnectTries = 0;
   mockServiceStartedAtOverride = null;
   mockDeliveryFailure = null;
   mockRateLimitLockout = null;
@@ -700,6 +718,8 @@ function resetMockState() {
   mockListHardTop = 12;
   mockSessionListLog = [];
   deletedSessionIds.clear();
+  renamedSessionTitles.clear();
+  heldRenameAcks.length = 0;
   mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
   resetReadState(); // 必须排在 mockListClockBase 之后：基线由它推算
   reconnectDrawerTitleChanged = false;
@@ -786,6 +806,10 @@ function resetMockState() {
   pendingDevices = [];
   alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
+  mockElicitation = null;
+  mockElicitationLog = [];
+  mockFgTask = null;
+  mockBgTasksDisabled = false;
   deniedDeviceRetryPending = false;
   mockSessionLogsByInstance = new Map();
   mockDiagLogsByInstance = new Map();
@@ -948,6 +972,16 @@ function emitTrustedDevices() {
 
 app.get('/__approve-log', (_req, res) => res.json(mockApproveLog));
 
+app.get('/__elicitation-log', (_req, res) => res.json(mockElicitationLog));
+
+app.get('/__held-renames', (_req, res) => res.json(heldRenameAcks.map(r => r.title)));
+
+app.post('/__release-renames', (_req, res) => {
+  const released = heldRenameAcks.splice(0);
+  for (const { finish } of released) finish();
+  res.json({ released: released.map(r => r.title) });
+});
+
 app.post('/__reset', (_req, res) => {
   resetMockState();
   res.json({ ok: true });
@@ -989,6 +1023,33 @@ app.post('/__replay-models', (_req, res) => {
 // 补一帧让客户端知道；服务端那道拒切由集成测试钉着，mock 不另写一份。
 app.post('/__arm-auto-mode-disabled', (_req, res) => {
   mockAutoModeDisabled = true;
+  broadcastMockInstances();
+  res.json({ ok: true });
+});
+
+// MCP 实时状态（#457）：五种状态各一台，名字里塞一段 HTML 验转义（名字是用户 / 插件写的配置键）。
+// postgres 第一次重连失败、第二次成功，前端两条路都走得到。
+app.post('/__arm-mcp-live', (_req, res) => {
+  mockMcpLive = [
+    { name: 'filesystem', status: 'connected', scope: 'user', toolCount: 3 },
+    { name: 'postgres', status: 'failed', error: 'spawn postgres-mcp ENOENT', scope: 'project' },
+    { name: 'linear', status: 'pending', scope: 'user' },
+    { name: 'notion', status: 'disabled', scope: 'project' },
+    { name: '<img src=x onerror="window.__mcpXss=1">', status: 'needs-auth', scope: 'user' },
+  ];
+  mockMcpReconnectTries = 0;
+  res.json({ ok: true });
+});
+
+app.get('/__mcp-log', (_req, res) => res.json(mockMcpLog));
+
+// 另一台设备把共享的查看会话切到了别的实例（同一个工作区里另开的会话）。用例借它验：「宿主机」页开着时
+// 查看的会话被别处切走，MCP 卡片要跟着换，旧卡片上的按钮不得把处置发到原来那个会话（#467 review）。
+app.post('/__other-device-views', (_req, res) => {
+  if (!mockInstances.some(i => i.instanceId === 'inst_other')) {
+    mockInstances.push({ ...createDefaultInstances()[0], instanceId: 'inst_other', sessionId: 'mock-session-other-device', title: 'Other Device Session' });
+  }
+  viewingInstanceId = 'inst_other';
   broadcastMockInstances();
   res.json({ ok: true });
 });
@@ -1527,6 +1588,9 @@ function mainCwdSessions() {
   if (untitledSessionArmed) {
     sessions.push({ id: 'mock-session-untitled', title: '(无标题)', lastUsedAt: mockListClockBase - 30000, entrypoint: 'sdk-ts' });
   }
+  for (const row of sessions) {
+    if (renamedSessionTitles.has(row.id)) row.title = renamedSessionTitles.get(row.id);
+  }
   return sessions;
 }
 
@@ -1600,9 +1664,11 @@ io.on('connection', socket => {
         ],
         skillsCount: 7,
         permissionMode: permissionMode,
+        // 故意不列 model：真 CLI 的 init 清单里有 model，前端据此把 /model 透传给 CLI；mock 不列，
+        // P0-09e/j 才测得到前端本地的 /model 分支（CLI 不列 model 时走它）。#456 之前靠的是 mock 发对象、
+        // includes('model') 匹配不上——改成按名字判断后，列着它这两条就测不到本地分支了。
         slashCommands: [
           { name: 'help', description: 'Show help guide' },
-          { name: 'model', description: 'Switch active model' },
           { name: 'effort', description: 'Adjust Claude thinking effort' },
           // terminal 绑定命令：故意留在 slashCommands 里（真 SDK 也是这样——terminal_slash_commands
           // 是 slash_commands 的【子集】，不是从中剔除后的补集）。前端负责在补全菜单里滤掉它。
@@ -1783,6 +1849,32 @@ io.on('connection', socket => {
     // 「无文件夹」会话：真 server 在它是那个 scratch 目录里最后一个会话时连目录一起删，ack 带 scratchRemoved
     const scratch = typeof payload?.cwd === 'string' && payload.cwd.startsWith(`${MOCK_SCRATCH_ROOT}/`);
     if (typeof ack === 'function') ack({ ok: true, ...(scratch ? { scratchRemoved: true } : {}) });
+  });
+
+  // 会话改名（#458，真 server：app.js 的 session:rename → SDK renameSession）。ack 形状照真 server。
+  // 清洗只做 trim 判空——真 server 的换行 / 控制字符 / 限长由 tests/unit/session-rename.test.mjs 守。
+  // 失败与「终端可能盖回去」两条路钉在固定输入上，不做一次性开关（理由同上面 deletePermanent 那段）：
+  // 标题 MOCK_RENAME_FAIL 走写入失败；mock-session-gap 的夹具语义本来就是「终端还开着它」的那一行。
+  socket.on('session:rename', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const { sessionId } = payload || {};
+    if (typeof sessionId !== 'string' || !mainCwdSessions().some(s => s.id === sessionId)) {
+      ack({ ok: false, error: '会话不存在' });
+      return;
+    }
+    const title = typeof payload?.title === 'string' ? payload.title.trim() : '';
+    if (!title) { ack({ ok: false, error: '标题不能为空' }); return; }
+    if (title === 'MOCK_RENAME_FAIL') { ack({ ok: false, error: '改名失败：EACCES: permission denied' }); return; }
+    const finish = () => {
+      if (title === 'MOCK_RENAME_HELD_FAIL') { ack({ ok: false, error: '改名失败：迟到的错因' }); return; }
+      renamedSessionTitles.set(sessionId, title);
+      const inst = mockInstances.find(i => i.sessionId === sessionId);
+      if (inst) { inst.title = title.slice(0, 40); broadcastMockInstances(); }
+      ack({ ok: true, title, ...(sessionId === 'mock-session-gap' ? { terminalMayOverwrite: true } : {}) });
+    };
+    // 迟到的回执（P0-ROW-MENU-10）：扣到测试把新 sheet 打开之后再放
+    if (title.startsWith('MOCK_RENAME_HELD')) { heldRenameAcks.push({ title, finish }); return; }
+    finish();
   });
 
   // Handle Tab close
@@ -2645,6 +2737,17 @@ io.on('connection', socket => {
       callback({ messages: [], error: '会话不存在' });
       return;
     }
+    // 转后台（#459）：test:fg-task 那条前台 Bash 还挡着本轮时，磁盘上已有它的 tool_use、还没有结果——
+    // 切回会话走拉历史时，卡是从这里渲染出来的，不经 tool_use 事件
+    if (mockFgTask && sessionId === 'mock-session-visual-test') {
+      callback({
+        messages: [
+          { role: 'user', content: 'test:fg-task', uuid: 'u-fg-task-1' },
+          { kind: 'tool_use', role: 'assistant', toolUseId: mockFgTask.toolUseId, name: 'Bash', inputSummary: '{"command":"sleep 120 && echo done"}', uuid: 'a-fg-task-1' },
+        ],
+      });
+      return;
+    }
     // P0-ORDER：在 ack【之前】推一条 history_append，精确复刻真实时序——web 拉历史的往返窗口里，
     // server 的 catchUpTick 检出终端刚落定的消息就直接推过来了。前端先渲染这条增量、再收到历史本体，
     // 若历史只会 appendChild 到尾部，就会出现「新消息在上、整段旧历史在下」。
@@ -2719,6 +2822,21 @@ io.on('connection', socket => {
         timelineMessages.push(
           { kind: 'tool_use', role: 'assistant', toolUseId: 'tl-bash-long', name: 'Bash', inputSummary: '{"command":"cat build.log"}', timestamp: iso(0, 8, 31) },
           { kind: 'tool_result', role: 'user', toolUseId: 'tl-bash-long', ok: true, outputSummary: `${full.slice(0, 2000)} …（已截断）`, timestamp: iso(0, 8, 31) },
+        );
+      }
+      if (historyAskQuestionArmed) {
+        historyAskQuestionArmed = false;
+        // 真 server 的历史 tool_result 只带 ok（= !is_error）与原文；旧 transcript 是 deny 通道写进错误的中文，
+        // 新的是 CLI 自己的非错误文案。四张卡依次：旧·已回答、旧·已取消、新·已回答、新·没回答
+        const ask = (id, ok, outputSummary) => [
+          { kind: 'tool_use', role: 'assistant', toolUseId: id, name: 'AskUserQuestion', inputSummary: '{"questions":[{"question":"Which branch?"}]}', timestamp: iso(0, 8, 32) },
+          { kind: 'tool_result', role: 'user', toolUseId: id, ok, outputSummary, timestamp: iso(0, 8, 32) },
+        ];
+        timelineMessages.push(
+          ...ask('tl-ask-legacy', false, 'Error: 用户选择了：「main」'),
+          ...ask('tl-ask-legacy-cancel', false, 'Error: 问题已取消'),
+          ...ask('tl-ask-new', true, 'Your questions have been answered: "Which branch?"="main". You can now continue with these answers in mind.'),
+          ...ask('tl-ask-dismissed', true, 'The user did not answer the questions.'),
         );
       }
       // P0-DUP-OPT ③：武装后历史里多带一条「刚发出的那条用户消息」，对齐真 server 的写盘时序。
@@ -3564,6 +3682,16 @@ io.on('connection', socket => {
         callback({ ok: true, replayed, pending, unreadOnEntry, ...extra });
       }
     };
+    // 转后台（#459）：真 server 在 sync:since 收尾后给当前查看的实例补推一份前台任务快照（瞬时事件不进缓冲）。
+    // 照它的次序放在 ack 之后——这一份到的时候，切回走拉历史的话卡还没渲染出来
+    if (mockFgTask && instanceId === mockFgTask.instanceId) {
+      const fg = mockFgTask;
+      setTimeout(() => socket.emit('agent:event', {
+        seq: 1, epoch: fg.epoch, sessionId: 'mock-session-visual-test', instanceId: fg.instanceId, ts: Date.now(),
+        type: 'foreground_tasks', transient: true,
+        payload: { tasks: [{ taskId: fg.taskId, toolUseId: fg.toolUseId, taskType: 'local_bash', description: 'sleep 120 && echo done' }] },
+      }), 0);
+    }
     if (crashReloadSessionId && sessionId === crashReloadSessionId) {
       crashReloadSessionId = null;
       console.log('[mock] P0-DESTROY-CRASH — 重开崩溃过的会话，sync:since 报 diskLen，逼出清屏重载');
@@ -3902,6 +4030,7 @@ io.on('connection', socket => {
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
       armSyncAckTimeoutCrash: () => { syncAckTimeoutArmed = true; syncAckTimeoutCrashArmed = true; },
       armHistoryLongTool: () => { historyLongToolArmed = true; },
+      armHistoryAskQuestion: () => { historyAskQuestionArmed = true; },
       armSyncHoldThenDrop: () => { syncHoldThenDropArmed = true; },
       armSendTransientFail: () => { sendTransientFailArmed = true; },
       armOutboxPermanent: () => { outboxPermanentArmed = true; },
@@ -3922,9 +4051,11 @@ io.on('connection', socket => {
       // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 时的全量推送。真 server 侧由
       // app/src/agent/agent.js 的同名 subtype 分支转成 slash_commands 事件，这里直接产出那个事件。
       //
-      // 列表故意与首帧 init 的（help / model / effort）**不同且不是超集**：契约语义是 REPLACE 整份
-      // 列表而非合并，只有让旧命令真的消失，E2E 才区分得出这两种实现。保留 model 一项是因为
-      // app.js 对 `/model` 有条 includes('model') 的特判分支，去掉它会顺带改变那条无关行为。
+      // 列表故意与首帧 init 的（help / effort）**不同且不是超集**：契约语义是 REPLACE 整份
+      // 列表而非合并，只有让旧命令真的消失，E2E 才区分得出这两种实现。
+      // model 给 P0-02q：CLI 列了 model 时 /model 透传给 CLI（真机 init 就是这样，首帧 init 不列它的理由见那里）。
+      // review-pr / usage / xss-probe 给 P0-02o（#456）：参数提示、别名匹配、第三方说明按纯文本显示。
+      // 别名不取 c / h 开头：P0-02n 用 /c、/h 断言菜单为空。
       commands: ['test:commands-changed'],
       run: async ({ activeInst }) => {
         // epoch:'server' 与首帧 init/models 同源：这类会话元信息不属于任何一轮对话，
@@ -3935,7 +4066,10 @@ io.on('connection', socket => {
             slashCommands: [
               { name: 'deploy', description: 'Deploy to production' },
               { name: 'rollback', description: 'Roll back the last deploy' },
-              { name: 'model', description: 'Switch active model' },
+              { name: 'model', description: 'Set the AI model for Claude Code' },
+              { name: 'review-pr', description: 'Review a pull request', argumentHint: '<pr-number>' },
+              { name: 'usage', description: 'Show plan usage', aliases: ['stats'] },
+              { name: 'xss-probe', description: '<img src=x onerror="window.__slashXss=1">' },
               // ★ color 必须留在这份新列表里，否则「推送后 /color 仍不出现在补全」那条断言恒真
               // ——新列表本来就没有它，测的就不是「名单是否被沿用」了（正对照：仪器得先看得见）。
               // 真 server 侧这条路【带不到】terminal 名单（SDK 的 SlashCommand[] 无该标记），
@@ -4140,7 +4274,7 @@ io.on('connection', socket => {
           });
           socket.emit('agent:event', {
             seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'tool_result', payload: { toolUseId: pendingQuestion.toolUseId, ok: true, outputSummary: `answered on another trusted device: ${selectedOption}`, denyKind: 'answered' }
+            type: 'tool_result', payload: { toolUseId: pendingQuestion.toolUseId, ok: true, outputSummary: `answered on another trusted device: ${selectedOption}` }
           });
           socket.emit('agent:event', {
             seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -5426,6 +5560,62 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_background_taskprogress_1', durationMs: 350, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      // MCP elicitation（#460）：服务器要表单输入 / URL 授权，本轮挂着等作答（真 server 的字段描述由
+      // app/src/agent/elicitation.js 从 schema 归一，这里直接给归一后的形状）。-html 那档的 message 夹着 HTML，
+      // 卡片必须按纯文本显示。作答走下面的 elicitation:respond。
+      // -defaults 那档：date-time 字段带 Z 结尾的默认值、名字上限 2 个字（服务端按码点数）
+      commands: ['test:elicitation-form', 'test:elicitation-url', 'test:elicitation-html', 'test:elicitation-defaults'],
+      run: async ({ activeInst, cmd }) => {
+        const createdAt = Date.now();
+        const base = { serverName: 'mock-notes', createdAt, expiresAt: createdAt + 30 * 60_000 };
+        const card = cmd === 'test:elicitation-url'
+          ? { ...base, requestId: 'mock-elicit-url', message: '去浏览器授权 mock-notes', mode: 'url',
+            url: 'https://auth.example.com/authorize?state=1', urlOrigin: 'https://auth.example.com', elicitationId: 'mock-el-1' }
+          : cmd === 'test:elicitation-html'
+            ? { ...base, requestId: 'mock-elicit-html', message: '<img src=x onerror="window.__elicitXss=1"><b>粗体</b>', mode: 'form', fields: [] }
+            : cmd === 'test:elicitation-defaults'
+              ? { ...base, requestId: 'mock-elicit-defaults', message: '确认提醒', mode: 'form', fields: [
+                { name: 'name', type: 'string', title: '图标', required: true, minLength: 2, maxLength: 2 },
+                { name: 'at', type: 'string', format: 'date-time', title: '提醒时间', required: true, default: '2026-10-29T08:30:00Z' },
+              ] }
+            : { ...base, requestId: 'mock-elicit-form', message: '新笔记叫什么？', mode: 'form', title: '新建笔记', fields: [
+              { name: 'name', type: 'string', title: '名字', required: true, minLength: 2 },
+              { name: 'pin', type: 'boolean', title: '置顶', required: false },
+              { name: 'color', type: 'enum', title: '颜色', required: false, options: [{ value: 'r', label: '红' }, { value: 'g', label: '绿' }] },
+            ] };
+        mockElicitation = { ...card, epoch: activeEpoch, instanceId: viewingInstanceId };
+        // 真 server 的 pendingRequestsSnapshot 同样带上它：刷新 / 重连后前端据此重建卡片
+        syncPendingSnapshot = { permissions: [], questions: [], elicitations: [card] };
+        if (activeInst) activeInst.state = 'permission';
+        broadcastMockInstances();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'elicitation', payload: card,
+        });
+      },
+    },
+    {
+      // 转后台（#459）：一条跑得久的前台 Bash 挡着本轮——工具卡 + foreground_tasks 快照，本轮不收尾，
+      // 等 task:background（handler 在下面，照 SDK d.ts 描述的次序回事件）。-disabled 那档的会话禁用了后台任务。
+      commands: ['test:fg-task', 'test:fg-task-disabled'],
+      run: async ({ activeInst, cmd }) => {
+        mockBgTasksDisabled = cmd === 'test:fg-task-disabled';
+        mockFgTask = { taskId: 'mock-fg-task', toolUseId: 'toolu_mock_fg', epoch: activeEpoch, instanceId: viewingInstanceId };
+        if (activeInst) activeInst.state = 'busy';
+        broadcastMockInstances();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: mockFgTask.toolUseId, name: 'Bash', inputSummary: '{"command":"sleep 120 && echo done"}' },
+        });
+        await delay(100);
+        io.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'foreground_tasks', transient: true,
+          payload: { tasks: [{ taskId: mockFgTask.taskId, toolUseId: mockFgTask.toolUseId, taskType: 'local_bash', description: 'sleep 120 && echo done' }] },
         });
       },
     },
@@ -6858,21 +7048,22 @@ io.on('connection', socket => {
   // Handle user question choice selection (optionIndex / optionIndexes / freeText)
   // 整组作答收尾：逐题 + 整组 request_resolved（与真 server 同序）、tool_result、复述答案、result。
   // 本机整组提交与「其它设备已答」共用。
+  // labels[i] 为 null ＝ 那题留着没答（#455 起按 skipped 提交），逐题 outcome 同真 server 记 skipped。
   async function finishMockQuestionGroup(activeInst, labels, via) {
     const group = pendingQuestionGroup;
     pendingQuestionGroup = null;
-    const summary = group.questions.map((q, i) => `${q.header}=${labels[i]}`).join('; ');
+    const summary = group.questions.map((q, i) => `${q.header}=${labels[i] ?? '(skipped)'}`).join('; ');
     group.questions.forEach((_, i) => io.emit('agent:event', {
       seq: 5 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'request_resolved', payload: { requestId: `${group.toolUseId}#${i}`, kind: 'question', outcome: 'answered' }
+      type: 'request_resolved', payload: { requestId: `${group.toolUseId}#${i}`, kind: 'question', outcome: labels[i] == null ? 'skipped' : 'answered' }
     }));
     io.emit('agent:event', {
       seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'request_resolved', payload: { requestId: group.toolUseId, kind: 'question', outcome: summary }
+      type: 'request_resolved', payload: { requestId: group.toolUseId, kind: 'question', outcome: 'answered' }
     });
     socket.emit('agent:event', {
       seq: 9, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'tool_result', payload: { toolUseId: group.toolUseId, ok: true, outputSummary: `${via}: ${summary}`, denyKind: 'answered' }
+      type: 'tool_result', payload: { toolUseId: group.toolUseId, ok: true, outputSummary: `${via}: ${summary}` }
     });
     socket.emit('agent:event', {
       seq: 10, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -6890,13 +7081,59 @@ io.on('connection', socket => {
     });
   }
 
+  // 「不回答」（#455）：同真 server 的 dismissQuestion——逐题与整组 outcome=dismissed，tool_result 是 CLI 的非错误文案
+  // 「The user did not answer the questions.」，本轮继续（不是中止）。单题卡发的也是整组 key（toolUseID）。
+  async function finishMockQuestionDismissed(activeInst, { toolUseId, requestIds, messageId }) {
+    requestIds.forEach((requestId, i) => io.emit('agent:event', {
+      seq: 5 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'request_resolved', payload: { requestId, kind: 'question', outcome: 'dismissed' }
+    }));
+    io.emit('agent:event', {
+      seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'request_resolved', payload: { requestId: toolUseId, kind: 'question', outcome: 'dismissed' }
+    });
+    socket.emit('agent:event', {
+      seq: 9, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'tool_result', payload: { toolUseId, ok: true, outputSummary: 'The user did not answer the questions.' }
+    });
+    socket.emit('agent:event', {
+      seq: 10, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'text_delta', payload: { messageId, text: 'No answer given, carrying on with the default plan.' }
+    });
+    await delay(250);
+    activeInst.state = 'idle';
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: activeInst.cwd, ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }
+    });
+    socket.emit('agent:event', {
+      seq: 11, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'result', payload: { messageId, durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
+    });
+  }
+
   socket.on('user:answer', async payload => {
-    // 整组提交：与真 server 一样，没覆盖全部题就整组不收（agent.js resolveQuestionGroup）
+    if (payload?.dismiss === true) {
+      const activeInst = mockInstances.find(i => i.instanceId === (payload.instanceId || viewingInstanceId));
+      const key = String(payload.requestId || '').replace(/#\d+$/, '');
+      if (pendingQuestionGroup?.toolUseId === key) {
+        const group = pendingQuestionGroup;
+        pendingQuestionGroup = null;
+        await finishMockQuestionDismissed(activeInst, { toolUseId: key, requestIds: group.questions.map((_, i) => `${key}#${i}`), messageId: group.messageId });
+      } else if (pendingQuestion && (pendingQuestion.toolUseId || pendingQuestion.requestId.split('#')[0]) === key) {
+        const q = pendingQuestion;
+        pendingQuestion = null;
+        await finishMockQuestionDismissed(activeInst, { toolUseId: key, requestIds: [q.requestId], messageId: q.messageId });
+      }
+      return;
+    }
+    // 整组提交：与真 server 一样，没覆盖全部题就整组不收（agent.js resolveQuestionGroup）；没答的题显式 skipped
     if (Array.isArray(payload?.answers) && pendingQuestionGroup?.toolUseId === payload.requestId) {
       const { questions } = pendingQuestionGroup;
       if (payload.answers.length !== questions.length) return;
       const labels = questions.map((q, i) => {
         const a = payload.answers.find(x => x?.index === i) || {};
+        if (a.skipped === true) return null;
         if (typeof a.freeText === 'string') return a.freeText;
         if (Array.isArray(a.optionIndexes)) return a.optionIndexes.map(k => q.options[k]).join('、');
         return q.options[a.optionIndex];
@@ -6943,7 +7180,7 @@ io.on('connection', socket => {
 
       socket.emit('agent:event', {
         seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-        type: 'tool_result', payload: { toolUseId: pendingQuestion.toolUseId, ok: true, outputSummary: `User selected: ${selectedOption}`, denyKind: 'answered' }
+        type: 'tool_result', payload: { toolUseId: pendingQuestion.toolUseId, ok: true, outputSummary: `User selected: ${selectedOption}` }
       });
 
       socket.emit('agent:event', {
@@ -7015,6 +7252,90 @@ io.on('connection', socket => {
     const first = !mockStoppedTaskIds.has(taskId);
     mockStoppedTaskIds.add(taskId);
     if (typeof ack === 'function') ack({ ok: first });
+  });
+
+  // MCP elicitation 作答（#460，真 server：app.js 的 elicitation:respond → agent.resolveElicitation）。
+  // 只模拟一条校验（名字至少 2 个字）好让「拒收、卡片不关」可测。URL 模式 accept 后只发 elicitation_complete、
+  // 本轮不收尾（真 CLI 里授权完 MCP 工具接着跑）——result 会清掉所有卡片，收尾了就看不出「等待完成」是被谁关的。
+  socket.on('elicitation:respond', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    mockElicitationLog.push(payload || null);
+    const card = mockElicitation;
+    if (!card || payload?.requestId !== card.requestId) { ack({ ok: false, error: '这个请求已经结束了' }); return; }
+    if (payload.action === 'accept' && card.mode === 'form' && card.fields.length
+      && !(typeof payload.content?.name === 'string' && [...payload.content.name].length >= 2)) {
+      ack({ ok: false, error: '「名字」至少 2 个字' });
+      return;
+    }
+    mockElicitation = null;
+    syncPendingSnapshot = null;
+    const base = { epoch: card.epoch, sessionId: 'mock-session-visual-test', instanceId: card.instanceId };
+    io.emit('agent:event', { ...base, seq: 2, ts: Date.now(), type: 'request_resolved', payload: { requestId: card.requestId, kind: 'elicitation', outcome: payload.action } });
+    ack({ ok: true });
+    if (card.mode === 'url' && payload.action === 'accept') {
+      await delay(300);
+      io.emit('agent:event', { ...base, seq: 3, ts: Date.now(), type: 'system', payload: { kind: 'elicitation_complete', serverName: card.serverName, elicitationId: card.elicitationId, message: `${card.serverName} 已确认授权完成` } });
+      return;
+    }
+    const inst = mockInstances.find(i => i.instanceId === card.instanceId);
+    if (inst) inst.state = 'idle';
+    broadcastMockInstances();
+    io.emit('agent:event', { ...base, seq: 4, ts: Date.now(), type: 'result', payload: { messageId: 'msg_elicit_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] } });
+  });
+
+  // 转后台（#459，真 server：app.js 的 task:background → agent.backgroundTasks）。ack 形状照真 server。
+  // 成功后照 SDK d.ts 的次序：前台集合清空 → 它进后台任务快照（横幅接住）→「running in the background」的
+  // tool_result → 本轮收尾。
+  socket.on('task:background', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const fg = mockFgTask;
+    if (!fg) { ack({ ok: false, reason: 'no_instance' }); return; }
+    if (mockBgTasksDisabled) { ack({ ok: false, reason: 'disabled', error: 'Background tasks are disabled in this session.' }); return; }
+    if (payload?.toolUseId !== undefined && payload.toolUseId !== fg.toolUseId) { ack({ ok: false, reason: 'not_found' }); return; }
+    mockFgTask = null;
+    ack({ ok: true });
+    const base = { epoch: fg.epoch, sessionId: 'mock-session-visual-test', instanceId: fg.instanceId };
+    io.emit('agent:event', { ...base, seq: 1, ts: Date.now(), type: 'foreground_tasks', transient: true, payload: { tasks: [] } });
+    const bgTask = { taskId: fg.taskId, taskType: 'local_bash', message: 'sleep 120 && echo done', description: 'sleep 120 && echo done' };
+    io.emit('agent:event', { ...base, seq: 1, ts: Date.now(), type: 'task_progress', transient: true, payload: { ...bgTask, tasks: [bgTask] } });
+    await delay(50);
+    io.emit('agent:event', {
+      ...base, seq: 2, ts: Date.now(), type: 'tool_result',
+      payload: { toolUseId: fg.toolUseId, ok: true, outputSummary: `Command running in background with ID: ${fg.taskId}` },
+    });
+    const inst = mockInstances.find(i => i.instanceId === fg.instanceId);
+    if (inst) inst.state = 'idle';
+    broadcastMockInstances();
+    io.emit('agent:event', {
+      ...base, seq: 3, ts: Date.now(), type: 'result',
+      payload: { messageId: 'msg_fg_task_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] },
+    });
+  });
+
+  // MCP（#457，真 server：app.js 的 mcp:* → agent.mcpStatus / reconnectMcp / toggleMcp）。ack 形状照真 server。
+  socket.on('mcp:status', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    mockMcpLog.push({ event: 'mcp:status', instanceId: payload?.instanceId ?? null });
+    ack(mockMcpLive ? { ok: true, live: true, servers: mockMcpLive.map(x => ({ ...x })) } : { ok: true, live: false });
+  });
+  socket.on('mcp:reconnect', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    mockMcpLog.push({ event: 'mcp:reconnect', instanceId: payload?.instanceId ?? null, name: payload?.name });
+    const server = mockMcpLive?.find(x => x.name === payload?.name);
+    if (!server) { ack({ ok: false, error: 'no_instance' }); return; }
+    mockMcpReconnectTries += 1;
+    if (mockMcpReconnectTries === 1) { ack({ ok: false, error: 'Server postgres failed to start: Connection closed' }); return; }
+    server.status = 'connected';
+    delete server.error;
+    ack({ ok: true });
+  });
+  socket.on('mcp:toggle', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    mockMcpLog.push({ event: 'mcp:toggle', instanceId: payload?.instanceId ?? null, name: payload?.name });
+    const server = mockMcpLive?.find(x => x.name === payload?.name);
+    if (!server || typeof payload?.enabled !== 'boolean') { ack({ ok: false, error: 'no_instance' }); return; }
+    server.status = payload.enabled ? 'connected' : 'disabled';
+    ack({ ok: true });
   });
 
   // 额度墙自动继续横幅的按钮（真 server：app.js 的 user:autoContinue → auto-continue.js 的 act()）。

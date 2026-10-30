@@ -618,6 +618,8 @@ export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
   } else if (action === 'session_delete_l2') {
     const why = AUDIT_DELETE_REJECT_REASON[d.reason];
     text = `${t('永久删除会话')} ${tgt}${why ? ` · ${t(why)}` : ''}`;
+  } else if (action === 'session_rename') {
+    text = `${t('重命名会话')} ${tgt}`;
   } else if (action === 'file_write') {
     // 路径尾段即可：手机屏放不下绝对路径，而「改了哪个文件」才是这条记录的信息量所在。
     text = `${t('写入文件')} ${tgt.split('/').pop() || tgt}`;

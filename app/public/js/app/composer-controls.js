@@ -387,8 +387,11 @@ export function createComposerControls(context, {
     autosize();
     updateSendButtonState();
   }
-  // 前端本地拦截命令（不透传后端），并入提示列表
-  const LOCAL_COMMANDS = ['model', 'rewind'];
+  // 前端本地拦截命令（不透传后端），并入提示列表。说明现取 t()：跟着当前语言走
+  const localCommandHints = () => [
+    { name: 'model', description: t('切换模型') },
+    { name: 'rewind', description: t('把代码和/或对话恢复到之前的某个时间点') },
+  ];
 
   inputEl.addEventListener('input', () => {
     const val = inputEl.value;
@@ -400,15 +403,18 @@ export function createComposerControls(context, {
       const matches = buildSlashCommandHints({
         commands: window.availableSkills || [],
         terminalCommands: window.terminalSlashCommands || [],
-        localCommands: LOCAL_COMMANDS,
+        localCommands: localCommandHints(),
         prefix: val.slice(1),
       });
       cmdHintActiveIndex = -1;
       if (matches.length > 0) {
+        // 说明与参数提示来自 skill / 插件 / MCP 文件，是第三方内容：一律 esc() 后才进 innerHTML
         hints.innerHTML = matches.map((cmd, i) => {
-          const safe = esc(cmd);
+          const safe = esc(cmd.name);
           const id = composerHintOptionId('cmd', i);
-          return `<div id="${id}" role="option" aria-selected="false" class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm font-mono" data-cmd="/${safe}">/${safe}</div>`;
+          const arg = cmd.argumentHint ? ` <span class="text-ink-soft">${esc(cmd.argumentHint)}</span>` : '';
+          const desc = cmd.description ? `<div class="slash-hint-desc text-xs text-ink-soft truncate">${esc(cmd.description)}</div>` : '';
+          return `<div id="${id}" role="option" aria-selected="false" class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm" data-cmd="/${safe}"><div class="font-mono truncate">/${safe}${arg}</div>${desc}</div>`;
         }).join('');
         hints.classList.remove('hidden');
         setComposerHintExpanded('cmdHints');
@@ -431,8 +437,8 @@ export function createComposerControls(context, {
     if (!hints.contains(e.target) && e.target !== inputEl) hideCmdHints();
     if (atMentionList && !atMentionList.contains(e.target) && e.target !== inputEl) hideAtMentionList();
     // 点抽屉外面任意处 = 收抽屉。通用确认 sheet 与会话行「⋯」菜单（z-50，盖在抽屉之上）不算「外面」：
-    // 从抽屉里发起的操作（标为已读 / 未读、删除）做完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。
-    const insideConfirmSheet = Boolean(e.target.closest?.('#confirmModal, #sessionMenuModal'));
+    // 从抽屉里发起的操作（标为已读 / 未读、重命名、删除）做完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。
+    const insideConfirmSheet = Boolean(e.target.closest?.('#confirmModal, #sessionMenuModal, #sessionRenameModal'));
     // 本身就是「打开抽屉」入口的按钮（顶栏「需要你」chip、落地页「选择其他会话」）：同一次点击冒泡到这里，
     // 不豁免就是开了又立刻关上（验收 O37）。新入口在 index.html 上标 data-opens-drawer 即可。
     const opensDrawer = Boolean(e.target.closest?.('[data-opens-drawer]'));

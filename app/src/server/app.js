@@ -22,12 +22,13 @@ import { createRequire } from 'node:module';
 import express from 'express';
 import { Server } from 'socket.io';
 import { AgentSession } from '../agent/agent.js';
-import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
+import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, renameSession as sdkRenameSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, defaultsFromResolvedSettings, permissionRulesFromEffectiveSettings, autoModeBlocked, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
 import * as folderOrder from '../sessions/folder-order.js';
-import { getSessionHistory, getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
+import { getSessionHistory, getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, readLastCustomTitle, isSafeSessionId } from '../sessions/history.js';
+import { createSessionRenamer, sanitizeSessionTitle } from '../sessions/session-rename.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -66,9 +67,11 @@ import {
   createModelsCache,
   createCwdKeyedCache,
   isCwdDefaultModel,
+  mergeInitSlashCommands,
   modelListSignature,
   normalizeSlashCommands,
   resolveSlashCommandsForCwd,
+  slashCommandNames,
 } from '../agent/models-cache.js';
 import { createCfAccessStrategy } from '../auth/auth-strategy.js';
 import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
@@ -770,7 +773,7 @@ const getMetricsPayload = () => {
   const failed = errorInstances.size;
   let awaiting = 0;
   for (const agent of agents.values()) {
-    if (agent.pendingPermissions.size > 0 || agent.pendingQuestions.size > 0) awaiting += 1;
+    if (agent.pendingPermissions.size > 0 || agent.pendingQuestions.size > 0 || agent.pendingElicitations.size > 0) awaiting += 1;
   }
   // OPS-3：StateProbe notify_failed 必须覆盖双通道——仅计 push 时，纯 ntfy 用户失败永不翻状态。
   const notifyFailed = (counters.push_failure ?? 0) + (counters.ntfy_failure ?? 0);
@@ -1206,6 +1209,8 @@ io.use(async (socket, next) => {
 
 // ---- 实例并行内核（台阶3：每「会话/tab」一个常驻实例，显式 open、后台并行存活）----
 const instanceManager = createInstanceManager();
+// 网页改名的退出补写（#458）：pending 状态挂在这里，handler 只管调
+const sessionRenamer = createSessionRenamer({ renameSession: sdkRenameSession, readLastCustomTitle });
 const agents = instanceManager.agents;
 const permModeByInstance = instanceManager.permissionModes;
 const effortByInstance = instanceManager.efforts;
@@ -1235,13 +1240,13 @@ const cliDefaultsInflight = new Map();        // cwd → Promise（并发去重�
 // 台阶3 Step B 角标：doneInstances = 后台（≠viewingInstanceId）完成但未查看的实例 latch
 // （后台轮次 result 置位；该实例新活动 init/审批 或被切为 viewingInstanceId 时清）。instanceState 由实例
 // 在途态 + latch 推导（无实例=idle）；broadcastInstances 在轮次/审批边界推送，前端据此渲染 tab 栏角标 + 通知。
-const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'request_resolved', 'tool_use', 'task_notification', 'system']);
+const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'elicitation', 'request_resolved', 'tool_use', 'task_notification', 'system']);
 const BG_TYPE_TO_TOOL = { local_agent: 'Agent', local_bash: 'Bash' }; // 后台任务类型 → 前端 TOOL_BADGE 键（🤖 Agent / 🖥 Bash）；未知类型 → null → ⏳
 // "等我"跨会话聚合（AttentionDeriver）：跨全部 live 实例（不限 viewingCwd）
 // 投影 needsYou。数据源=运行时 agents（读模型投影，非新数据源）：
 //   ①审批维度——每个 live 实例的 pendingPermissions（已有 createdAt/expiresAt，承接审批 TTL 阶段），
 //     此处过滤 now<=expiresAt（deriveAttention 契约要求调用方先过滤，保持纯函数不依赖 Date.now()）；
-//   ②输入维度——pendingQuestions（本次新增 createdAt），仅当该实例无 pendingPermissions 时计入
+//   ②输入维度——pendingQuestions（本次新增 createdAt）与 pendingElicitations（MCP 表单 / 授权，#460），仅当该实例无 pendingPermissions 时计入
 //     awaiting_input（镜像 StatusDeriver 优先级：审批 > 输入，与 instanceState() 的 'permission' 判定一致）。
 // 边界（已知盲区，如实登记）：纯终端会话的等待态不经此路径可见——本函数只覆盖 web 后端驱动的 live 实例。
 function computeNeedsYou() {
@@ -1264,10 +1269,10 @@ function computeNeedsYou() {
       hasLiveApproval = true;
       pendingApprovals.push({ sessionId: a.sessionId, cwd: a.cwd, title, requestId, createdAt: p.createdAt, toolName: p.name });
     }
-    if (!hasLiveApproval && a.pendingQuestions.size > 0) {
+    if (!hasLiveApproval && (a.pendingQuestions.size > 0 || a.pendingElicitations.size > 0)) {
       // AG-NEW-003：与 permissions 对称过滤 expiresAt（timer 已删 Map 时此窗极短，仍防 residual）
       let hasLiveQuestion = false;
-      for (const [, q] of a.pendingQuestions) {
+      for (const q of [...a.pendingQuestions.values(), ...a.pendingElicitations.values()]) {
         if (typeof q.expiresAt === 'number' && now > q.expiresAt) continue;
         hasLiveQuestion = true;
         if (awaitingSince === undefined || q.createdAt < awaitingSince) awaitingSince = q.createdAt;
@@ -1845,7 +1850,7 @@ refreshStatuslineInstallState();
 const INIT_CACHE = join(DATA_DIR, 'init-cache.json');
 let lastInit = null;
 const modelsCache = createModelsCache();
-const slashCommandsCache = createCwdKeyedCache(); // cwd → { slashCommands: string[] }
+const slashCommandsCache = createCwdKeyedCache(); // cwd → { slashCommands: {name, description?, argumentHint?, aliases?}[], terminalSlashCommands: string[] }
 // per-cwd「CLI 默认模型」缓存：新会话/无记录续接在 init 返回前显它、而非笼统「沿用当前」（只显示、不改发送）。
 // 仅由「未 resume 且未 pin model」的启动填充（scout / fresh 首 init，判据 isCwdDefaultModel）。
 const defaultModelByCwd = new Map();
@@ -1920,6 +1925,22 @@ function pushSlashCommandsForCwd(cwd) {
       terminalSlashCommands: cmds.terminalSlashCommands, // 与命令列表同批下发，前端才不会拿旧名单过滤新列表
     },
   });
+}
+
+// supportedCommands() / commands_changed 拿到的全量清单落缓存（实例与 scout 共用），返回归一后的列表，空则 null。
+// 同 init 那条「空列表不写」。故意不为 REPLACE 语义单开一条清空路径——空推送只可能来自 skill 被删这种极罕见场景，
+// 而放行空写会让「CLI 未就绪时报空」也一并冲掉好缓存，两害相权取轻。
+// 【terminal 名单沿用上一条 init，不跟着一起重置】SDK 的 SlashCommand[]（name/description/argumentHint/aliases）
+// **不带** terminalOriented 标记——这条路根本拿不到名单。整条覆盖会把 init 存下的名单抹成空，于是 /color /statusline
+// 会在任何一次 skill 变动后重新冒回补全菜单（而那正是本功能要挡的）。名单是 CLI 版本级的量、不随 skill 增删而变，
+// 沿用是正确语义而非将就。
+function adoptSlashCommands(cwd, raw) {
+  const cmds = normalizeSlashCommands(raw);
+  if (!cmds) return null;
+  const keptTerminal = slashCommandNames(slashCommandsCache.get(cwd)?.terminalSlashCommands) ?? [];
+  slashCommandsCache.set(cwd, { slashCommands: cmds, terminalSlashCommands: keptTerminal });
+  saveInitCache();
+  return cmds;
 }
 
 // ---- statusline 单一来源路由：Web 驾驶用 SDK；CLI 镜像/外部脏上下文用按 session 隔离的 CLI 快照 ----
@@ -2217,14 +2238,19 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
       metrics.inc('events'); // 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
       const drivingCwd = instance.cwd; // 见 onSessionId 里的说明：闭包 cwd 会在 EnterWorktree 后过期
       if (envelope.type === 'init') {
+        // slash 命令按本实例 cwd 归键（project/local skill 随区变）；空列表不写，避免冲掉更好缓存。
+        // init 只带名字（#456）：成员以它为准，说明沿用缓存里 supportedCommands() 拿到的那份。转发前把信封里的
+        // 换成合并后的——原样转发会让手机菜单每轮 init 都降级成光秃秃的名字。agent 的环形缓冲存的是同一个
+        // 信封对象，sync:since 回放拿到的也是这份。
+        const cached = slashCommandsCache.get(drivingCwd);
+        const cmds = mergeInitSlashCommands(envelope.payload?.slashCommands, cached?.slashCommands ?? cached);
+        if (cmds) envelope.payload = { ...envelope.payload, slashCommands: cmds };
         lastInit = envelope.payload;
-        // slash 命令按本实例 cwd 归键（project/local skill 随区变）；空列表不写，避免冲掉更好缓存
-        const cmds = normalizeSlashCommands(envelope.payload?.slashCommands);
         // terminal 名单【只有 init 这条路带得到】（commands_changed 的 SlashCommand[] 无此标记），
-        // 所以随命令一起落缓存，供下面 slash_commands 分支沿用。无名单显式落成 []（= 没有要隐藏的）。
+        // 所以随命令一起落缓存，供 adoptSlashCommands 沿用。无名单显式落成 []（= 没有要隐藏的）。
         if (cmds) slashCommandsCache.set(drivingCwd, {
           slashCommands: cmds,
-          terminalSlashCommands: normalizeSlashCommands(envelope.payload?.terminalSlashCommands) ?? [],
+          terminalSlashCommands: slashCommandNames(envelope.payload?.terminalSlashCommands) ?? [],
         });
         saveInitCache();
       }
@@ -2237,22 +2263,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
           saveInitCache();
         }
       }
-      // CLI 中途发现新命令/skill 的全量推送（SDK commands_changed）。缓存策略与上面 init 那条**共用同一条**：
-      // 同样按 cwd 归键、同样「空列表不写」。故意不在这里为 REPLACE 语义单开一条清空路径——空推送
-      // 只可能来自 skill 被删这种极罕见场景，而放行空写会让「CLI 未就绪时报空」也一并冲掉好缓存，
-      // 两害相权取轻。前端那侧收到空数组仍会清当前补全列表，下次 init 修正。
+      // 全量命令清单：CLI 中途发现新命令/skill 的推送（SDK commands_changed），或 supportedCommands() 拉到的（#456）。
+      // 按 cwd 归键落缓存，规则见 adoptSlashCommands。转发前同 init 换成归一后的（同名只留 builtin 那行）。
+      // 前端那侧收到空数组仍会清当前补全列表，下次 init 修正。
       else if (envelope.type === 'slash_commands') {
-        const cmds = normalizeSlashCommands(envelope.payload?.slashCommands);
-        if (cmds) {
-          // 【terminal 名单沿用上一条 init，不跟着一起重置】SDK 的 commands_changed 只带
-          // SlashCommand[]（name/description/argumentHint/aliases），**不带** terminalOriented 标记——
-          // 这条路根本拿不到名单。整条覆盖会把 init 存下的名单抹成空，于是 /color /statusline
-          // 会在任何一次 skill 变动后重新冒回补全菜单（而那正是本功能要挡的）。
-          // 名单是 CLI 版本级的量、不随 skill 增删而变，沿用是正确语义而非将就。
-          const keptTerminal = normalizeSlashCommands(slashCommandsCache.get(drivingCwd)?.terminalSlashCommands) ?? [];
-          slashCommandsCache.set(drivingCwd, { slashCommands: cmds, terminalSlashCommands: keptTerminal });
-          saveInitCache();
-        }
+        const cmds = adoptSlashCommands(drivingCwd, envelope.payload?.slashCommands);
+        if (cmds) envelope.payload = { ...envelope.payload, slashCommands: cmds };
       }
       // 批准内含的 mode 切换（ExitPlanMode 等经 agent.resolvePermission emit）：同步 per-instance 权威档，
       // 使重连 / instances 重放与手机端权限档图标一致（envelope 随后照常 io.emit → 前端 setPermMode）。
@@ -2299,7 +2315,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
           if (instance.sessionId) {
             sessions.updateSessionCost(instance.sessionId, (instance.historicalCostUsd || 0) + (instance.totalCostUsd || 0));
           }
-        } else if (envelope.type === 'init' || envelope.type === 'permission_request' || envelope.type === 'question') {
+        } else if (envelope.type === 'init' || envelope.type === 'permission_request' || envelope.type === 'question' || envelope.type === 'elicitation') {
           latchEventType = 'new_activity';
           // task_notification 在 STATE_BOUNDARY 里但【不】映射到 new_activity：它到达时 pendingTurns 仍 0（合成发生在
           // 后续 message_start），此刻清 error latch 会吞掉后台实例先前未确认的失败 ❗；且忙碌显示由合成的 pendingTurns
@@ -2321,7 +2337,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
         // 使下一次同类别通知不再被①层"未决不重复推"拦截（②层最小间隔仍照常生效，不因此重置）。
         if (envelope.type === 'request_resolved' && envelope.sessionId) {
           const category = envelope.payload?.kind === 'permission' ? 'approval'
-            : envelope.payload?.kind === 'question' ? 'input' : null;
+            : envelope.payload?.kind === 'question' || envelope.payload?.kind === 'elicitation' ? 'input' : null;
           if (category) notifyThrottleState = clearNotifyPending(envelope.sessionId, category, notifyThrottleState);
         }
         // E15 离线 web-push：文案映射抽到 notificationForEvent（纯函数、tests/unit/notifications 覆盖）。
@@ -2694,7 +2710,15 @@ function openScoutInstance(cwd) {
         cliConfigGen.noteListGen(cwd, spawnGen);
         saveInitCache();
         pushModelsForCwd(cwd);
-        cleanup();
+        // 命令清单与模型同出一次 initialize、回调紧随其后：当场 dispose 的话它到达时实例已 disposed、被丢掉（#456）
+        instance.commandsFetch.then(cleanup);
+      } else if (envelope.type === 'slash_commands') {
+        // 从没聊过的新工作区，发消息之前的完整命令清单就靠这一下（init 要等首条消息之后才来）。
+        // 只在它仍是新会话页 / 当前查看的目标时才推（判据同 session:new 的补播）：用户已切到别区的话，前端的 init handler
+        // 不看 cwd，推了就把那边的菜单换成这一区的（PR #466 review）。缓存照落，切回来时 pushSlashCommandsForCwd 会用上。
+        if (adoptSlashCommands(cwd, envelope.payload?.slashCommands) && (composeCwdNow() ?? viewingCwdOf()) === cwd) {
+          pushSlashCommandsForCwd(cwd);
+        }
       } else if (envelope.type === 'init') {
         // CLI 启动完成，init 已到 → 补调 fetchModels（首次在 start() 中可能因 CLI 未就绪静默失败）
         instance.fetchModels();
@@ -3097,6 +3121,7 @@ registerSocketConnection(io, socket => {
             bgTaskCount: a.bgTasks?.size ?? 0,
             pendingPermissionCount: a.pendingPermissions?.size ?? 0,
             pendingQuestionCount: a.pendingQuestions?.size ?? 0,
+            pendingElicitationCount: a.pendingElicitations?.size ?? 0,
           });
           interactionLog.addSessionLog(
             a.sessionId,
@@ -3556,9 +3581,14 @@ registerSocketConnection(io, socket => {
   });
 
   on(socket, 'user:answer', payload => {
-    const { requestId, optionIndex, optionIndexes, freeText, answers, instanceId } = payload || {};
+    const { requestId, optionIndex, optionIndexes, freeText, answers, dismiss, instanceId } = payload || {};
     if (typeof requestId !== 'string') return;
-    // 多题整组提交：requestId 是整组的 toolUseID，逐项校验在 resolveQuestionGroup
+    // 「不回答」（#455）：关掉整张卡、本轮继续。按整组结算，单题卡发来的 `${toolUseID}#0` 也认
+    if (dismiss === true) {
+      routeInstance(instanceId)?.dismissQuestion(requestId.replace(/#\d+$/, ''));
+      return;
+    }
+    // 多题整组提交：requestId 是整组的 toolUseID，逐项校验在 resolveQuestionGroup（含 { index, skipped: true }）
     if (Array.isArray(answers)) {
       routeInstance(instanceId)?.resolveQuestionGroup(requestId, answers);
       return;
@@ -3572,6 +3602,19 @@ registerSocketConnection(io, socket => {
     if (hasFree) opts.freeText = freeText;
     else if (hasMulti) opts.optionIndexes = optionIndexes;
     routeInstance(instanceId)?.resolveQuestion(requestId, hasIdx && !hasMulti && !hasFree ? optionIndex : null, Object.keys(opts).length ? opts : undefined); // 台阶3
+  });
+
+  // MCP elicitation 作答（#460）：action 只认三个字面量；表单内容的逐项校验在 agent.resolveElicitation，
+  // 按事件里下发的同一份字段描述（前后端不共用代码，校验只此一处）。不合法回原因、卡片留着让用户改。
+  on(socket, 'elicitation:respond', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const { instanceId, requestId, action, content } = payload || {};
+    if (typeof requestId !== 'string' || !requestId || requestId.length > 256 || !['accept', 'decline', 'cancel'].includes(action)) {
+      ack({ ok: false, error: 'invalid_payload' });
+      return;
+    }
+    const a = routeInstance(instanceId);
+    ack(a ? a.resolveElicitation(requestId, action, content) : { ok: false, error: '会话已经关闭' });
   });
 
   on(socket, 'user:interrupt', payload => routeInstance(payload?.instanceId)?.interrupt()); // 台阶3：按 instanceId 路由
@@ -3594,6 +3637,50 @@ registerSocketConnection(io, socket => {
   on(socket, 'task:stop', async (payload, ack) => {
     const ok = await routeInstance(payload?.instanceId)?.stopTask(payload?.taskId);
     if (typeof ack === 'function') ack({ ok: ok === true });
+  });
+  // 转后台（#459），对应终端 Ctrl+B：不带 toolUseId = 本实例全部前台任务，带 = 只转那个工具调用起的。
+  // 回执分档见 agent.backgroundTasks。只对本产品驱动的活实例生效：终端在驾驶时（只读镜像）本进程的 SDK 子进程
+  // 闲着、前台任务在终端那边，发过去只会是一次空操作——按没有实例处理（同 MCP 那条，#467 review）。
+  on(socket, 'task:background', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const toolUseId = payload?.toolUseId;
+    if (toolUseId !== undefined && !(typeof toolUseId === 'string' && toolUseId.length > 0 && toolUseId.length <= 256)) {
+      ack({ ok: false, reason: 'invalid_payload' });
+      return;
+    }
+    const a = routeInstance(payload?.instanceId);
+    if (!a || mirrorOwnedBy(a.sessionId, a.instanceId)) { ack({ ok: false, reason: 'no_instance' }); return; }
+    ack(await a.backgroundTasks(toolUseId));
+  });
+  // MCP 服务器（#457），对应终端 /mcp：实时状态 / 重连 / 启停。只对指定实例（缺省当前查看的那个）生效；显式指定但已关闭
+  // 的实例 routeInstance 为 null，不静默落到别的会话上——toggle 会写项目配置。
+  // 终端在驾驶这个会话时（只读镜像），本进程的 SDK 子进程还活着、只是闲着：它的 MCP 状态不是终端里那份，对它重连 / 启停
+  // 也作用不到终端——按没有活实例处理，status 回 live:false（前端退回 init 快照、不出按钮），处置回 no_instance（#467 review）。
+  // 名字是用户 / 插件写的配置键，这里只校验形状，显示由前端 textContent。
+  const isMcpName = name => typeof name === 'string' && name.length > 0 && name.length <= 256;
+  const mcpError = err => String(err?.message || err || 'error').slice(0, 500);
+  const mcpInstance = instanceId => {
+    const a = routeInstance(instanceId);
+    return a && !mirrorOwnedBy(a.sessionId, a.instanceId) ? a : null;
+  };
+  on(socket, 'mcp:status', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const servers = await mcpInstance(payload?.instanceId)?.mcpStatus();
+    ack(servers ? { ok: true, live: true, servers } : { ok: true, live: false });
+  });
+  on(socket, 'mcp:reconnect', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (!isMcpName(payload?.name)) { ack({ ok: false, error: 'invalid_payload' }); return; }
+    const a = mcpInstance(payload?.instanceId);
+    if (!a) { ack({ ok: false, error: 'no_instance' }); return; }
+    try { await a.reconnectMcp(payload.name); ack({ ok: true }); } catch (err) { ack({ ok: false, error: mcpError(err) }); }
+  });
+  on(socket, 'mcp:toggle', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (!isMcpName(payload?.name) || typeof payload?.enabled !== 'boolean') { ack({ ok: false, error: 'invalid_payload' }); return; }
+    const a = mcpInstance(payload?.instanceId);
+    if (!a) { ack({ ok: false, error: 'no_instance' }); return; }
+    try { await a.toggleMcp(payload.name, payload.enabled); ack({ ok: true }); } catch (err) { ack({ ok: false, error: mcpError(err) }); }
   });
 
   // 回空首页枢纽（与 session:new 分工）：
@@ -4422,6 +4509,39 @@ registerSocketConnection(io, socket => {
     ack({ ok: true, worktreeLeft, ...(scratchRemoved === undefined ? {} : { scratchRemoved }) });
   });
 
+  // 改名（#458）：SDK renameSession 往 transcript 尾追加一条 custom-title，不改写已有内容。校验口径同 deletePermanent。
+  // 活会话的 CLI 退出时会把内存里的旧标题写回来，退出补写见 sessions/session-rename.js。
+  on(socket, 'session:rename', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const { sessionId } = payload || {};
+    const cwd = routeCwd(payload?.cwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+      return ack({ ok: false, error: '会话不存在' });
+    }
+    const title = sanitizeSessionTitle(payload?.title);
+    if (!title) return ack({ ok: false, error: '标题不能为空' });
+    // 本产品没有实例在驱动它、transcript 却刚被写过：多半是终端开着它。CLI 之后回写旧名会盖掉这次改名，
+    // 而终端进程的退出信号本进程挂不上。照样改（改名是轻操作，禁止反而怪），只在回执里提示一句。
+    // 判据沿用删除那边的 mtime 静默期启发式。
+    const liveExits = instanceManager.sessionExitPromises(sessionId);
+    const mtimeMs = liveExits.length ? -1 : await sessionFileMtime(sessionId, cwd);
+    const terminalMayOverwrite = mtimeMs >= 0 && Date.now() - mtimeMs < sessionDeleteQuietMs;
+    try {
+      await sessionRenamer.rename({ sessionId, cwd, title, liveExits });
+    } catch (err) {
+      console.error(`[session-rename] 改名失败 sessionId=${sessionId}:`, err.message);
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_rename', target: sessionId, outcome: 'error', meta: { cwd } });
+      return ack({ ok: false, error: `改名失败：${err.message}` });
+    }
+    invalidateListCache(cwd);
+    // 实例广播的标题来自会话注册表：抽屉「运行中」那一行与别的设备靠它跟上；列表行由各端下一次 session:list 刷新
+    sessions.setSessionTitle(sessionId, title);
+    broadcastInstances();
+    audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_rename', target: sessionId, outcome: 'success', meta: { cwd } });
+    ack({ ok: true, title, ...(terminalMayOverwrite ? { terminalMayOverwrite: true } : {}) });
+  });
+
   // 保守部署一键回只读：.env FILE_EDIT=off 即不传 writeFileInScope，files:write 走 unavailable
   // （同 statusOff/statusBridgeOff 的「=== 'off'」既有开关惯例，默认启用）。
   const fileEditOff = process.env.FILE_EDIT === 'off';
@@ -5207,6 +5327,8 @@ registerSocketConnection(io, socket => {
       // 切回/重连：task_progress 是 transient（不进环形缓冲、上面 events 回放拿不到）→ 有活后台任务时
       // 重发全量快照，前端 onProgress 按 tasks 数组幂等 reconcile 重建任务明细横幅（否则要等下一次心跳）。
       if (a.hasBgTasks?.()) a.emitBgTasksSnapshot();
+      // 前台任务集合同理（#459），空的也发：断线期间那条前台任务可能已经转后台或跑完，前端手里的「转后台」得收起来
+      a.emitForegroundTasks?.();
     }
   });
 

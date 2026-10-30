@@ -128,6 +128,13 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
         body: 'Claude 需要你的回答',
         previewBody: truncatePreview(p.text)
       });
+    case 'elicitation':
+      // MCP 服务器要表单输入或 URL 授权（#460）。message 是第三方正文（可能让用户贴 token），body 只留服务器名。
+      return withData({
+        ...identity('🔐 MCP 需要你'),
+        body: `${p.serverName ?? 'MCP'} 需要你填写或授权`,
+        previewBody: truncatePreview(p.message)
+      });
     case 'task_notification': {
       // 最小化：不含 summary 正文（可能含代码/结果），固定引导文案；成功/失败见 title。
       const failed = p.status === 'failed' || p.status === 'error';
@@ -221,6 +228,7 @@ export function notificationForDeviceRequest({ count = 1 } = {}) {
 export const NOTIFY_CATEGORY = Object.freeze({
   permission_request: 'approval',
   question: 'input',
+  elicitation: 'input',
   result: 'finished',
   task_notification: 'finished',
   // system 型信封只有 gateway_stall notice 会产出通知（见 notificationForEvent），故此映射只被静默
@@ -279,6 +287,7 @@ export function clearNotifyPending(sessionId, category, state = new Map()) {
 const NTFY_TAGS = {
   permission_request: ['warning'],
   question: ['question'],
+  elicitation: ['key'],
   result: ['white_check_mark'],
   result_error: ['warning'],
   result_interrupted: ['stop_button'],
@@ -296,6 +305,7 @@ export function ntfyMetaFor(type, data = {}, publicUrl = '') {
   const priority = (
     type === 'permission_request'
     || type === 'question'
+    || type === 'elicitation'
     || type === 'cli_hook_notification'
     || type === 'device_request' // 用户不处理，那台新设备就一直用不了——同属"需即时响应"
   ) ? 5 : 3;

@@ -180,16 +180,19 @@ export function externalDirtyBusyNack({
   bgTaskCount = 0,
   pendingPermissionCount = 0,
   pendingQuestionCount = 0,
+  pendingElicitationCount = 0,
 } = {}) {
   const turns = Number(pendingTurns) > 0 ? Number(pendingTurns) : 0;
   const bgs = Number(bgTaskCount) > 0 ? Number(bgTaskCount) : 0;
   const perms = Number(pendingPermissionCount) > 0 ? Number(pendingPermissionCount) : 0;
   const qs = Number(pendingQuestionCount) > 0 ? Number(pendingQuestionCount) : 0;
+  const els = Number(pendingElicitationCount) > 0 ? Number(pendingElicitationCount) : 0;
   const bits = [];
   if (turns) bits.push(`pendingTurns=${turns}`);
   if (bgs) bits.push(`bgTasks=${bgs}`);
   if (perms) bits.push(`permissions=${perms}`);
   if (qs) bits.push(`questions=${qs}`);
+  if (els) bits.push(`elicitations=${els}`);
   const detail = bits.length ? bits.join(' ') : 'busy=true';
 
   if (turns > 0) {

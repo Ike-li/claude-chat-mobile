@@ -62,11 +62,13 @@ async function connect(tag) {
   //
   // 只保留【真·补发件】：占 seq 的缓冲事件，或服务端为本次 sync 单发的 replay 件（gap 提示是
   // seq=0 但带 replay:true）。握手快照两者都不是，靠这条判据摘干净，不必依赖到达时序。
+  // 瞬时事件（transient:true）也不是：它的 seq 沿用实例当前值、并不占位（agent.emitTransient），只看 seq>0
+  // 会把 sync 收尾补推的当前态快照（前台任务集合、后台任务进度）误算成重发。
   const since = async payload => {
     const from = events.length;
     const ack = await call('sync:since', { sessionId: null, ...payload });
     await sleep(250);
-    return { ack, replayedEvents: events.slice(from).filter(e => e.seq > 0 || e.replay === true) };
+    return { ack, replayedEvents: events.slice(from).filter(e => e.transient !== true && (e.seq > 0 || e.replay === true)) };
   };
   return { sock, events, call, since, tag };
 }

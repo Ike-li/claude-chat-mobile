@@ -7,7 +7,7 @@ import { dashboardDirs, displaySessionTitle, esc, folderReasonText, formatCompos
 import { t } from '../i18n.js';
 
 export function createEmptySurfaces(context, {
-  $, approvals, baseName, btnHome, btnNew, btnSessions, dashUnreadMark, el, folderPicker, haptic,
+  $, approvals, baseName, btnHome, btnNew, btnSessions, dashUnreadMark, el, elicitationSheet, folderPicker, haptic,
   hideStatuslineWrap, inputEl, messagesEl, modelInput, newSessionWorktree, openLeftSidebar, panelCwd,
   pillEffortText, pillPermText, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,
   topContextPill, topProjectText, topTitleText, unread, updateWorkspaceChangeBadge, wireConfigRefreshButton,
@@ -344,6 +344,7 @@ export function createEmptySurfaces(context, {
     blockedSurfaceTarget = null;
     $('sessionBlockedSurface')?.classList.add('hidden');
     approvals.resume();
+    elicitationSheet.resume();
   }
   // 迟到的成功 ack：4s 兜底已经把落地页弹出来了，而这次切换其实成功了——服务端可能先广播导航、
   // 后回 ack。不撤掉的话用户人已经在目标会话里，屏幕上却盖着一张「切换无响应」。
@@ -394,6 +395,7 @@ export function createEmptySurfaces(context, {
     // 底下那个会话（视图没动）的审批 / 提问卡是 z-40 的 sheet，会浮在这张落地页上，读起来像是这个打不开的会话的
     // （验收 O38）。收起而不是清掉：卡还是原会话的，返回时原样恢复。
     approvals.suspend();
+    elicitationSheet.suspend();
   }
 
   // 点停止顿一下跳主页的回归修复：正在查看的实例被摧毁（中断失败→settleForce 强杀子进程→onExit→

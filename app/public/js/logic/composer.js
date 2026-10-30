@@ -304,14 +304,30 @@ export function applyAtMentionPick(fullText, { matchStart, cursorPos, path } = {
 }
 
 // ---- 斜杠命令补全候选（与 @ 提及同款浮层，互斥显示；DOM 在 app.js）----
-// 元素归一：SDK 的 init.slash_commands 是 string[]，E2E mock 与部分 SDK 版本发 {name,description}。
+// 元素归一：server 下发 {name, description?, argumentHint?, aliases?}（#456，字段名照 SDK SlashCommand）；
+// localStorage 里 #456 之前缓存的是 string[]。
 function slashCommandName(cmd) {
   if (typeof cmd === 'string') return cmd;
   if (cmd && typeof cmd.name === 'string') return cmd.name;
   return '';
 }
 
+// 菜单一行要的：名字 + 说明 + 参数提示（别名只用来匹配，不显示）
+function slashCommandHint(cmd) {
+  const hint = { name: slashCommandName(cmd) };
+  if (cmd && typeof cmd.description === 'string' && cmd.description) hint.description = cmd.description;
+  if (cmd && typeof cmd.argumentHint === 'string' && cmd.argumentHint) hint.argumentHint = cmd.argumentHint;
+  return hint;
+}
+
+// 清单里有没有某个命令（按本名，不看别名）。/model、/rewind 的本地拦截据此决定是否让位给 CLI。
+export function hasSlashCommand(commands, name) {
+  return Array.isArray(commands) && commands.some(c => slashCommandName(c) === name);
+}
+
 // 合成补全候选：SDK 下发的命令 − terminal 绑定的那批 + 前端本地实现的命令，再按 prefix 过滤。
+// 返回 { name, description?, argumentHint? }[]。prefix 匹配本名或任一别名（SDK：/cost、/stats 都解析到 /usage），
+// 选中后插入的仍是本名。
 //
 // 【为什么要减】SDK 的 init.terminal_slash_commands 是 slash_commands 的子集，字段原文：
 // "Subset of slash_commands whose UX is bound to the local terminal (e.g. exit, statusline).
@@ -325,14 +341,16 @@ function slashCommandName(cmd) {
 // 【缺字段 ≠ 全隐藏】旧 CLI 不下发该字段（SDK 原文 "absent on CLIs that predate the field"），
 // 此时必须等价于「没有要隐藏的」。反过来写会让整个补全菜单在旧 CLI 上凭空消失。
 export function buildSlashCommandHints({ commands = [], terminalCommands = [], localCommands = [], prefix = '' } = {}) {
-  const names = Array.isArray(commands) ? commands.map(slashCommandName).filter(Boolean) : [];
+  const list = Array.isArray(commands) ? commands.filter(c => slashCommandName(c)) : [];
   const hidden = new Set(Array.isArray(terminalCommands) ? terminalCommands.map(slashCommandName).filter(Boolean) : []);
-  const base = names.filter(n => !hidden.has(n));
-  // 本地命令对 hidden 免疫：它是前端自己实现的拦截项，与 SDK 的命令定义无关。
-  const locals = Array.isArray(localCommands) ? localCommands.filter(c => c && !base.includes(c)) : [];
-  const cands = base.concat(locals);
+  const base = list.filter(c => !hidden.has(slashCommandName(c)));
+  // 本地命令对 hidden 免疫：它是前端自己实现的拦截项，与 SDK 的命令定义无关。SDK 已有同名命令时用 SDK 那行。
+  const locals = Array.isArray(localCommands)
+    ? localCommands.filter(c => slashCommandName(c) && !hasSlashCommand(base, slashCommandName(c))) : [];
   const p = String(prefix || '').toLowerCase();
-  return p ? cands.filter(c => c.toLowerCase().startsWith(p)) : cands;
+  const matches = c => [slashCommandName(c), ...(Array.isArray(c?.aliases) ? c.aliases : [])]
+    .some(n => typeof n === 'string' && n.toLowerCase().startsWith(p));
+  return base.concat(locals).filter(c => !p || matches(c)).map(slashCommandHint);
 }
 
 // ---- 候选浮层键盘导航（#392：/ 与 @ 共用 listbox 语义；DOM 接线在 app.js）----
