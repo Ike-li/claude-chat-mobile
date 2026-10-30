@@ -461,6 +461,8 @@ let mockElicitationLog = [];
 let mockFgTask = null;
 let mockBgTasksDisabled = false;
 let deniedDeviceRetryPending = false;
+// test:tofu-denied-hold 扣住的拒绝（null = 没有），POST /__release-device-denial 才下发：用例先布好前端状态再放
+let heldDeviceDenial = null;
 let mockSessionLogsByInstance = new Map();
 let mockDiagLogsByInstance = new Map(); // 镜像/排队/停止诊断时间线（test:diag-sample 注入）
 // 服务状态面板：确定性 startedAt（mock 进程启动时刻）；deliveryFailure 由 test:service-delivery-failure 注入，
@@ -811,6 +813,7 @@ function resetMockState() {
   mockFgTask = null;
   mockBgTasksDisabled = false;
   deniedDeviceRetryPending = false;
+  heldDeviceDenial = null;
   mockSessionLogsByInstance = new Map();
   mockDiagLogsByInstance = new Map();
 }
@@ -980,6 +983,13 @@ app.post('/__release-renames', (_req, res) => {
   const released = heldRenameAcks.splice(0);
   for (const { finish } of released) finish();
   res.json({ released: released.map(r => r.title) });
+});
+
+app.post('/__release-device-denial', (_req, res) => {
+  const release = heldDeviceDenial;
+  heldDeviceDenial = null;
+  if (release) release();
+  res.json({ released: !!release });
 });
 
 app.post('/__reset', (_req, res) => {
@@ -6405,7 +6415,7 @@ io.on('connection', socket => {
       },
     },
     {
-      commands: ['test:tofu', 'test:tofu-denied'],
+      commands: ['test:tofu', 'test:tofu-denied', 'test:tofu-denied-hold'],
       run: async ({ cmd }) => {
         console.log('[mock] Forcing unapproved TOFU status');
         socket.emit('agent:event', {
@@ -6413,14 +6423,17 @@ io.on('connection', socket => {
           type: 'device_status', payload: { status: 'pending', deviceId: 'unauthorized-fingerprint-999' }
         });
 
-        if (cmd === 'test:tofu-denied') {
-          await delay(500);
-          deniedDeviceRetryPending = true;
-          socket.emit('agent:event', {
-            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'device_status', payload: { status: 'denied', deviceId: 'unauthorized-fingerprint-999' }
-          });
-          setTimeout(() => socket.disconnect(true), 50);
+        if (cmd === 'test:tofu-denied' || cmd === 'test:tofu-denied-hold') {
+          const deny = () => {
+            deniedDeviceRetryPending = true;
+            socket.emit('agent:event', {
+              seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+              type: 'device_status', payload: { status: 'denied', deviceId: 'unauthorized-fingerprint-999' }
+            });
+            setTimeout(() => socket.disconnect(true), 50);
+          };
+          if (cmd === 'test:tofu-denied-hold') heldDeviceDenial = deny;
+          else { await delay(500); deny(); }
           return;
         }
 
