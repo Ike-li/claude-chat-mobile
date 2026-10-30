@@ -116,6 +116,19 @@ export function createInstanceManager() {
     return pending;
   }
 
+  // 该会话名下所有还没退完的实例的退出确认，活实例也算。网页改名的退出补写（sessions/session-rename.js）
+  // 挂在这上面：活的、正在回收的、已移出表的，退出前都会把 CLI 内存里的标题写回 transcript。
+  function sessionExitPromises(sessionId) {
+    const all = [];
+    for (const agent of agents.values()) {
+      if (agent.sessionId === sessionId) all.push(agent.exitPromise);
+    }
+    for (const agent of exiting) {
+      if (agent.sessionId === sessionId) all.push(agent.exitPromise);
+    }
+    return all;
+  }
+
   // 等它们全部退出，最多等 timeoutMs；返回是否在上限内等到。
   // 每轮等完要重新收集：等待期间另一台设备可能又开又关了这个会话，只等开头那一批会漏掉新关的那个。
   // 重新收集时跳过已经等过的：dispose 过却没走 onExit 清表的实例会一直留在表里，它那个早已结算的
@@ -171,5 +184,6 @@ export function createInstanceManager() {
     clearTables,
     remove,
     waitForSessionExits,
+    sessionExitPromises,
   };
 }
