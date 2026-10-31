@@ -29,6 +29,9 @@
 /.gitattributes             export-ignore
 /.dockerignore              export-ignore
 /eslint.config.js           export-ignore
+# tailwind.config.js 只给 npm run build:css 用：产物 app/public/css/tw.css 已提交、装机没有构建步骤，
+# 装机的 npm ci --omit=dev 也不装 tailwindcss。
+/tailwind.config.js         export-ignore
 # CLAUDE.md 与指向它的 AGENTS.md 是给 AI agent 的维护者指令，且通篇引用测试命令。
 # 两个必须一起排除：只排 CLAUDE.md 会在包里留下一个断链的 AGENTS.md 符号链接。
 /CLAUDE.md                  export-ignore

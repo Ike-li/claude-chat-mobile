@@ -78,6 +78,7 @@ test('② 测试树与维护者门禁确实被裁掉', () => {
     f.startsWith('tests/')
     || f.startsWith('.github/')
     || f === 'eslint.config.js'
+    || f === 'tailwind.config.js' // build:css 的配置：产物 tw.css 已提交，装机 npm ci --omit=dev 连 tailwindcss 都不装
     || f === '.dockerignore'
     || MAINTAINER_ONLY_SCRIPTS.test(f),
   );
