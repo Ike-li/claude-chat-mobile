@@ -179,7 +179,7 @@ function pinnedRowsFor(cwd, rows) {
     && (mockReadState.manual[s.id] ?? -Infinity) > Math.max(mockReadState.seen[s.id] ?? -Infinity, floor));
 }
 // open（验收 O46）：开着、但不在本页也不在 pinned 里的会话的元数据（同真 server 的 session:list）。
-// 抽屉照样把它们画在前面（SESSION-02），标题与时间用这里的，不再是实例广播里的 title（终端来的会话那里是 null）。
+// 抽屉照样按时间给它们画行（SESSION-02），标题与时间用这里的，不再是实例广播里的 title（终端来的会话那里是 null）。
 // 池同 pinnedRowsFor：只有主 cwd 会截断。transcript 被搬走的（mainCwdSessions 里没有）自然不在其中。
 function openRowsFor(cwd, listed) {
   const inList = new Set((listed || []).map(s => s && s.id));

@@ -347,6 +347,22 @@ export function orphanLiveRows(liveMap, listedIds) {
   return out;
 }
 
+// 补画的行（orphanLiveRows 的元数据）与列表这一页合成一列，按时间排。被分页挤出的已开会话比本页都旧，
+// 于是接在页尾；收起列表时整批顶到最前，读起来像排序坏了（2026-10-31 真机，同 O81 的 pinned）。
+// 没有时间的（transcript 找不到）放最前：无处可排，放最前才看得见它开着。sessions 自身的顺序不动。
+export function mergeOrphanRowsByTime(sessions, orphans) {
+  const dated = [];
+  const out = [];
+  for (const s of orphans) (Number.isFinite(s?.lastUsedAt) ? dated : out).push(s);
+  dated.sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+  let i = 0;
+  for (const s of sessions) {
+    while (i < dated.length && dated[i].lastUsedAt > (s.lastUsedAt ?? 0)) out.push(dated[i++]);
+    out.push(s);
+  }
+  return out.concat(dated.slice(i));
+}
+
 // cwd 不在任何小节之下的活实例（例如刚进了仓库外的平级 worktree）：由抽屉单独成一节。
 export function unownedLiveInstances(instances, sectionKeys) {
   return (Array.isArray(instances) ? instances : [])
