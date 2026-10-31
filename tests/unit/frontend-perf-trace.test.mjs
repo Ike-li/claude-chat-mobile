@@ -107,7 +107,7 @@ test.describe('createPerfTrace：启动兜底', () => {
   test('30s 内谁都没报就绪（停在新会话页、首页列表卡住）：兜底照样出启动行，之后的就绪不再重复', () => {
     const timers = [];
     const { lines, trace, at } = setup({ win: { setTimeout: fn => timers.push(fn) } });
-    at(30_000, () => timers.forEach(fn => fn()));
+    at(30_000, () => { while (timers.length) timers.shift()(); });   // 定时器里新排的（下一个任务写行）也照跑
     at(31_000, () => trace.startupReady('首页列表'));
     assert.deepEqual(lines, ['[PERF] 启动 30000ms（30s 未就绪）：30s 未就绪 30000；一方资源 不可测；长任务 不可测']);
   });
@@ -120,6 +120,7 @@ test.describe('createPerfTrace：长任务', () => {
       static supportedEntryTypes = ['longtask', 'resource'];
       constructor(callback) { deliver = callback; }
       observe() {}
+      takeRecords() { return []; }
     }
     const { lines, trace, at } = setup({ win: { PerformanceObserver: FakeObserver } });
     deliver?.({ getEntries: () => [{ startTime: 400, duration: 120 }, { startTime: 1300, duration: 300 }] });
@@ -127,6 +128,25 @@ test.describe('createPerfTrace：长任务', () => {
     at(2000, () => trace.openEnd('A', 'keep'));
     assert.match(lines[0], /^\[PERF\] 打开会话 1000ms.*；长任务 1 次 共 300ms 最长 300ms$/);
     assert.match(lines[1], /^\[PERF\] 启动 2000ms（会话就绪）.*；长任务 2 次 共 420ms 最长 300ms$/);
+  });
+
+  // 浏览器等一个任务跑完才生成它的长任务条目，先进观察器缓冲，回调更晚。高亮完就在高亮那个任务里收尾：
+  // 当场汇总会漏掉最该记的这段（10-31 桌面复现：高亮本身 2732ms，那一行的长任务最长只记到 765ms）
+  test('在长任务里收尾：这个任务本身也算进打开行和启动行', () => {
+    const timers = [];
+    const buffered = [];
+    class FakeObserver {
+      static supportedEntryTypes = ['longtask'];
+      observe() {}
+      takeRecords() { return buffered.splice(0); }
+    }
+    const { lines, trace, at } = setup({ win: { PerformanceObserver: FakeObserver, setTimeout: (fn, ms) => timers.push({ fn, ms }) } });
+    at(1000, () => trace.openBind('A'));
+    at(4290, () => trace.openEnd('A', 'done'));          // 高亮那个空闲任务的末尾
+    buffered.push({ startTime: 1500, duration: 2800 });  // 任务跑完：条目进缓冲，回调还没跑
+    at(4300, () => timers.filter(timer => !timer.ms).forEach(timer => timer.fn()));   // 下一个任务；30s 兜底没到点
+    assert.match(lines[0], /^\[PERF\] 打开会话 3290ms.*；长任务 1 次 共 2800ms 最长 2800ms$/);
+    assert.match(lines[1], /^\[PERF\] 启动 4290ms（会话就绪）.*；长任务 1 次 共 2800ms 最长 2800ms$/);
   });
 });
 

@@ -13,16 +13,20 @@ const LONG_TASK_CAP = 200;
 // Performance API 各浏览器实现参差，是外部边界：这里抛错会让 app.js 顶层起不来，拿不到就当不可测。
 // 长任务（主线程被一段脚本占住 ≥50ms）。浏览器不支持时返回 null，日志写「不可测」。
 // buffered：观察器建起来之前的也补上——app.js 是 module，跑到这里时 head 里的同步脚本早执行完了。
+// 返回取数函数：已生成、还没回调到的条目（takeRecords）也一并取回。
 function observeLongTasks(win) {
   if (!win.PerformanceObserver?.supportedEntryTypes?.includes('longtask')) return null;
   const tasks = [];
+  const add = entries => {
+    for (const entry of entries) tasks.push({ start: entry.startTime, duration: entry.duration });
+    if (tasks.length > LONG_TASK_CAP) tasks.splice(0, tasks.length - LONG_TASK_CAP);
+  };
+  let observer;
   try {
-    new win.PerformanceObserver(list => {
-      for (const entry of list.getEntries()) tasks.push({ start: entry.startTime, duration: entry.duration });
-      if (tasks.length > LONG_TASK_CAP) tasks.splice(0, tasks.length - LONG_TASK_CAP);
-    }).observe({ type: 'longtask', buffered: true });
+    observer = new win.PerformanceObserver(list => add(list.getEntries()));
+    observer.observe({ type: 'longtask', buffered: true });
   } catch { return null; }
-  return tasks;
+  return () => { add(observer.takeRecords()); return tasks; };
 }
 
 function entriesByType(win, type) {
@@ -30,8 +34,11 @@ function entriesByType(win, type) {
 }
 
 export function createPerfTrace({ log, now = () => performance.now(), win = globalThis } = {}) {
-  const longTasks = observeLongTasks(win);
-  const longTasksIn = (from, to) => longTasks && summarizeLongTasks(longTasks, from, to);
+  const takeLongTasks = observeLongTasks(win);
+  const longTasksIn = (from, to) => takeLongTasks && summarizeLongTasks(takeLongTasks(), from, to);
+  // 收尾常落在长任务里（高亮完、首页列表画完），浏览器却要等这个任务跑完才生成它的条目：
+  // 时刻当场记，汇总长任务和写行挪到下一个任务。每一行都走这里，先后顺序不乱
+  const afterThisTask = fn => (win.setTimeout ? win.setTimeout(fn, 0) : fn());
 
   // ---- 启动 ----
   const marks = {};
@@ -41,7 +48,7 @@ export function createPerfTrace({ log, now = () => performance.now(), win = glob
   function mark(name, detail) {
     if (marks[name]) return;
     marks[name] = { t: now(), ...detail };
-    if (startupLogged) log(formatLateStartupMark(name, marks[name]));
+    if (startupLogged) afterThisTask(() => log(formatLateStartupMark(name, marks[name])));
   }
 
   // 导航时间点，距导航开始的 ms；0 = 还没发生，不写
@@ -65,8 +72,8 @@ export function createPerfTrace({ log, now = () => performance.now(), win = glob
   function startupReady(label) {
     if (startupLogged) return;
     startupLogged = true;
-    const readyAt = now();
-    log(formatStartupPerfLine({ marks: { ...navigationMarks(), ...marks }, ready: { t: readyAt, label }, resources: firstPartyResources(), longTasks: longTasksIn(0, readyAt) }));
+    const line = { marks: { ...navigationMarks(), ...marks }, ready: { t: now(), label }, resources: firstPartyResources() };
+    afterThisTask(() => log(formatStartupPerfLine({ ...line, longTasks: longTasksIn(0, line.ready.t) })));
   }
   // 停在新会话页、首页列表卡住时没人报就绪：到点照样出一行，时间点照样有用
   win.setTimeout?.(() => startupReady('30s 未就绪'), STARTUP_FALLBACK_MS);
@@ -79,7 +86,7 @@ export function createPerfTrace({ log, now = () => performance.now(), win = glob
     const trace = open;
     open = null;
     const endT = now();
-    log(formatOpenPerfLine({ source: trace.source, steps: trace.steps, end: { t: endT - trace.begin, outcome }, longTasks: longTasksIn(trace.begin, endT) }));
+    afterThisTask(() => log(formatOpenPerfLine({ source: trace.source, steps: trace.steps, end: { t: endT - trace.begin, outcome }, longTasks: longTasksIn(trace.begin, endT) })));
   }
 
   // 上一次还没走完就开了新的：照样写出来、记成被切走——慢到用户放弃的那次正是要看的
