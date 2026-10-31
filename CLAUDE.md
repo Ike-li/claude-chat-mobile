@@ -34,6 +34,7 @@
 
 - 日常改动走 feature 分支 → PR → `dev`，不在 `dev`、`master` 上直接提交。**默认分支是 `master`，开 PR 必须显式 `--base dev`**。
 - `master` 只接受 `scripts/release.sh` 开的 `dev` → `master` 发版 PR，HEAD 恒等于最新发布——装机 `curl` 直接拉 `master` 的源码归档。发版 PR 产生 merge commit，`master` 不等于 `dev` 的 tip 是正常的，不要把 `master` 合回 `dev`。
+- PR 合进 `dev` 后，删掉这个 PR 的 worktree、本地分支（`git branch -d`，只删已合并的）和远程分支，不用再问。长期 worktree（gh-pages、promo、third-party）不动。
 
 ## 文档
 
