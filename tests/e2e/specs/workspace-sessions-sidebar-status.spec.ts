@@ -216,6 +216,31 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 首页先到先画（2026-10-31 性能计划 2d）：此前首页 Promise.all 等齐每个工作区的 session:list 才画，
+  // 一个慢的（真机上冷扫盘几百毫秒，兜底 4s）就让整张表一起空着。现在先回的先画；「还没有最近会话」与缺角提示
+  // 是对整张表下的结论，慢的那个没落定之前都不该出现。旧代码在 4s 兜底时才画、同时挂出缺角提示，两条断言都过不去。
+  test('P0-11ay 首页最近会话：慢的工作区还没回，先回的先画；回来后并进同一张表', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post(`/__arm-session-list-hold?cwd=${encodeURIComponent(ANOTHER_WORKSPACE)}`);
+    await page.request.post(`/__set-connected-folders?dirs=${encodeURIComponent(`${MAIN_WORKSPACE},${ANOTHER_WORKSPACE}`)}`);
+
+    await page.locator('#btnHome').click();
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
+    const rows = page.locator('#dashRecentsList .dash-recent-item');
+    const anotherRows = rows.filter({ has: page.locator('.dash-ws', { hasText: 'another-react-project' }) });
+    await expect(rows.first()).toBeVisible();
+    await expect(anotherRows).toHaveCount(0);
+    await expect(page.locator('#dashRecentsIncomplete')).toBeHidden();
+    await expect(page.locator('#dashEmptyHint')).toBeHidden();
+
+    const released = await (await page.request.post('/__release-session-list-hold')).json();
+    expect(released.released, '前端没问过被扣的工作区，这条用例什么也没验').toBeGreaterThan(0);
+    // 另一工作区的会话 lastUsedAt 恒为请求时刻，并进来应排到最前
+    await expect(rows.first()).toHaveAttribute('data-session-id', 'mock-session-another');
+    await expect(page.locator('#dashRecentsIncomplete')).toBeHidden();
+    await expectNoBrowserErrors(page);
+  });
+
   // P3 抽屉局部重建 + SWR 保鲜（切到后台重连后抽屉卡顿的修复）三条回归：
   // t 断线重连零变化 → 两个目录 DOM 原样保留、不出现骨架屏；
   // v 断线期间真实标题变化 → 抽屉必须显示新内容（防缓存优化引入"不刷新"回归）；

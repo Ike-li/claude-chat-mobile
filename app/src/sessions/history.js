@@ -1,5 +1,6 @@
 // history.js —— 读取 CLI 会话历史用于前端展示（方案 2）
 // CLI 历史文件：~/.claude/projects/<project>/<session_id>.jsonl
+import { createHash } from 'node:crypto';
 import { stat, readdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { basename, dirname, join } from 'node:path';
@@ -51,9 +52,11 @@ const LIST_LIMIT = MAX_SESSION_LIMIT;
 // 64KB 足够覆盖「末条消息 + 其后一串元数据」。比 TAIL_READ_BYTES(512KB) 更轻，因列表要对目录内每个会话读一次。
 const LIST_ACTIVITY_TAIL_BYTES = 64 * 1024;
 
-// B2：listSessions 结果按 dir 缓存，4s TTL。重复打开列表不重扫盘。
-const _listCache = new Map(); // dir → { ts, result }
-const LIST_CACHE_TTL = 4000;
+// B2：listSessions 结果按 dir 缓存，按目录内容指纹失效（见 listFingerprint）。重复打开列表不重扫盘。
+const _listCache = new Map(); // cacheKey → { fingerprint, result, expiresAt }
+// SDK 抛错时回落的降级结果（缺 SDK 标题：自造扫盘不读旁路标题，搜索也少了 summary 这个匹配键）不能只按指纹存——
+// SDK 恢复了而目录没变，就会一直给降级结果。它沿用改指纹前的 4s 年龄窗，SDK 一直坏时的开销与那时相同。
+const DEGRADED_LIST_TTL = 4000;
 
 // B6：getSessionHistory 结果按文件路径缓存，按 mtimeMs 失效。切回同一会话无需重新读盘。
 const _histCache = new Map(); // filePath → { mtimeMs, size, messages }（失效判据见 getSessionHistory 的 B6）
@@ -949,7 +952,7 @@ export function isCliSystemLine(content) {
 //     不是 entrypoint。（entrypoint 仍被 readHeadMeta / 尾部形态判定使用，那是另一条路。）
 //   · 「summary 标题语义 ≠ ai-title > 首条 user > 命令名」——迁移后标题即由 SDK summary 承担，
 //     与 CLI /resume 所见同源，这正是想要的效果。
-// 仍由本函数自己维护、SDK 给不了的：hasMore / total（SDK 不给总数）、TTL 缓存、标题 query 过滤
+// 仍由本函数自己维护、SDK 给不了的：hasMore / total（SDK 不给总数）、列表缓存、标题 query 过滤
 // （候选走 readdir；匹配键 OR SDK summary 与 readHeadMeta 各字段）；
 // 另加两道 SDK 侧兜不住的修正：按 jsonl 是否存在做归属过滤、readdir 补 SDK 漏报的无 summary 会话。
 // 返回 { sessions, hasMore, total }：
@@ -996,20 +999,46 @@ export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST
   }, excludeIds);
 }
 
-// 单个 cwd 的扫描 + TTL 缓存（原 listSessionsPage 的主体，抽出来供父仓与各 worktree 复用）。
+// 单个 cwd 的扫描 + 缓存（原 listSessionsPage 的主体，抽出来供父仓与各 worktree 复用）。
 async function scanOneCwd(cwd, baseDir, limit, normalizedQuery) {
   const dir = join(baseDir, getProjectDir(cwd));
   const cacheKey = normalizedQuery
     ? `${dir}:${cwd}:q:${normalizedQuery.toLowerCase()}:${limit}`
     : `${dir}:${cwd}:${limit}`;
-  // B2：TTL 缓存命中，直接返回（避免重复 readdir + N×stat + 尾窗活动时间 + N×readHeadMeta）——
+  // B2：目录内容没变就命中（避免重复 N×尾窗活动时间 + N×readHeadMeta + SDK 逐个读头尾）——
   // excludeIds 不进缓存键：缓存的是扫盘结果，排除在缓存之后应用。
   // 缓存键含 dir，所以父仓与各 worktree 各自成键，不会互相顶掉；也含 cwd——编码撞名时两个 cwd 共用一个
   // 目录、结果各不相同（invalidateListCache 按 `${dir}:` 前缀清，照样清得到）。
+  // 指纹在扫描【之前】取：扫描途中有文件被写，存下的是旧指纹，下一次必然不命中、重扫一次；
+  // 扫完再取会让这次写入永远藏在缓存后面。
+  const fingerprint = await listFingerprint(dir);
   const cached = _listCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < LIST_CACHE_TTL) return cached.result;
+  if (cached && cached.fingerprint === fingerprint && cached.expiresAt > Date.now()) return cached.result;
   // 编码撞名：目录里记着别的 cwd 的会话，在排序、截 limit 之前剔掉（见 transcriptOwnerCwd）
-  return scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, normalizedQuery, await foreignSessionIds(dir, cwd));
+  const { result, degraded } = await scanSessionsPage(dir, cwd, limit, baseDir, normalizedQuery, await foreignSessionIds(dir, cwd));
+  _listCache.set(cacheKey, { fingerprint, result, expiresAt: degraded ? Date.now() + DEGRADED_LIST_TTL : Infinity });
+  return result;
+}
+
+// 列表结果只取决于项目目录里的这些文件：每个 jsonl 的（名、大小、mtime）——名单决定有哪些行，头尾内容决定标题、
+// 活动时间与归属；外加 SDK 会读的旁路标题 `<会话 id>/custom-title.json`（jsonl 尾部没有 custom-title 时它就是
+// 标题，桌面端改名只写它）。不按年龄失效：抽屉每 12s 重验一次，按 4s 年龄判等于每次都整目录重扫，
+// 而那期间绝大多数目录一个字节都没变；反过来年龄窗口内又会挡住刚落盘的新消息。
+// 代价是每次列表一次 readdir + 逐文件 stat（本机最大的目录 463 个 jsonl 约 3ms，整目录重扫约 170ms）。
+// 存摘要不存原串：原串在大目录上几十 KB，而标题搜索每换一个词就是一个新缓存键。
+async function listFingerprint(dir) {
+  let entries;
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return ''; }
+  const subdirs = new Set(entries.filter(e => e.isDirectory()).map(e => e.name));
+  const parts = await Promise.all(entries.filter(e => e.name.endsWith('.jsonl')).map(async ({ name }) => {
+    const id = name.slice(0, -6);
+    const [st, side] = await Promise.all([
+      stat(join(dir, name)).catch(() => null),
+      subdirs.has(id) ? stat(join(dir, id, 'custom-title.json')).catch(() => null) : null,
+    ]);
+    return `${name}:${st?.size}:${st?.mtimeMs}:${side?.size}:${side?.mtimeMs}`;
+  }));
+  return createHash('sha1').update(parts.sort().join('\n')).digest('base64');
 }
 
 // 成员目录里的会话行比项目根自己的多带的字段。scratch 目录不是 worktree，不能标成 worktree。
@@ -1423,28 +1452,28 @@ async function fetchSdkSummaryMap(cwd) {
   return map;
 }
 
-async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, query = '', foreign = new Set()) {
+async function scanSessionsPage(dir, cwd, limit, baseDir, query = '', foreign = new Set()) {
   // 标题搜索必须绕开 SDK 快路径：其 fetchLimit≈51，窗外旧会话永远进不了候选集。
   // query 非空 → 强制全量 readdir + readHeadMeta 再过滤（n=1 下百~数百级可接受）。
+  // 返回 { result, degraded }：degraded = 本该问 SDK 却因它抛错没问成，结果缺 SDK 标题（见 DEGRADED_LIST_TTL）。
   if (query) {
     let titleById = new Map();
+    let degraded = false;
     if (useSdk(baseDir)) {
-      try { titleById = await fetchSdkSummaryMap(cwd); } catch { /* overlay 失败：仍按 readHeadMeta 搜 */ }
+      try { titleById = await fetchSdkSummaryMap(cwd); } catch { degraded = true; /* overlay 失败：仍按 readHeadMeta 搜 */ }
     }
-    return scanViaReaddir(dir, limit, cacheKey, query, titleById, foreign);
+    return { result: await scanViaReaddir(dir, limit, query, titleById, foreign), degraded };
   }
   // 目录里有别的 cwd 的会话（编码撞名）时也绕开 SDK：它按目录列，剔掉之后凑不满 limit、total 也不对
   if (useSdk(baseDir) && !foreign.size) {
     try {
-      const result = await scanSessionsViaSdk(cwd, limit);
-      _listCache.set(cacheKey, { ts: Date.now(), result });
-      return result;
+      return { result: await scanSessionsViaSdk(cwd, limit), degraded: false };
     } catch {
       // SDK 异常（CLI 版本/环境/编码不一致）不 fail-closed：回落自造扫盘兜底，列表照常出。
-      return scanViaReaddir(dir, limit, cacheKey, '');
+      return { result: await scanViaReaddir(dir, limit, ''), degraded: true };
     }
   }
-  return scanViaReaddir(dir, limit, cacheKey, '', new Map(), foreign);
+  return { result: await scanViaReaddir(dir, limit, '', new Map(), foreign), degraded: false };
 }
 
 // 自造扫盘（兜底路径 + baseDir 隔离测试实例 + 标题搜索唯一路径）：
@@ -1452,7 +1481,7 @@ async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, query = '', 
 // 浏览：只对前 limit 条读 meta。搜索：对全部会话读 meta 再按标题过滤——浏览窗硬顶之后的提示就是「用搜索找」，
 // 搜索再设顶，那批会话就既加载不出也搜不到（验收 O100）。meta 按文件 (size, mtime) 缓存，只有首次搜索付全量读盘。
 // 排序/lastUsedAt 用最后主链消息时间（无则回落 mtime），避免 mode/permission-mode 等元数据写盘把旧会话顶前。
-async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new Map(), exclude = new Set()) {
+async function scanViaReaddir(dir, limit, query = '', titleById = new Map(), exclude = new Set()) {
   let names;
   try {
     names = await readdir(dir);
@@ -1526,11 +1555,7 @@ async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new 
     hasMore = total > limit;
   }
   for (const s of sessions) delete s._keys;
-  const result = { sessions, hasMore, total };
-
-  // B2：存缓存（键含 limit；搜索键另含 q:，见 listSessionsPage）
-  _listCache.set(cacheKey, { ts: Date.now(), result });
-  return result;
+  return { sessions, hasMore, total };
 }
 
 // 向后兼容包装：仅返回会话数组（多处 script/测试直接用数组）。新代码若需 hasMore 用 listSessionsPage。
@@ -1611,7 +1636,7 @@ export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR, member
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt || String(a.id).localeCompare(String(b.id)));
 }
 
-// B3：写入新会话后失效该 cwd 的列表缓存，确保 session:list 立即可见（不等待 TTL 过期）。
+// B3：写入新会话后失效该 cwd 的列表缓存，确保 session:list 立即可见（不依赖目录指纹恰好变了）。
 // 键现含 limit → 删该 dir 的所有 limit 变体。
 export function invalidateListCache(cwd) {
   const prefix = join(CLAUDE_DIR, getProjectDir(cwd)) + ':';

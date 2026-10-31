@@ -4572,7 +4572,8 @@ registerSocketConnection(io, socket => {
     pendingDeleteIds.delete(sessionId);
     // 必须【再失效一次】：上面那次 invalidate 发生在 sdkDeleteSession 之前，而真删要跑 git worktree list
     // 子进程、耗时可观。这段窗口里任何一次 session:list（另一台设备的 SWR revalidate、首页跨工作区聚合）
-    // 都可能把「仍含该会话」的扫盘结果重新写进 4s TTL 的 _listCache；pending 清掉后就会变成幽灵行。
+    // 都可能把「仍含该会话」的扫盘结果重新写进 _listCache；pending 清掉后就会变成幽灵行。（缓存按目录内容
+    // 指纹失效，文件删掉后下一次本来就会重扫；这一下是不依赖那条推理的兜底。）
     invalidateListCache(cwd);
     projectIndex.refresh(); // 子文件夹的最后一个会话被删了，这个项目就该从抽屉里消失
     autoContinue.onSessionGone(sessionId); // 会话都没了，到点不该再 resume 一个空壳去发
