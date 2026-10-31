@@ -7,6 +7,8 @@ import express from 'express';
 import { Server } from 'socket.io';
 import {
   computeAssetVersion,
+  injectModulePreloads,
+  listAppModuleGraph,
   rewriteAppModuleImports,
   rewriteCssAssetUrls,
   rewriteIndexAssetUrls,
@@ -85,9 +87,10 @@ export function createMockTransport({
   const io = new Server(httpServer, { cors: { origin: '*' } });
   const rejectedTokens = new Set(rejectedAuthTokens);
   const jsDir = join(publicDir, 'js');
-  // 版本戳、index 与子模块的 ?v= 改写、缓存头判据都直接用真 server 那一份：桌面性能对照跑在 mock 上，
-  // 这几处一分叉，量出来的热启动就不是生产那条路径。
+  // 版本戳、index 的模块预载与 ?v= 改写、子模块改写、缓存头判据都直接用真 server 那一份：桌面性能对照
+  // 跑在 mock 上，这几处一分叉，量出来的冷/热启动就不是生产那条路径。
   const assetVersion = computeAssetVersion(jsDir, publicDir, null, join(publicDir, 'vendor'));
+  const modulePreloads = listAppModuleGraph(jsDir);
 
   guardAgentEvents(io, caseGeneration);
   // 验收 O83：模拟真 server 的退避短锁。上锁后窗口内的握手一律回 cooldown（令牌不校验），
@@ -146,7 +149,10 @@ export function createMockTransport({
 
   app.get(['/', '/index.html'], (_req, res) => {
     try {
-      const html = rewriteIndexAssetUrls(readFileSync(join(publicDir, 'index.html'), 'utf8'), assetVersion);
+      const html = rewriteIndexAssetUrls(
+        injectModulePreloads(readFileSync(join(publicDir, 'index.html'), 'utf8'), modulePreloads),
+        assetVersion,
+      );
       res.setHeader('Cache-Control', 'no-store');
       res.type('html').send(html);
     } catch (error) {

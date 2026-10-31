@@ -109,3 +109,20 @@ test('mock 的版本戳与缓存头判据和真 server 一致', async t => {
   assert.equal(missing.status, 404);
   assert.notEqual(missing.headers.get('cache-control'), IMMUTABLE);
 });
+
+// 冷启动的对照同样跑在 mock 上：mock 不发 modulepreload，量出来的就还是一波接一波的旧瀑布。
+test('mock 的 index 预载的模块与真 server 逐字相同', async t => {
+  const realApp = express();
+  configureHttpShell({ app: realApp, projectRoot: REPO_ROOT, strategy: { isEnabled: () => false }, hotReloadJs: false });
+  const realServer = await new Promise(resolve => { const s = realApp.listen(0, '127.0.0.1', () => resolve(s)); });
+  const { httpServer } = createMockTransport({ buildNonce: 'preload-parity' });
+  await new Promise(resolve => httpServer.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { realServer.closeAllConnections(); realServer.close(); httpServer.closeAllConnections(); httpServer.close(resolve); }));
+  const preloads = async server => {
+    const html = await (await fetch(`http://127.0.0.1:${server.address().port}/`)).text();
+    return [...html.matchAll(/<link rel="modulepreload" href="([^"]+)">/g)].map(m => m[1]);
+  };
+  const real = await preloads(realServer);
+  assert.ok(real.length > 50, `真 server 只预载了 ${real.length} 个模块，app/public 的模块图不该这么小`);
+  assert.deepEqual(await preloads(httpServer), real);
+});

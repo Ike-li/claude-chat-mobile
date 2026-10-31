@@ -935,6 +935,94 @@ test.describe('configureHttpShell：只有带当前版本戳的一方资源才�
   });
 });
 
+// 浏览器只有拿到一个模块、解析完它的 import 才知道下一层要什么：app.js → app/*.js → 再下一层，冷启动
+// （首次打开、升级后）就是一波接一波的往返。index 的 head 里把整张图预先列成 modulepreload，几波压成一波。
+// 判据从浏览器那一侧看：顺着【实际下发的】源码里的 import 爬，爬到的每个 URL 都得在预载里、一字不差
+// （差一个 ?v= 就是另一个模块，预载白下、实际照样再下一次），预载里也不能多出图外的东西。
+test.describe('configureHttpShell：index 的 head 里预载整张模块图（modulepreload）', () => {
+  const IMMUTABLE = 'public, max-age=31536000, immutable';
+  const roots = [];
+  const servers = [];
+  test.after(async () => {
+    for (const server of servers) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+    for (const dir of roots) rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function boot({ hotReloadJs = false } = {}) {
+    const root = mkdtempSync(join(tmpdir(), 'ccm-http-preload-'));
+    roots.push(root);
+    const pub = join(root, 'app/public');
+    for (const dir of ['js/app', 'js/logic', 'css', 'vendor']) mkdirSync(join(pub, dir), { recursive: true });
+    writeFileSync(join(pub, 'index.html'), [
+      '<html><head><script src="/js/theme-boot.js"></script></head>',
+      '<body ><script type="module" src="/js/app.js"></script></body></html>',
+    ].join('\n'));
+    // 四层：app.js → app/a.js、logic.js → app/b.js（a.js 还重复引 ../logic.js）→ logic/deep.js（经 ../ 跨目录）
+    writeFileSync(join(pub, 'js/app.js'), "import { A } from './app/a.js';\nimport { L } from './logic.js';\nconsole.log(A, L);\n");
+    writeFileSync(join(pub, 'js/app/a.js'), "import { B } from './b.js';\nexport { L } from '../logic.js';\nexport const A = B;\n");
+    writeFileSync(join(pub, 'js/app/b.js'), "import { D } from '../logic/deep.js';\nexport const B = D;\n");
+    writeFileSync(join(pub, 'js/logic.js'), 'export const L = 1;\n');
+    writeFileSync(join(pub, 'js/logic/deep.js'), 'export const D = 1;\n');
+    writeFileSync(join(pub, 'js/orphan.js'), 'export const O = 1;\n'); // 图外的模块
+    writeFileSync(join(pub, 'js/theme-boot.js'), 'document.documentElement.dataset.t = "x";\n'); // 经典脚本
+    const app = express();
+    configureHttpShell({ app, projectRoot: root, strategy: strategyStub(), hotReloadJs });
+    const server = app.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    servers.push(server);
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const get = path => fetch(base + path);
+    const preloadsOf = async () => {
+      const html = await (await get('/')).text();
+      const headEnd = html.indexOf('</head>');
+      const links = [...html.matchAll(/<link rel="modulepreload" href="([^"]+)">/g)];
+      for (const m of links) assert.ok(m.index < headEnd, `${m[1]} 的预载不在 head 里，浏览器读到它时 head 早过了`);
+      const entry = html.match(/<script type="module" src="([^"]+)">/)[1];
+      return { hrefs: links.map(m => m[1]), entry };
+    };
+    // 浏览器视角的模块图：从入口 URL 起，按下发源码里的 import 说明符相对当前 URL 解析
+    const crawl = async entry => {
+      const seen = new Set([entry]);
+      for (const url of seen) {
+        const res = await get(url);
+        assert.equal(res.status, 200, url);
+        const source = await res.text();
+        for (const [, spec] of source.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
+          const dep = new URL(spec, base + url);
+          seen.add(dep.pathname + dep.search);
+        }
+      }
+      return seen;
+    };
+    return { pub, get, preloadsOf, crawl };
+  }
+
+  test('预载集合 = 从入口顺着实际 import 爬到的 URL 集合，逐个带当前版本戳；图外模块与经典脚本不预载', async () => {
+    const { get, preloadsOf, crawl } = await boot();
+    const { hrefs, entry } = await preloadsOf();
+    const graph = await crawl(entry);
+    assert.equal(graph.size, 5, `夹具的模块图应是 5 个：${[...graph]}`);
+    assert.deepEqual([...hrefs].sort(), [...graph].sort(), '预载与浏览器实际要下的模块对不上');
+    assert.equal(new Set(hrefs).size, hrefs.length, '同一模块预载了不止一次');
+    for (const href of hrefs) {
+      assert.doesNotMatch(href, /orphan|theme-boot/, `${href} 不在模块图里`);
+      assert.equal((await get(href)).headers.get('cache-control'), IMMUTABLE, `${href} 没拿到 immutable：版本戳不是当前的`);
+    }
+  });
+
+  // 生产配置开着 ASSET_HOT_RELOAD：改了前端不重启，新加的模块下一次打开就该在预载里，否则又退回多一波往返
+  test('热读档：新加一条 import 后，下一次请求 index 的预载就跟上新图与新版本戳', async () => {
+    const { pub, preloadsOf, crawl } = await boot({ hotReloadJs: true });
+    const before = await preloadsOf();
+    writeFileSync(join(pub, 'js/app/c.js'), 'export const C = 1;\n');
+    writeFileSync(join(pub, 'js/app/b.js'), "import { D } from '../logic/deep.js';\nimport { C } from './c.js';\nexport const B = D + C;\n");
+    const after = await preloadsOf();
+    assert.ok(after.hrefs.some(href => href.startsWith('/js/app/c.js?v=')), `新模块 app/c.js 不在预载里：${after.hrefs}`);
+    assert.notEqual(after.entry, before.entry, '改了模块，入口的版本戳没变');
+    assert.deepEqual([...after.hrefs].sort(), [...await crawl(after.entry)].sort());
+  });
+});
+
 // 2026-09-06 容器演练：index.html 的 <body> 自带 data-cf-access="0"（静态壳离线也要有确定值），此前服务端启用
 // Access 时是往 body 前面再插一个 ="1"，页面上同名属性出现两次，全靠 HTML 解析器「取第一个」才成立——
 // 属性顺序一换就静默翻成 0，而 0 的含义是「非 CF 拓扑」，公网用户令牌失效后会被送去错误的那扇门。
