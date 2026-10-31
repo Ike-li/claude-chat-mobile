@@ -616,6 +616,18 @@ test('getSessionHistoryWithTotal: 没超上限时 total 等于返回条数；文
   assert.deepEqual(await getSessionHistoryWithTotal('no-such-total', cwd, { baseDir: BASE }), { messages: [], total: 0 });
 });
 
+// 性能改造 Stage 0：session:history 回执带上服务端耗时拆分，手机导出的日志才分得清慢在求链、解析，还是没吃上缓存
+test('getSessionHistoryWithTotal: 带耗时拆分——首读是 miss（求链、解析各多久、读了几遍），文件没变再读是 hit', async () => {
+  const cwd = '/test/timing-hist';
+  writeJSONL(join(BASE, getProjectDir(cwd)), 'timing', [{ type: 'user', message: { role: 'user', content: '你好' } }]);
+  const first = await getSessionHistoryWithTotal('timing', cwd, { baseDir: BASE });
+  assert.equal(first.timing?.cache, 'miss');
+  assert.equal(first.timing?.passes, 1);
+  assert.ok(Number.isFinite(first.timing?.chainMs) && Number.isFinite(first.timing?.parseMs), JSON.stringify(first.timing));
+  const again = await getSessionHistoryWithTotal('timing', cwd, { baseDir: BASE });
+  assert.deepEqual(again.timing, { cache: 'hit' });
+});
+
 // ── classifyTranscriptTail：尾部形态判定（单驾驶员模型的核心判据，2026-07-12 实验实证）──────────
 // 依据：CLI 每个动作即时落盘——assistant 发起 tool_use 先落、tool_result 回来再落、最终文本收尾落。
 // 于是消息链最后一条的形态可直接读出「轮次是否完结」，不依赖磁盘静默时间窗猜测（修「长工具调用
@@ -1040,6 +1052,18 @@ test('getSessionHistory: 物理最新的主链消息不在 SDK 当前链上时�
     const msgs = await getSessionHistory('awaysummary', cwd, 50, { baseDir: BASE });
     assert.deepEqual(msgs.map(m => m.content), AWAY_SUMMARY_EXPECTED,
       '手机续聊的那段被当成撤销分支剪掉了：SDK 选的叶子不是物理最新的那条主链消息，这时不该按它剪');
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+test('getSessionHistoryWithTotal: SDK 选错叶子触发第二遍读时，耗时拆分里记 2 遍', async () => {
+  const cwd = '/test/timing-away-summary';
+  writeJSONL(join(BASE, getProjectDir(cwd)), 'timingaway', AWAY_SUMMARY_ENTRIES);
+  __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-1' }, { uuid: 'a-1' }]);
+  try {
+    const { timing } = await getSessionHistoryWithTotal('timingaway', cwd, { baseDir: BASE });
+    assert.equal(timing?.passes, 2);
   } finally {
     __setSdkGetSessionMessagesForTest(undefined);
   }

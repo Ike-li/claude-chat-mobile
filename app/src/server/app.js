@@ -2565,22 +2565,29 @@ const RESUME_PRIOR_EXIT_WAIT_MS = 1500;
 // CLI 官方给的出路是 `claude agents` attach 或 `--fork-session` 分叉副本，杀掉占用者不在其中。
 async function openResumeInstance(cwd, resumeId, extra = {}) {
   const t0 = Date.now();
+  // 各段耗时（2026-10-31 性能改造 Stage 0）：挂到实例上，由 session:switch 回执带给前端写进打开会话那行 [PERF]
+  const timing = {};
   let transcriptMode = null, transcriptModel = null, divergence = null;
   if (resumeId) {
     await instanceManager.waitForSessionExits(resumeId, RESUME_PRIOR_EXIT_WAIT_MS);
+    timing.priorExitMs = Date.now() - t0;
     const retained = extra.authorizedRoot ? { cwd, authorizedRoot: extra.authorizedRoot } : null;
     const location = await sessionRecovery.resolve(cwd, resumeId, retained);
     if (location.status !== 'found') throw new Error(locationError(location));
     cwd = location.cwd;
+    const tParallel = Date.now();
+    timing.resolveMs = tParallel - t0 - timing.priorExitMs;
+    // 并发的几路各记各的完成时刻（距并发起点），按完成先后落进 timing：最后一个就是这一段在等的那路
+    const lap = key => () => { timing[key] = Date.now() - tParallel; };
     // 读末条权限档 / 读末条模型 / L3 CLI settings 兜底 / 分叉判定四路互无数据依赖，从入口就并发。
     const [[mode, model], , div] = await Promise.all([
-      Promise.all([readLastPermissionMode(resumeId, cwd), readLastAssistantModel(resumeId, cwd)]),
+      Promise.all([readLastPermissionMode(resumeId, cwd), readLastAssistantModel(resumeId, cwd)]).finally(lap('readsMs')),
       Promise.race([
         ensureCliDefaults(cwd),
         new Promise(resolve => setTimeout(resolve, CLI_DEFAULTS_RESUME_BUDGET_MS)),
-      ]),
+      ]).finally(lap('defaultsMs')),
       // 这次续接会不会丢掉最新那段对话（SESSION-04，判据见 sessions/resume-anchor.js）。读不动就当没有。
-      readResumeEntries(cwd, resumeId).then(resumeDivergence).catch(() => null),
+      readResumeEntries(cwd, resumeId).then(resumeDivergence).catch(() => null).finally(lap('divergenceMs')),
     ]);
     transcriptMode = mode;
     transcriptModel = model;
@@ -2600,7 +2607,9 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
     interactionLog.addSessionLog(resumeId, 'sys_info',
       `[SYS] 续接分叉：最新对话 ${divergence.newestUuid}（${divergence.newestEntrypoint}）不在 CLI 会接上的链上，${divergence.droppedCount} 条不进上下文；发送前先问用户`);
   }
-  diagLog.record(resumeId, 'resume', 'settled', { ms: Date.now() - t0 }); // Part C：resume 总耗时
+  const ms = Date.now() - t0;
+  diagLog.record(resumeId, 'resume', 'settled', { ms }); // Part C：resume 总耗时
+  instance.resumeTiming = { resumeMs: ms, ...timing };
   return instance;
 }
 
@@ -3880,6 +3889,7 @@ registerSocketConnection(io, socket => {
   }
 
   on(socket, 'session:switch', async (payload, ack) => {
+    const t0 = Date.now();
     const sessionId = payload?.sessionId;
     const opening = Symbol('session-open');
     socket.sessionOpening = opening;
@@ -3948,7 +3958,11 @@ registerSocketConnection(io, socket => {
     if (inst) inst.routeGeneration = sessions.getGeneration(workspaceCwdOf(cwd));
     // 打开期间用户点了别的会话：不抢焦点；也不回失败——前端对 ok:false 一律弹「打不开」
     if (socket.sessionOpening !== opening || viewingInstanceId !== viewingAtOpen) return ack?.({ ok: true, superseded: true, instanceId: inst?.instanceId, sessionId });
-    finishOpenFocus(inst, transcriptCwdOf(inst), sessionId, ack);
+    // timing：handler 总耗时，这次新开了实例时再加 resume 各段（性能改造 Stage 0），前端写进打开会话那行 [PERF]。
+    // 聚焦已在跑的实例不带 resume 段：那是它当初打开时的数，不是这一次的。
+    const resumeTiming = live ? null : inst.resumeTiming;
+    finishOpenFocus(inst, transcriptCwdOf(inst), sessionId,
+      typeof ack === 'function' ? r => ack({ ...r, timing: { ms: Date.now() - t0, ...resumeTiming } }) : ack);
   });
 
   // 从历史消息某点分叉新会话：官方 forkSession 复制 transcript 到新文件（重映射 uuid、保留 parentUuid
@@ -4698,6 +4712,7 @@ registerSocketConnection(io, socket => {
 
   // E14 历史回显（鉴权随握手；取代原无鉴权的 GET /sessions/:id/history）
   on(socket, 'session:history', async (payload, ack) => {
+    const t0 = Date.now();
     const sessionId = payload?.sessionId;
     if (typeof ack !== 'function') return;
     // 归属校验与 session:switch 同款：jsonl 在本 cwd 的 project 目录即有效——接纳终端创建的
@@ -4712,8 +4727,9 @@ registerSocketConnection(io, socket => {
     cwd = location.cwd;
     try {
       // total = 削顶前的条数：超过 HISTORY_MAX_MESSAGES 时前端据此说「只显示了最近的」（验收 O44）
-      const { messages, total } = await getSessionHistoryWithTotal(sessionId, cwd); // M6：async 避免阻塞事件循环
-      ack({ messages, total });
+      const { messages, total, timing } = await getSessionHistoryWithTotal(sessionId, cwd); // M6：async 避免阻塞事件循环
+      // timing：handler 总耗时加历史构建的拆分，前端写进打开会话那行 [PERF]（性能改造 Stage 0）
+      ack({ messages, total, timing: { ms: Date.now() - t0, ...timing } });
     } catch (err) {
       ack({ messages: [], error: err.message });
     }

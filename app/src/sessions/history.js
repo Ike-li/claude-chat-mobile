@@ -175,13 +175,17 @@ async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR 
     // 真 LRU：命中后移到 Map 末尾，避免热会话被冷扫挤掉
     _histCache.delete(historyFile);
     _histCache.set(historyFile, cached);
-    return { messages: cached.messages.slice(-limit), total: cached.total };
+    return { messages: cached.messages.slice(-limit), total: cached.total, timing: { cache: 'hit' } };
   }
 
+  // timing 随 session:history 回执带给前端（2026-10-31 性能改造 Stage 0）：慢在求链、解析，
+  // 还是没吃上缓存，机主导出的手机日志里分得清。
+  const t0 = Date.now();
   // 当前链的 uuid 集合。放在缓存判定【之后】：文件没变链就没变，命中缓存时连这次读盘也省掉。
   const liveUuids = await readLiveChainUuids(sessionId, cwd, baseDir);
+  const chainMs = Date.now() - t0;
 
-  let messages, total;
+  let messages, total, passes = 1;
   try {
     let pass = await readHistoryMessages(historyFile, liveUuids);
     // 【SDK 选的叶子不是用户最后看到的那条 ⇒ 不剪】（2026-10-15）物理上最新的那条主链 user/assistant
@@ -197,12 +201,14 @@ async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR 
     // （da2b6acb 因此多出一句终端里被丢弃的「继续」）。
     // 第二遍读只在触发时发生；结果照常进缓存——文件没变，SDK 的选择就不会变。
     if (liveUuids && pass.newestMainUuid && !liveUuids.has(pass.newestMainUuid)) {
+      passes = 2;
       pass = await readHistoryMessages(historyFile, null);
     }
     ({ messages, total } = pass);
   } catch {
     return NO_HISTORY; // 读取失败（含不是普通文件）
   }
+  const parseMs = Date.now() - t0 - chainMs;
 
   // B6：缓存消息（LRU 淘汰：上方命中路径 delete+set 移到 Map 末尾，超上限淘汰最久未用的）；已在流式阶段封顶到
   // HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。正常会话（≤上限）即全量历史；仅极端超大会话被削顶——
@@ -210,7 +216,7 @@ async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR 
   // 写入用 setCapped（FIFO 占位）：命中路径已负责刷新位置；这里只保证新键不把表撑破。
   setCapped(_histCache, historyFile, { mtimeMs, size, messages, total, unfiltered: chainSourceAvailable && !liveUuids }, HIST_CACHE_MAX);
 
-  return { messages: messages.slice(-limit), total };
+  return { messages: messages.slice(-limit), total, timing: { cache: 'miss', chainMs, parseMs, passes } };
 }
 
 // 流式读一遍 transcript 出回显条目；liveUuids 非 null 时剪掉当前链开始之后的废弃分支（判据见循环里）。

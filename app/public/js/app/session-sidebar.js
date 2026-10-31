@@ -15,7 +15,7 @@ export function createSessionSidebar(context, {
   appConfirm, applyDeepLink, applySessionDraftSwap, attachments, attentionChipEl, baseName, closeLeftSidebar,
   composePage, connBanner, connDot, connDotWrap, dismissBlockedSurfaceIfTarget, drawer, el,
   ensureEmptySurface, enterComposeReady, envConfigPanel, folderPicker, haptic, inputEl, leftSidebar,
-  newSessionWorktree, noticeDismissals, openDeleteSession, projectsState, renderHooksBridgeSection,
+  newSessionWorktree, noticeDismissals, openDeleteSession, perfTrace, projectsState, renderHooksBridgeSection,
   renderStatuslineBridgeSection, SESSION_PANEL_REVALIDATE_MS, sessionPanel, sessionRename, sessionRowMenu, sessionsCache,
   sessionsDot, sessionSearchQueryByDir, sessionWorkspaceState, setStatusIcon, showSessionBlockedSurface,
   socket, syncDashNoFolders, unread, getAvailableDirs, getCurrentCwd, getDirSectionNodes,
@@ -485,16 +485,23 @@ export function createSessionSidebar(context, {
     btn.onclick = () => {
       haptic('tap');
       if (liveInst) {                      // 已打开：切视图，不重新 resume
-        if (liveInst.instanceId !== getViewingInstanceId()) socket.emit('user:setViewing', { instanceId: liveInst.instanceId });
+        if (liveInst.instanceId !== getViewingInstanceId()) {
+          perfTrace.openBegin(s.id, 'tap');
+          socket.emit('user:setViewing', { instanceId: liveInst.instanceId });
+        }
         closeLeftSidebar();
       } else {                             // 未打开：resume 打开（同步关面板 + 4s 兜底，不把反馈压在 ack 上）
         closeLeftSidebar();
         let acked = false;
         const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: rowCwd, title: s.title, message });
+        perfTrace.openBegin(s.id, 'tap');
         socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => {
           acked = true;
-          if (!res?.ok) blocked(res?.error || t('切换失败'));
-          else dismissBlockedSurfaceIfTarget(s.id, rowCwd); // 迟到的成功 ack：撤掉 4s 兜底弹出的落地页
+          if (!res?.ok) { perfTrace.openEnd(s.id, 'error'); blocked(res?.error || t('切换失败')); }
+          else {
+            perfTrace.openStep(s.id, 'switch', { server: res.timing });
+            dismissBlockedSurfaceIfTarget(s.id, rowCwd); // 迟到的成功 ack：撤掉 4s 兜底弹出的落地页
+          }
         });
         setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
       }
