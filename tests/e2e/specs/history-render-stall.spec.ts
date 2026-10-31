@@ -1,10 +1,11 @@
 // helpers: tests/helpers/playwright.ts
 //
-// #307「只有『加载了 N 条历史消息』提示条、下面没有气泡」：根因还没复现，这里只钉观测和缓解。
+// #307「只有『加载了 N 条历史消息』提示条、下面没有气泡」。
 // 历史是分块渲染的（每块 40 条，全部跑完才一次性插入 #messages），中途放弃或某条抛错都会停在只有提示条的样子。
-//   · 观测：两条路径各记一条客户端日志（日志面板里看得到），带会话号、两个实例号、已渲染条数。
-//   · 缓解：提示条上原地给「重新加载」，重新拉一次历史（不刷新整页），不重复渲染。
-// 根因修好之后，这里的「停在只有提示条」应当改成「最终有完整气泡」（见 Issue 处理顺序第 2 步）。
+//   · 已修的一条（1b/1d/1e）：分块没画完、或回执还在路上（只有加载卡）时切走或同会话换实例，这份半成品曾被存进
+//     sessionDomCache，切回时原样贴回，sync:since 判 keep、不再拉历史。现在半成品不进缓存，切回会重新完整加载。
+//   · 观测：中途放弃、某条抛错各记一条客户端日志（日志面板里看得到），带会话号、两个实例号、已渲染条数。
+//   · 缓解：某条抛错停住时（根因未知），提示条上原地给「重新加载」，重新拉一次历史（不刷新整页），不重复渲染。
 
 import { test, expect, type Page } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
@@ -81,10 +82,12 @@ async function expectCompleteLongHistory(page: Page) {
 }
 
 test.describe('#307 历史渲染停在提示条：观测与原地重新加载', () => {
-  test('P0-HIST-STALL-1b 同会话更换实例且没有接替加载：记中断坐标，原地重载恢复且不刷新页面', async ({ page }) => {
+  test('P0-HIST-STALL-1b 分块渲染途中同会话更换实例：记中断坐标，新实例自动重新加载出完整历史，不刷新页面', async ({ page }) => {
     const loads = captureHistoryLoads(page);
     const syncs = captureHistoryLoads(page, 'sync:since');
+    const navigations: string[] = [];
     await gotoMock(page);
+    page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
     await holdHistoryChunks(page);
     await openLongHistory(page);
     await expect.poll(() => page.evaluate(() => (window as unknown as HistoryIdleGate).__heldHistoryChunks.length)).toBeGreaterThan(0);
@@ -99,20 +102,64 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
     await expect.poll(() => syncs.some(p => p.instanceId === replacement.instanceId && p.sessionId === replacement.sessionId)).toBe(true);
     await releaseHistoryChunks(page);
 
-    const reload = page.locator('#messages [data-testid="history-reload"]');
-    await expect(reload).toBeVisible();
-    await expect(bubbles(page)).toHaveCount(0);
-    expect(loads.filter(p => p.sessionId === replacement.sessionId), '置换后应保留提示条缓存，没有新的全量加载接替').toHaveLength(1);
+    // 半成品（只有提示条）不能被当成缓存贴回新实例，否则 sync:since 判 keep、不再拉历史
+    await expectCompleteLongHistory(page);
+    expect(loads.filter(p => p.sessionId === replacement.sessionId), '新实例应自动再拉一次历史').toHaveLength(2);
     const log = await consoleLogText(page);
     await expect(log).toContainText(`session=${replacement.sessionId} instance=${replacement.previousInstanceId}→${replacement.instanceId} 已渲染 40/2000`);
     await page.locator('#consoleClose').click();
-
-    const navigations: string[] = [];
-    page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
-    await reload.click();
     await expectCompleteLongHistory(page);
-    expect(loads.filter(p => p.sessionId === replacement.sessionId)).toHaveLength(2);
     expect(navigations, '重新加载历史不应刷新整页').toEqual([]);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-HIST-STALL-1d 分块渲染途中切到别的会话再切回：重新加载出完整历史，不停在只有提示条', async ({ page }) => {
+    const loads = captureHistoryLoads(page);
+    await gotoMock(page);
+    await holdHistoryChunks(page);
+    await openLongHistory(page);
+    await expect.poll(() => page.evaluate(() => (window as unknown as HistoryIdleGate).__heldHistoryChunks.length)).toBeGreaterThan(0);
+    await expect(page.locator('#messages').getByText(LONG_NOTICE), '前提：提示条已插入').toHaveCount(1);
+    await expect(bubbles(page), '前提：分块还没落地').toHaveCount(0);
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
+    // 旧的分块在别的会话期间跑完：发现实例变了，整段作废
+    await releaseHistoryChunks(page);
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Long History Session');
+    await expectSidebarClosed(page);
+    await expectCompleteLongHistory(page);
+    expect(loads.filter(p => p.sessionId === 'mock-session-long-history'), '切回时应重新拉历史').toHaveLength(2);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-HIST-STALL-1e 历史回执还在路上就切到别的会话、回执作废后切回：重新加载出完整历史，不停在空白', async ({ page }) => {
+    const loads = captureHistoryLoads(page);
+    await gotoMock(page);
+    await page.request.post('/__hold-next-history-ack');
+    await openLongHistory(page);
+    await expect(page.locator('#historyLoadingCard'), '前提：回执扣着，停在加载卡').toBeVisible();
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
+    expect((await (await page.request.post('/__release-history-ack')).json()).released, '前提：长会话的回执一直扣着').toBe(1);
+    // 看到作废日志，迟到的回执就处理完了：切回时不会被它碰巧补上
+    const log = await consoleLogText(page);
+    await expect(log).toContainText('上一轮历史回执迟到，已作废（之后又发起了新一轮加载） session=mock-session-long-history', { timeout: 10_000 });
+    await page.locator('#consoleClose').click();
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Long History Session');
+    await expectSidebarClosed(page);
+    await expectCompleteLongHistory(page);
+    await expect(page.locator('#historyLoadingCard')).toHaveCount(0);
+    expect(loads.filter(p => p.sessionId === 'mock-session-long-history'), '切回时应重新拉历史').toHaveLength(2);
     await expectNoBrowserErrors(page);
   });
 
