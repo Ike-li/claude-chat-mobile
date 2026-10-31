@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { join, posix, relative, sep } from 'node:path';
 import compression from 'compression';
 import express from 'express';
 import { authRejection, gateCheck } from '../auth/rate-limiter.js';   // 拒绝语义与锁定门都与 socket 握手共用
@@ -252,13 +252,36 @@ export function rewriteIndexAssetUrls(html, assetVersion) {
   );
 }
 
+// 相对 ESM import（含 export … from）。rewriteAppModuleImports 按它戳版本，listAppModuleGraph 按它爬图：
+// 两处必须同一个正则，否则预载的 URL 和实际 import 的 URL 差一个 ?v=，同一模块下两次。
+const RELATIVE_IMPORT_RE = /from\s+(['"])(\.\.?\/[\w./-]+\.js)\1/g;
+
 // app.js（及将来其它壳模块）：所有相对 ESM import 打 ?v=，含 ./app/*.js 与 ../logic.js。
 // 只改 logic.js 会漏掉子模块——生产曾因此让 connection-sync 改动在手机上不生效。
 export function rewriteAppModuleImports(source, assetVersion) {
-  return source.replace(
-    /from\s+(['"])(\.\.?\/[\w./-]+\.js)\1/g,
-    `from '$2?v=${assetVersion}'`,
-  );
+  return source.replace(RELATIVE_IMPORT_RE, `from '$2?v=${assetVersion}'`);
+}
+
+// 从 app.js 顺着相对 import 爬出整张模块图（相对 js/ 的 posix 路径，入口在首位）。经典脚本
+// （theme-boot.js、sw-cleanup.js）与图外的文件不在里面。
+export function listAppModuleGraph(selfJsDir) {
+  const seen = new Set(['app.js']);
+  const out = [];
+  for (const rel of seen) {
+    let source;
+    try { source = readFileSync(join(selfJsDir, rel), 'utf8'); } catch { continue; }
+    out.push(rel);
+    for (const [, , spec] of source.matchAll(RELATIVE_IMPORT_RE)) seen.add(posix.join(posix.dirname(rel), spec));
+  }
+  return out;
+}
+
+// 浏览器解析完一个模块才知道下一层要什么，冷启动（首次打开、升级后）是 app.js → app/*.js → 再下一层
+// 一波接一波的往返。在 head 里把整张图列成 modulepreload，几波压成一波。href 不带版本，交给
+// rewriteIndexAssetUrls 统一戳，和 import 改写出的 URL 一字不差。
+export function injectModulePreloads(html, modules) {
+  const links = modules.map(rel => `<link rel="modulepreload" href="/js/${rel}">`).join('\n');
+  return html.replace('</head>', `${links}\n</head>`);
 }
 
 // css/*.css：url() 里的站内 /css、/vendor 引用打 ?v=（app.css 的 @font-face 字体）。字体不经过 index，
@@ -344,8 +367,9 @@ export function configureHttpShell({
     // 就换成新 URL。不重算的话，旧 URL 已被 immutable 存下的那份一年不失效，改了也看不到。
     if (hotReloadJs) assetVersion = computeAssetVersion(selfJsDir, publicDir, selfJsFiles, vendorDir);
     try {
+      // 模块图与版本戳同档：生产档随 index 在启动时算一次，热读档每次请求 index 重爬
       return injectCfAccessFlag(rewriteIndexAssetUrls(
-        readFileSync(join(publicDir, 'index.html'), 'utf8'),
+        injectModulePreloads(readFileSync(join(publicDir, 'index.html'), 'utf8'), listAppModuleGraph(selfJsDir)),
         assetVersion,
       ), strategy.isEnabled());
     } catch {
