@@ -756,6 +756,11 @@ test.describe('logEntryVisibleForInstance：交互日志按实例分流（切工
     assert.equal(logEntryVisibleForInstance({ type: 'client_conn', instanceId: null }, null), true);
   });
 
+  test('client_perf 耗时行同样恒显——「复制全部」只带走可见条目，在哪个视图打开抽屉都要导出全部耗时', () => {
+    assert.equal(logEntryVisibleForInstance({ type: 'client_perf', instanceId: 'A' }, 'B'), true);
+    assert.equal(logEntryVisibleForInstance({ type: 'client_perf', instanceId: 'A' }, null), true);
+  });
+
   test('空首页两端 instanceId 皆 null → 可见；一端 null 一端有值 → 隐藏', () => {
     assert.equal(logEntryVisibleForInstance({ type: 'client_send', instanceId: null }, null), true);
     assert.equal(logEntryVisibleForInstance({ type: 'client_send', instanceId: null }, 'A'), false);

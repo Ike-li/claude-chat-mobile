@@ -141,6 +141,7 @@ import { readThemePref, writeThemePref, applyThemeToDocument } from './theme.js'
 import { askQuestionResultView } from './logic/questions.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
+import { createPerfTrace } from './app/perf-trace.js';
 import { createAlertController } from './app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from './app/attachments.js';
 import { createTranscriptImages } from './app/transcript-images.js';
@@ -775,6 +776,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     },
   });
   const logClientEvent = clientLogger.log;
+  // 启动、打开会话各段耗时写成 client_perf 行，机主在手机上导出（性能改造 Stage 0，见 app/perf-trace.js）
+  const perfTrace = createPerfTrace({ log: text => logClientEvent('perf', text) });
+  perfTrace.mark('appjs');
   // 切后台/被 iOS 杀前把节流窗口内未落盘的日志尾巴强制写入。pagehide 在移动端比 unload 可靠；
   // visibilitychange→hidden 覆盖「切走但未卸载」。flush 幂等（force write）、双挂无害。
   // 同时上报 presence（PWA 后台推送修复）：服务端据此判定 approved 房间里是否还有"前台"连接，解锁
@@ -1182,6 +1186,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     reconnectionDelay: 500,
     reconnectionDelayMax: 2000,
   }));
+  // 先走 polling 再升级 websocket：升级落在启动哪个时刻、升没升上去（Stage 2c 据此决定改不改传输）
+  socket.io.on('open', () => socket.io.engine.once('upgrade', transport => perfTrace.mark('upgrade', { transport: transport?.name })));
 
   // 全局 JS 错误上报：手机浏览器无 devtools，运行期错误进本地日志抽屉（client_error）
   // 并经 logs:clientError 落服务端日志。只覆盖启动成功之后的错误——更早的解析/启动
@@ -1698,6 +1704,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     startRttLoop(); // 连上即开始测 RTT（立即一次 + 周期）
     cliStatusBarEl?.classList.remove('opacity-40'); // E16：重连恢复（折叠条整体：summary + ANSI 行，重放/刷新马上跟上）
     logClientEvent('conn', `连接成功！Socket ID = ${socket.id}。当前使用 token: ${token ? token.slice(0, 4) + '***' : '无（本机/公网）'}`);
+    perfTrace.mark('connect', { transport: socket.io.engine?.transport?.name });
     // 台阶3：首连由 instances 事件驱动加载当前查看实例（见 setInstances）；重连（非首连、已有绑定实例）
     // 续传该实例缓冲补齐断线期间漏掉的事件。
     if (!initialLoad && displayedInstanceId && displayedSessionId) requestSync({ probe: false });
@@ -4300,6 +4307,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   let _canRestart = false; // 由 instances 广播维护，供配置面板判断能否就地重启
 
   function setInstances(p) {
+    perfTrace.mark('instances');
     projectsState.set(p);
     availableDirs = projectsState.keys();
     syncDashNoFolders(); // 首页开着时连上/断开了文件夹：引导跟着广播走，不等下次重画首页
@@ -4913,6 +4921,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       showLoadingCard();
     }
 
+    // 打开会话埋点：并进刚才那次点击；没有点击的（启动恢复上次会话、同会话换实例）从这里起算
+    const perfOpen = perfTrace.openBind(sid, { note: hasCache ? '有缓存' : '无缓存' });
     // 回放缓冲（P0-REPLAY-BUFFER）：emit 之前先 begin()，期间命中该 instanceId 的 agent:event
     // 先入队不渲染（见上方 socket.on('agent:event', ...)），修「切会话逐条吐消息像打字机」。
     const replayHandle = replayBuffer.begin(id);
@@ -4933,9 +4943,10 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // 自带 15s 超时与 err 清理，连接还活着即自愈；resolve('reload') 把续传基线推进到缓冲尾，
         // 历史不占 seq、不会重复）。无 sid → 磁盘上无从补拉，缓冲就是唯一内容：flush 渲染 + 收
         // 加载卡，宁可残缺不可白等（同 decideTimeoutAction 的取舍）。unreadOnEntry 随 ack 丢失，按 0。
+        perfTrace.openStep(perfOpen, 'sync', { note: '超时或断线' });
         if (sid) {
           replayBuffer.resolve(replayHandle, 'reload');
-          loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(0));
+          loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(0), perfOpen);
         } else {
           replayBuffer.resolve(replayHandle, 'flush');
           hideLoadingCard();
@@ -4960,6 +4971,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // entry?.state——ack 到达前可能已有更新的 instances 广播）。
       const busy = shouldSeedBusyFromInstanceState(instancesList.find(x => x.instanceId === id)?.state ?? entry?.state);
       const bufferAction = resolveReplayBufferAction({ bufferedCount: replayBuffer.bufferedCount(id), priorAction: action, busy, hasSessionId: Boolean(sid) });
+      // 记下面走的是哪条分支：load / reload 接着等历史回执，keep 到这里就算打开完了
+      perfTrace.openStep(perfOpen, 'sync', { note: action === 'load' ? 'load' : bufferAction === 'reload' ? 'reload' : 'keep' });
       // 未读胶囊：数字随 ack 一次性到达，但 DOM 是否已就绪要看走哪条分支——'load'/'reload' 要等
       // loadHistory 分块渲染真正落地（onDone）才能查 topLevelBubbles()，'keep' 分支 DOM 已稳定可以直接查。
       const unreadOnEntry = res?.unreadOnEntry || 0;
@@ -4967,7 +4980,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // 缓冲通常本就空（'load' 只在 server replayed===0 时出现）；仍统一走 resolve('reload') 收尾，
         // 防万一有穿插的实时事件——续传基线前移到缓冲尾，不遗漏、不重复。
         replayBuffer.resolve(replayHandle, 'reload');
-        loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
+        loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(unreadOnEntry), perfOpen);
       } else if (bufferAction === 'reload') {
         // 覆盖两种来源：action 本就是 'reload'（gap/外部写入），或 'keep' 但缓冲攒太多被这层升级——
         // 统一走清屏 + session:history 批量重载（loadHistory/renderHistoryBubbles 本就是一次性 fragment
@@ -4989,7 +5002,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // 发送闸同理：clearView 把 _turnRunning 清了，按广播的权威字段重种，否则 reload 后停止钮消失
         if (instancesList.find(x => x?.instanceId === id)?.turnRunning === true) _turnRunning = true;
         showLoadingCard();
-        loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
+        loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(unreadOnEntry), perfOpen);
       } else {
         // flush：缓冲队列（若有）按到达顺序正常派发（走原 handler 增量渲染），抑制中间滚动，派发完
         // 只做一次强制落底（resolveReplayBufferAction 内部处理，见 createReplayBuffer flushQueue）。
@@ -5001,6 +5014,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // 视图会停留在旧底部附近，直到某条补发事件恰好触发滚动。flushQueue 已在缓冲非空时做过一次
         // 强制落底，这里是冗余但无害的兜底（replayed=0/缓冲为空时仍需要它独立生效）。
         if (shouldForceScrollAfterReplay({ action, replayed: res?.replayed })) scrollBottom(true);
+        perfTrace.openEnd(perfOpen, 'keep');
       }
       // 状态对账：视图已稳定（上面所有 clearView 已执行完）→ 用 ack 带回的快照重建未决审批/提问卡片。
       // 放最后而非提前 socket.emit，正为不被 reload 分支的 clearView 清掉（workflow 高频事件常触发 gap）。
@@ -5520,7 +5534,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     dismissBlockedSurfaceIfTarget: (...args) => dismissBlockedSurfaceIfTarget(...args), drawer, el,
     ensureEmptySurface: (...args) => ensureEmptySurface(...args),
     enterComposeReady: (...args) => enterComposeReady(...args), envConfigPanel, folderPicker, haptic,
-    inputEl, leftSidebar, newSessionWorktree, noticeDismissals, openDeleteSession, projectsState,
+    inputEl, leftSidebar, newSessionWorktree, noticeDismissals, openDeleteSession, perfTrace, projectsState,
     renderHooksBridgeSection, renderStatuslineBridgeSection, SESSION_PANEL_REVALIDATE_MS, sessionPanel,
     sessionRename, sessionRowMenu, sessionsCache, sessionsDot, sessionSearchQueryByDir, sessionWorkspaceState,
     setStatusIcon, showSessionBlockedSurface: (...args) => showSessionBlockedSurface(...args), socket,
@@ -5658,7 +5672,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   const emptySurfaces = createEmptySurfaces(appContext, {
     $, approvals, baseName, btnHome, btnNew, btnSessions, dashUnreadMark, el, elicitationSheet, folderPicker, haptic,
     hideStatuslineWrap, inputEl, messagesEl, modelInput, newSessionWorktree, openLeftSidebar, panelCwd,
-    pillEffortText, pillPermText, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,
+    perfTrace, pillEffortText, pillPermText, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,
     topContextPill, topProjectText, topTitleText, unread, updateWorkspaceChangeBadge,
     wireConfigRefreshButton, getAvailableDirs: () => availableDirs, getComposeReady: () => _composeReady,
     getCurrentCwd: () => currentCwd, getCurrentGatewaySuffix: () => currentGatewaySuffix,
@@ -5775,7 +5789,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // ack 回 { messages: [], error: '会话不存在' } → 灰行「历史消息加载失败」。
   // 2026-09-13 真机：首次点开（bindView 传 entry.cwd，驾驶轴）好好的，锁屏回来走
   // reloadCurrentFromHistory（用缺省值）就必failed——所以症状是「会出现，但不是百分百」。
-  function loadHistory(sessionId, cwd = drivingCwdOf(displayedInstanceId), onDone) {
+  // perfOpen：打开会话埋点的凭据，在发起时定——回执到时同一个会话可能已经又开了一次（换了实例、A→B→A），
+  // 旧回执不能记进新那次。bindView 传它自己那次的；别的路径缺省取这个会话此刻正在走的那次。
+  function loadHistory(sessionId, cwd = drivingCwdOf(displayedInstanceId), onDone, perfOpen = perfTrace.openFor(sessionId)) {
     if (!sessionId) return;
     const reqInstanceId = displayedInstanceId; // WS-001：捕获发起时的视图目标（代次）
     // 发起时那一轮在不在跑：在跑的话，读盘那一刻没配上结果的工具可能随后跑完，渲染收尾时不能判它中止（PR #233 review）
@@ -5801,14 +5817,16 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 返回 []，上一轮的迟到 err 动不了当前轮的队列；② onHistoryAppend 的 viewingInstanceId 守卫会丢弃
       // 不属于当前视图的事件。于是「视图已切走」时它与 abort 完全等价，只在「视图还在」时多放行——正是
       // 要修的那一格。同款取舍见 processChunk 的中断路径与闸门看门狗：宁可顺序稍差，绝不静默吞消息。
-      if (err) { hideLoadingCard(); flushHeldHistoryAppends(gateHandle); onDone?.(); return; }
+      if (err) { perfTrace.openEnd(perfOpen, 'error'); hideLoadingCard(); flushHeldHistoryAppends(gateHandle); onDone?.(); return; }
       // WS-001：迟到 ACK 守卫——发起后若已切走（会话或实例变），丢弃本回调。否则 A 的历史会被 renderHistoryBubbles
       // 追加进当前 B 的 DOM，且 hideLoadingCard 抹掉 B 的 loading 卡。对齐 onHistoryAppend 的 viewingInstanceId 守卫。
       if (displayedSessionId !== sessionId || displayedInstanceId !== reqInstanceId) { historyLoadGate.abort(gateHandle); return; }
       if (drivingCwdOf(reqInstanceId) !== cwd) { historyLoadGate.abort(gateHandle); return; }
       hideLoadingCard();
       const msgs = res?.messages || [];
+      perfTrace.openStep(perfOpen, 'history', { count: msgs.length, server: res?.timing });
       if (!msgs.length) {
+        perfTrace.openEnd(perfOpen, res?.error ? 'error' : 'empty');
         if (res?.error) addBar(t('历史消息加载失败'), 'text-ink-faint');
         crashNotices.restore(sessionId);
         flushHeldHistoryAppends(gateHandle);
@@ -5823,7 +5841,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         foregroundTasks.render();
         flushHeldHistoryAppends(gateHandle);
         onDone?.();
-      }, { fullReload: true, turnRunningAtRequest, noticeBar, superseded: () => historyLoadGate.superseded(gateHandle) });
+      }, { fullReload: true, turnRunningAtRequest, noticeBar, superseded: () => historyLoadGate.superseded(gateHandle), perfOpen });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
       seenDiskLenBySession.set(sessionId, msgs.length);
@@ -5971,7 +5989,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
 
   // noticeBar：loadHistory 刚插的那条「加载了 N 条」提示条。渲染半路停下时，在它上面给「重新加载」（offerHistoryReload）。
   // superseded：loadHistory 传入，这一轮之后同实例又发起了加载时为真（见 processChunk 开头）。
-  function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false, turnRunningAtRequest = false, noticeBar = null, superseded = null } = {}) {
+  // perfOpen：loadHistory 传入，这一轮加载所属那次打开会话的埋点凭据，插入和高亮凭它记。
+  function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false, turnRunningAtRequest = false, noticeBar = null, superseded = null, perfOpen = null } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
     // 提示条下面的历史落地（frag 插入）时才摘掉；bindView 看到它就不把这份半成品存进 sessionDomCache（#307）
     noticeBar?.setAttribute('data-history-pending', '1');
@@ -6302,10 +6321,20 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         for (const card of histToolCards.values()) setStatusIcon(card.querySelector('.t-status'), 'aborted');
       }
       if (!cardsOnly) scrollBottom(true);
+      // 打开会话埋点：只有 loadHistory 的整段加载带凭据（增量追平、镜像整窗替换都不算）；
+      // 凭据不是当前这次打开的（排在空闲里的高亮跑到时，同一个会话可能已经又开了一次），perfTrace 自己不记
+      // 落底读了 scrollHeight，插入引起的排版已经算进这一段
+      if (perfOpen) perfTrace.openStep(perfOpen, 'insert');
       if (codeBlocks.length) {
-        const doHighlight = () => codeBlocks.forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
+        const doHighlight = () => {
+          const t0 = performance.now();
+          codeBlocks.forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
+          if (!perfOpen) return;
+          perfTrace.openStep(perfOpen, 'highlight', { blocks: codeBlocks.length, ms: performance.now() - t0 });
+          perfTrace.openEnd(perfOpen, 'done');
+        };
         scheduleIdle(doHighlight, { timeout: 2000 });
-      }
+      } else if (perfOpen) perfTrace.openEnd(perfOpen, 'done');
       onDone?.(); // DOM 真正稳定（frag 已插入）之后才通知——未读胶囊的 topLevelBubbles() 查询依赖这个时机
     }
     processChunk();

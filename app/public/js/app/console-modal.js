@@ -225,6 +225,11 @@ export function createConsoleModal(context, {
         badgeText = 'stream';
         textClass = 'text-teal-100/90';
         break;
+      case 'client_perf':
+        badgeSpan.className += ' bg-lime-950/60 text-lime-400 border border-lime-800/40';
+        badgeText = 'perf';
+        textClass = 'text-lime-100/90';
+        break;
       // 诊断时间线（镜像/排队/停止）：徽标按子系统身份着色，正文按 severity 着色（见下方覆盖），
       // 不是像上面几类那样身份色/正文色绑死——这样超时/失败这类事件能在一堆中性事件里视觉跳出来。
       case 'diag_mirror':

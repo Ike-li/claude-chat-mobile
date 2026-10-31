@@ -9,7 +9,7 @@ import { t } from '../i18n.js';
 export function createEmptySurfaces(context, {
   $, approvals, baseName, btnHome, btnNew, btnSessions, dashUnreadMark, el, elicitationSheet, folderPicker, haptic,
   hideStatuslineWrap, inputEl, messagesEl, modelInput, newSessionWorktree, openLeftSidebar, panelCwd,
-  pillEffortText, pillPermText, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,
+  perfTrace, pillEffortText, pillPermText, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,
   topContextPill, topProjectText, topTitleText, unread, updateWorkspaceChangeBadge, wireConfigRefreshButton,
   getAvailableDirs, getComposeReady, getCurrentCwd, getCurrentGatewaySuffix, getCurrentModel,
   getCurrentSessionId, getCwdDefaultModel, getDisplayedSessionId, getFreshInterruptedInstanceId,
@@ -568,10 +568,14 @@ export function createEmptySurfaces(context, {
     const switchToSession = (s) => {
       let acked = false;
       const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: s.cwd, title: s.title, message });
+      const perfOpen = perfTrace.openBegin(s.id, 'tap');
       socket.emit('session:switch', { sessionId: s.id, cwd: s.cwd }, res => {
         acked = true;
-        if (!res?.ok) blocked(res?.error || t('切换失败'));
-        else dismissBlockedSurfaceIfTarget(s.id, s.cwd); // 同上：迟到的成功 ack 要撤页
+        if (!res?.ok) { perfTrace.openEnd(perfOpen, 'error'); blocked(res?.error || t('切换失败')); }
+        else {
+          perfTrace.openStep(perfOpen, 'switch', { server: res.timing });
+          dismissBlockedSurfaceIfTarget(s.id, s.cwd); // 同上：迟到的成功 ack 要撤页
+        }
       });
       setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     };
@@ -688,9 +692,11 @@ export function createEmptySurfaces(context, {
         const recent = mergeRecentSessionsAcrossWorkspaces(mainLists, { limit: 8 });
         renderDashRecents(recent); // 空列表也渲 → dashEmptyHint
         renderRecentsIncompleteNotice(summarizeRecentsLoad(mainLists));
+        perfTrace.startupReady('首页列表'); // 启动停在首页时，用户等的就是这张列表（只认第一次）
       });
-    } else if (emptyHint) {
-      emptyHint.classList.remove('hidden');
+    } else {
+      emptyHint?.classList.remove('hidden');
+      perfTrace.startupReady('首页列表'); // 没有工作区可列：首页此刻就是最终样子
     }
 
     messagesEl.appendChild(container);
