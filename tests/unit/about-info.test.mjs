@@ -46,7 +46,8 @@ function installTree() {
   // 老式 licenses 数组（npm 早已弃用，仍有包这么写）
   put(root, 'node_modules/legacy-licenses/package.json', { name: 'legacy-licenses', version: '1.0.0', licenses: [{ type: 'MIT' }, { type: 'Apache-2.0' }] });
   put(root, 'node_modules/socket.io/package.json', { name: 'socket.io', version: '4.8.4', license: 'MIT' });
-  put(root, 'node_modules/socket.io/client-dist/socket.io.js', '/*!\n * Socket.IO v4.8.4\n * (c) 2014-2026 Guillermo Rauch\n * Released under the MIT License.\n */\n(function(){})();\n');
+  // 只放外壳实际加载的压缩版：真包里同目录还有未压缩的 socket.io.js，那份不发到手机上
+  put(root, 'node_modules/socket.io/client-dist/socket.io.min.js', '/*!\n * Socket.IO v4.8.4\n * (c) 2014-2026 Guillermo Rauch\n * Released under the MIT License.\n */\n!function(){}();\n');
   // 许可证原文故意带 CRLF 与非 ASCII：「原样」要逐字节成立，不是「看起来一样」
   put(root, 'LICENSE', 'Apache License\r\nVersion 2.0 — 原文\r\n');
   put(root, 'NOTICE', 'Claude Chat Mobile\nCopyright 2026 Ike-li\n');
@@ -66,7 +67,7 @@ test.describe('readAboutInfo：第三方组件按实际分发的范围列', () =
       assert.ok(!ids.some(id => id.startsWith('@img/sharp-linux-x64@')), '锁文件里有、本机没装的可选包不是分发物');
       const client = components.find(c => c.scope === 'browser');
       assert.deepEqual(client, { name: 'socket.io-client', version: '4.8.4', license: 'MIT', scope: 'browser' },
-        '/socket.io/socket.io.js 是发到手机上运行的代码，不在 vendor 目录，也不是独立的 npm 包');
+        '/socket.io/socket.io.min.js 是发到手机上运行的代码，不在 vendor 目录，也不是独立的 npm 包');
       assert.ok(components.filter(c => c.scope !== 'browser').every(c => c.scope === 'server'));
       assert.equal(components.find(c => c.name === 'legacy-licenses').license, 'MIT OR Apache-2.0');
     } finally { rmSync(root, { recursive: true, force: true }); }

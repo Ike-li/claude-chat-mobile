@@ -183,7 +183,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-20f 没有令牌时直接出令牌门，不发握手（否则每开一次都记一次鉴权失败）', async ({ page }) => {
     captureBrowserErrors(page, { ignoredResourceStatusCodes: [400] });
     const socketRequests: string[] = [];
-    // 只认握手（engine.io 的 ?EIO= 请求）；/socket.io/socket.io.js 是客户端库脚本本身，不算
+    // 只认握手（engine.io 的 ?EIO= 请求）；/socket.io/socket.io.min.js 是客户端库脚本本身，不算
     page.on('request', request => { if (/\/socket\.io\/\?.*\bEIO=/.test(request.url())) socketRequests.push(request.url()); });
     await page.request.post('/__reset');
 

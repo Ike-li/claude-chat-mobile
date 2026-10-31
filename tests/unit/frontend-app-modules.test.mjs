@@ -90,6 +90,29 @@ test('the HTML shell links the prebuilt tw.css after app.css instead of compilin
     '外壳又在加载 Tailwind 运行时：启动时同步执行 400KB 脚本，之后每批 DOM 变化都全量扫一遍 class');
 });
 
+test('the HTML shell defers every head script except theme-boot and loads the minified socket.io client', async () => {
+  const html = await readFile(new URL('../../app/public/index.html', import.meta.url), 'utf8');
+  // 注释里的 <script> 只是说明文字，先剔掉。用 indexOf 切到没有为止，不用正则替换：替换一遍可能拼出新的 <!--
+  let head = html.slice(0, html.indexOf('</head>'));
+  for (let start = head.indexOf('<!--'); start !== -1; start = head.indexOf('<!--')) {
+    const end = head.indexOf('-->', start + 4);
+    head = head.slice(0, start) + (end === -1 ? '' : head.slice(end + 3));
+  }
+  const scripts = [...head.matchAll(/<script\b([^>]*)>/gi)].map(([, attrs]) => ({
+    src: /\ssrc="([^"]+)"/.exec(attrs)?.[1],
+    defer: /\sdefer\b/.test(attrs),
+    async: /\sasync\b/.test(attrs),
+  }));
+
+  const boot = scripts.find(s => s.src === '/js/theme-boot.js');
+  assert.ok(boot && !boot.defer && !boot.async, 'theme-boot.js 不再同步执行：首帧先按默认主题画出来再切，手动浅/深色下会闪');
+  // defer 才按文档顺序、排在 app.js（module）之前执行；async 不保证顺序，app.js 可能拿不到全局
+  assert.deepEqual(scripts.filter(s => s !== boot && (!s.defer || s.async)).map(s => s.src), [],
+    'head 里还有阻塞解析或不保证顺序的脚本：首帧要等它们下载、执行完');
+  assert.ok(scripts.some(s => s.src === '/socket.io/socket.io.min.js'), '外壳没加载压缩版 socket.io 客户端（153KB → 47KB）');
+  assert.doesNotMatch(html, /\/socket\.io\/socket\.io\.js/, '外壳还在加载未压缩的 socket.io.js');
+});
+
 test('alert controller owns persisted preferences while tap haptics remain unconditional', () => {
   const values = new Map();
   const vibrations = [];

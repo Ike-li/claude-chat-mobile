@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
+import { captureBrowserErrors, expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
 import { expectSidebarClosed, openSessionsSidebar } from '../../helpers/sidebar-ui';
 
 // CM5 官方约定：编辑器容器 DOM 节点挂 .CodeMirror 反向引用指回实例——不用给 app.js 加测试专用钩子。
@@ -96,6 +96,53 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.locator('#fileBrowseCancelEdit').click();
     await expect(editBtn).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // CodeMirror 只有文件浏览器用。断言打在网络请求上而不是 index.html 的文本上：启动时顺手预热一下加载器，
+  // 用户照样每次打开 CCM 都付这笔下载。
+  test('P0-21e CodeMirror 按需加载：启动、列目录都不拉，第一次打开文件才拉', async ({ page }) => {
+    const cmScripts: string[] = [];
+    page.on('request', request => {
+      const url = new URL(request.url());
+      if (url.pathname.startsWith('/vendor/codemirror/') && url.pathname.endsWith('.js')) cmScripts.push(url.pathname + url.search);
+    });
+    await gotoMock(page);
+    await page.locator('#topContextPill').click();
+    const entry = page.locator('[data-testid="browse-entry"]', { hasText: 'demo.js' });
+    await expect(entry).toBeVisible();
+    expect(cmScripts, '启动或列目录时就拉了 CodeMirror：每次打开 CCM 都多下载、多执行约 250KB').toEqual([]);
+
+    await entry.click();
+    await expect(page.locator('#fileBrowseBody .cm-ccm-viewer .CodeMirror')).toBeVisible();
+    await expect(page.locator('#fileBrowseBody .cm-keyword').first()).toContainText('function');
+    // 正对照：同一个记录器看得见这批请求。vendor 按 immutable 缓存一年，URL 不带当前版本戳的话，升级 CM 后手机拿不到新文件。
+    const version = await page.evaluate(() => new URL(document.querySelector<HTMLScriptElement>('script[type="module"]')!.src).searchParams.get('v'));
+    expect(version, '外壳的 app.js 没带版本戳，这条对照失去参照').toBeTruthy();
+    expect(cmScripts, 'CodeMirror 脚本没带当前版本戳').toContain(`/vendor/codemirror/codemirror.min.js?v=${version}`);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 手机网络抖一下就可能拉不到。拉不到不是错误态，照旧回退纯文本；但这次失败不能记一整个会话，下次打开文件要重拉。
+  test('P0-21f CodeMirror 拉不到时回退纯文本，下次打开文件再拉', async ({ page }) => {
+    captureBrowserErrors(page, { ignoredResourceStatusCodes: [503] });
+    const isCmScript = (url: URL) => url.pathname.startsWith('/vendor/codemirror/') && url.pathname.endsWith('.js');
+    await page.route(isCmScript, route => route.fulfill({ status: 503, body: '' }));
+    await gotoMock(page);
+    await page.locator('#topContextPill').click();
+    const entry = page.locator('[data-testid="browse-entry"]', { hasText: 'demo.js' });
+
+    await entry.click();
+    await expect(page.locator('#fileBrowseBody > pre'), 'CM 脚本拉不到时文件内容没显示出来').toContainText('function');
+    await expect(page.locator('#fileBrowseBody .cm-ccm-viewer')).toHaveCount(0);
+
+    await page.unroute(isCmScript);
+    await page.locator('#fileBrowseBack').click();
+    await entry.click();
+    await expect(page.locator('#fileBrowseBody .cm-ccm-viewer .CodeMirror'), '网络恢复后再打开文件仍是纯文本：上次的失败被记住了').toBeVisible();
+    await expect(page.locator('#fileBrowseBody > pre')).toHaveCount(0);
 
     await expectNoBrowserErrors(page);
   });
