@@ -494,12 +494,12 @@ export function createSessionSidebar(context, {
         closeLeftSidebar();
         let acked = false;
         const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: rowCwd, title: s.title, message });
-        perfTrace.openBegin(s.id, 'tap');
+        const perfOpen = perfTrace.openBegin(s.id, 'tap');
         socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => {
           acked = true;
-          if (!res?.ok) { perfTrace.openEnd(s.id, 'error'); blocked(res?.error || t('切换失败')); }
+          if (!res?.ok) { perfTrace.openEnd(perfOpen, 'error'); blocked(res?.error || t('切换失败')); }
           else {
-            perfTrace.openStep(s.id, 'switch', { server: res.timing });
+            perfTrace.openStep(perfOpen, 'switch', { server: res.timing });
             dismissBlockedSurfaceIfTarget(s.id, rowCwd); // 迟到的成功 ack：撤掉 4s 兜底弹出的落地页
           }
         });

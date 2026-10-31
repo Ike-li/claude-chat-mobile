@@ -79,7 +79,8 @@ export function createPerfTrace({ log, now = () => performance.now(), win = glob
   win.setTimeout?.(() => startupReady('30s 未就绪'), STARTUP_FALLBACK_MS);
 
   // ---- 打开会话 ----
-  // 当前这一次打开。步骤带 sid，对不上的（上一个会话还在画的那批、迟到的回执）一律不记。
+  // 当前这一次打开。openBegin / openBind 把它交给调用方当凭据，后面的步骤凭它记：凭据不是当前这一次的
+  // （上一个会话还在画的那批、迟到的回执）一律不记。只比 sid 不够，同一个会话会再开一次（换了实例、A→B→A）。
   let open = null;
 
   function finishOpen(outcome) {
@@ -91,31 +92,38 @@ export function createPerfTrace({ log, now = () => performance.now(), win = glob
 
   // 上一次还没走完就开了新的：照样写出来、记成被切走——慢到用户放弃的那次正是要看的
   function openBegin(sid, source) {
-    if (!sid) return;
+    if (!sid) return null;
     if (open) finishOpen('superseded');
     open = { sid, source, begin: now(), steps: [] };
+    return open;
   }
 
   // 点了这个会话、视图还没绑过来：并进这次点击（切换回执可能先于 instances 广播到）。
   // 否则就是没有点击起点的一次打开（启动恢复上次会话、从别处切进来、同会话换了实例），从这里起算。
   function openBind(sid, detail) {
-    if (!sid) return;
+    if (!sid) return null;
     if (open?.sid === sid && !open.steps.some(step => step.name === 'bind')) {
       open.steps.push({ name: 'bind', t: now() - open.begin, ...detail });
-      return;
+      return open;
     }
     if (open) finishOpen('superseded');
     open = { sid, source: 'bind', begin: now(), steps: [{ name: 'bind', t: 0, ...detail }] };
+    return open;
   }
 
-  function openStep(sid, name, detail) {
-    if (!sid || open?.sid !== sid) return;
+  // 这个会话正在走的那次打开，没有就是 null。拉历史在发起时拿凭据，回执和渲染凭它记
+  function openFor(sid) {
+    return sid && open?.sid === sid ? open : null;
+  }
+
+  function openStep(trace, name, detail) {
+    if (!trace || trace !== open) return;
     open.steps.push({ name, t: now() - open.begin, ...detail });
   }
 
   // 首次走完的打开也算启动就绪：启动时停在会话里就没有首页列表可等（被切走的不算，用户没等到）
-  function openEnd(sid, outcome) {
-    if (!sid || open?.sid !== sid) return;
+  function openEnd(trace, outcome) {
+    if (!trace || trace !== open) return;
     finishOpen(outcome);
     startupReady('会话就绪');
   }
@@ -125,6 +133,7 @@ export function createPerfTrace({ log, now = () => performance.now(), win = glob
     startupReady,
     openBegin,
     openBind,
+    openFor,
     openStep,
     openEnd,
   };

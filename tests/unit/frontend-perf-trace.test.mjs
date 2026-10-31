@@ -8,23 +8,23 @@ function setup({ win = {} } = {}) {
   const lines = [];
   const clock = { t: 0 };
   const trace = createPerfTrace({ log: text => lines.push(text), now: () => clock.t, win });
-  const at = (t, fn) => { clock.t = t; fn(); };
+  const at = (t, fn) => { clock.t = t; return fn(); };
   return { lines, trace, at, openLines: () => lines.filter(l => l.startsWith('[PERF] 打开会话')) };
 }
 
 test.describe('createPerfTrace：打开会话', () => {
   test('点击到高亮完一行写清；别的会话迟到的步骤不算进来，结束后的步骤也不再记', () => {
     const { trace, at, openLines } = setup();
-    at(1000, () => trace.openBegin('A', 'tap'));
+    const a = at(1000, () => trace.openBegin('A', 'tap'));
     at(1420, () => trace.openBind('A'));
-    at(1430, () => trace.openStep('B', 'insert', { count: 5 }));   // 上一个会话还在画的那批
-    at(1435, () => trace.openStep('A', 'switch', { server: { ms: 380 } }));
-    at(1645, () => trace.openStep('A', 'sync', { note: 'load' }));
-    at(2545, () => trace.openStep('A', 'history', { count: 2000 }));
-    at(3745, () => trace.openStep('A', 'insert', { count: 2000 }));
-    at(4120, () => trace.openStep('A', 'highlight', { blocks: 678, ms: 356 }));
-    at(4120, () => trace.openEnd('A', 'done'));
-    at(5000, () => { trace.openStep('A', 'highlight', { blocks: 1, ms: 1 }); trace.openEnd('A', 'done'); });
+    at(1430, () => trace.openStep(trace.openFor('B'), 'insert', { count: 5 }));   // 上一个会话还在画的那批
+    at(1435, () => trace.openStep(a, 'switch', { server: { ms: 380 } }));
+    at(1645, () => trace.openStep(a, 'sync', { note: 'load' }));
+    at(2545, () => trace.openStep(a, 'history', { count: 2000 }));
+    at(3745, () => trace.openStep(a, 'insert', { count: 2000 }));
+    at(4120, () => trace.openStep(a, 'highlight', { blocks: 678, ms: 356 }));
+    at(4120, () => trace.openEnd(a, 'done'));
+    at(5000, () => { trace.openStep(a, 'highlight', { blocks: 1, ms: 1 }); trace.openEnd(a, 'done'); });
     assert.deepEqual(openLines(), [
       '[PERF] 打开会话 3120ms（点击）：绑定视图 +420 → 切换回执 +15（服务端 380ms） → 同步回执 +210（load） → 历史回执 +900（2000 条） → 插入 +1200（2000 条） → 高亮 +375（678 块，356ms）；长任务 不可测',
     ]);
@@ -37,11 +37,27 @@ test.describe('createPerfTrace：打开会话被打断', () => {
     at(0, () => trace.openBegin('A', 'tap'));
     at(300, () => trace.openBind('A'));
     at(5000, () => trace.openBegin('B', 'tap'));
-    at(5400, () => trace.openBind('B'));
-    at(5600, () => trace.openEnd('B', 'keep'));
+    const b = at(5400, () => trace.openBind('B'));
+    at(5600, () => trace.openEnd(b, 'keep'));
     assert.deepEqual(openLines(), [
       '[PERF] 打开会话 5000ms（点击 · 被切走）：绑定视图 +300；长任务 不可测',
       '[PERF] 打开会话 600ms（点击 · 不拉历史）：绑定视图 +400；长任务 不可测',
+    ]);
+  });
+
+  // 同一个会话又绑了一次（effort / 模型切档换了实例、A→B→A 快速切回）：上一次的回调手里也是这个 sid，
+  // 只比 sid 分不出两次打开——排在空闲里的旧高亮会记进新这一次，还把它提前结束（PR #481 review）
+  test('同一个会话重新打开：上一次迟到的步骤不记进这一次，也结束不了它', () => {
+    const { trace, at, openLines } = setup();
+    const first = at(0, () => trace.openBind('A'));
+    at(900, () => trace.openStep(first, 'insert', { count: 2000 }));
+    const second = at(1000, () => trace.openBind('A', { note: '有缓存' }));
+    at(1300, () => { trace.openStep(first, 'highlight', { blocks: 678, ms: 300 }); trace.openEnd(first, 'done'); });
+    at(1400, () => trace.openStep(second, 'sync', { note: 'keep' }));
+    at(1400, () => trace.openEnd(second, 'keep'));
+    assert.deepEqual(openLines(), [
+      '[PERF] 打开会话 1000ms（视图切入 · 被切走）：绑定视图 +0 → 插入 +900（2000 条）；长任务 不可测',
+      '[PERF] 打开会话 400ms（视图切入 · 不拉历史）：绑定视图 +0（有缓存） → 同步回执 +400（keep）；长任务 不可测',
     ]);
   });
 });
@@ -49,18 +65,18 @@ test.describe('createPerfTrace：打开会话被打断', () => {
 test.describe('createPerfTrace：从绑定视图起算', () => {
   test('没有点击起点（启动恢复上次会话、从别处切进来）：从绑定视图起算，来源记「视图切入」', () => {
     const { trace, at, openLines } = setup();
-    at(2000, () => trace.openBind('A', { note: '有缓存' }));
-    at(2180, () => trace.openStep('A', 'sync', { note: 'keep' }));
-    at(2180, () => trace.openEnd('A', 'keep'));
+    const a = at(2000, () => trace.openBind('A', { note: '有缓存' }));
+    at(2180, () => trace.openStep(a, 'sync', { note: 'keep' }));
+    at(2180, () => trace.openEnd(a, 'keep'));
     assert.deepEqual(openLines(), ['[PERF] 打开会话 180ms（视图切入 · 不拉历史）：绑定视图 +0（有缓存） → 同步回执 +180（keep）；长任务 不可测']);
   });
 
   test('切换回执先到、绑定视图后到：仍算同一次点击，不另起一次', () => {
     const { trace, at, openLines } = setup();
-    at(0, () => trace.openBegin('A', 'tap'));
-    at(200, () => trace.openStep('A', 'switch', { server: { ms: 150 } }));
-    at(260, () => trace.openBind('A'));
-    at(400, () => trace.openEnd('A', 'keep'));
+    const tap = at(0, () => trace.openBegin('A', 'tap'));
+    at(200, () => trace.openStep(tap, 'switch', { server: { ms: 150 } }));
+    const bind = at(260, () => trace.openBind('A'));
+    at(400, () => trace.openEnd(bind, 'keep'));
     assert.deepEqual(openLines(), ['[PERF] 打开会话 400ms（点击 · 不拉历史）：切换回执 +200（服务端 150ms） → 绑定视图 +60；长任务 不可测']);
   });
 });
@@ -96,9 +112,9 @@ test.describe('createPerfTrace：启动就绪的来源', () => {
   test('首次打开会话走完即算启动就绪（启动时停在会话里，没有首页列表可等）；被切走的那次不算', () => {
     const { lines, trace, at } = setup();
     at(900, () => trace.openBind('Z'));
-    at(1800, () => trace.openBind('A'));               // Z 被切走：不算就绪
-    at(2100, () => trace.openEnd('A', 'keep'));
-    at(2600, () => { trace.openBind('B'); trace.openEnd('B', 'keep'); });
+    const a = at(1800, () => trace.openBind('A'));     // Z 被切走：不算就绪
+    at(2100, () => trace.openEnd(a, 'keep'));
+    at(2600, () => trace.openEnd(trace.openBind('B'), 'keep'));
     assert.deepEqual(lines.filter(l => l.startsWith('[PERF] 启动 ')), ['[PERF] 启动 2100ms（会话就绪）：会话就绪 2100；一方资源 不可测；长任务 不可测']);
   });
 });
@@ -124,8 +140,8 @@ test.describe('createPerfTrace：长任务', () => {
     }
     const { lines, trace, at } = setup({ win: { PerformanceObserver: FakeObserver } });
     deliver?.({ getEntries: () => [{ startTime: 400, duration: 120 }, { startTime: 1300, duration: 300 }] });
-    at(1000, () => trace.openBind('A'));
-    at(2000, () => trace.openEnd('A', 'keep'));
+    const a = at(1000, () => trace.openBind('A'));
+    at(2000, () => trace.openEnd(a, 'keep'));
     assert.match(lines[0], /^\[PERF\] 打开会话 1000ms.*；长任务 1 次 共 300ms 最长 300ms$/);
     assert.match(lines[1], /^\[PERF\] 启动 2000ms（会话就绪）.*；长任务 2 次 共 420ms 最长 300ms$/);
   });
@@ -141,8 +157,8 @@ test.describe('createPerfTrace：长任务', () => {
       takeRecords() { return buffered.splice(0); }
     }
     const { lines, trace, at } = setup({ win: { PerformanceObserver: FakeObserver, setTimeout: (fn, ms) => timers.push({ fn, ms }) } });
-    at(1000, () => trace.openBind('A'));
-    at(4290, () => trace.openEnd('A', 'done'));          // 高亮那个空闲任务的末尾
+    const a = at(1000, () => trace.openBind('A'));
+    at(4290, () => trace.openEnd(a, 'done'));            // 高亮那个空闲任务的末尾
     buffered.push({ startTime: 1500, duration: 2800 });  // 任务跑完：条目进缓冲，回调还没跑
     at(4300, () => timers.filter(timer => !timer.ms).forEach(timer => timer.fn()));   // 下一个任务；30s 兜底没到点
     assert.match(lines[0], /^\[PERF\] 打开会话 3290ms.*；长任务 1 次 共 2800ms 最长 2800ms$/);
