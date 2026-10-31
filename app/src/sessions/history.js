@@ -18,6 +18,7 @@ import { encodeProjectDir, projectDirDescendantPrefix } from '../shared/project-
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 // 本模块打开 ~/.claude/projects 下的文件一律走这两个：O_NONBLOCK 打开、只认普通文件，FIFO 不再卡死读盘线程。
 import { openRegularFile, readRegularText } from '../shared/regular-file.js';
+import { scanJsonl } from '../shared/jsonl-scan.js';
 
 // 快路径注入口（仅测试用）：测试替置一个函数后，快路径走替身而非真 SDK，便于无网络/无 CLI 环境下
 // 验证字段映射与 hasMore 语义。生产留默认 undefined → 走真 sdkListSessions。
@@ -57,6 +58,8 @@ const LIST_CACHE_TTL = 4000;
 // B6：getSessionHistory 结果按文件路径缓存，按 mtimeMs 失效。切回同一会话无需重新读盘。
 const _histCache = new Map(); // filePath → { mtimeMs, size, messages }（失效判据见 getSessionHistory 的 B6）
 const HIST_CACHE_MAX = 10;
+// 在建的那一次：filePath → { mtimeMs, size, promise }。建完即删，不设上限（同时在建的就那么几个）。
+const _histInflight = new Map();
 
 // 根据 cwd 推断项目目录名。编码规则见 src/shared/project-dir.js（与 CLI/SDK 逐字节对齐的唯一实现）。
 // cwd 须先经 realpath 规范化（src/server/app.js 的 preflight 启动期做），才与 CLI 的 ~/.claude/projects 命名一致（如 /tmp→/private/tmp）。
@@ -178,6 +181,26 @@ async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR 
     return { messages: cached.messages.slice(-limit), total: cached.total, timing: { cache: 'hit' } };
   }
 
+  // 同一份文件（mtime + size 同上）已经有一次在建：等它的结果，不再从头求链、读一遍（求链是 SDK 自己把整份
+  // transcript 读一遍，大会话上几百毫秒）。文件变了的不并——在建那次读的是旧内容。2026-10-31 性能改造 3d。
+  const inflight = _histInflight.get(historyFile);
+  if (inflight && inflight.mtimeMs === mtimeMs && inflight.size === size) {
+    const built = await inflight.promise;
+    return built === NO_HISTORY ? NO_HISTORY : { messages: built.messages.slice(-limit), total: built.total, timing: { cache: 'shared' } };
+  }
+  const unit = { mtimeMs, size, promise: buildSessionHistory(sessionId, cwd, baseDir, historyFile, { mtimeMs, size, chainSourceAvailable }) };
+  _histInflight.set(historyFile, unit);
+  let built;
+  try {
+    built = await unit.promise;
+  } finally {
+    if (_histInflight.get(historyFile) === unit) _histInflight.delete(historyFile); // 期间文件变了、被新一次顶掉的不删别人的
+  }
+  return built === NO_HISTORY ? NO_HISTORY : { messages: built.messages.slice(-limit), total: built.total, timing: built.timing };
+}
+
+// 缓存没命中时建一次回显，结果进 _histCache。返回不按 limit 切的整份（并进来的调用各按自己的 limit 切）。
+async function buildSessionHistory(sessionId, cwd, baseDir, historyFile, { mtimeMs, size, chainSourceAvailable }) {
   // timing 随 session:history 回执带给前端（2026-10-31 性能改造 Stage 0）：慢在求链、解析，
   // 还是没吃上缓存，机主导出的手机日志里分得清。
   const t0 = Date.now();
@@ -185,26 +208,9 @@ async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR 
   const liveUuids = await readLiveChainUuids(sessionId, cwd, baseDir);
   const chainMs = Date.now() - t0;
 
-  let messages, total, passes = 1;
+  let messages, total;
   try {
-    let pass = await readHistoryMessages(historyFile, liveUuids);
-    // 【SDK 选的叶子不是用户最后看到的那条 ⇒ 不剪】（2026-10-15）物理上最新的那条主链 user/assistant
-    // 不在 liveUuids 里，就是 SDK 认定的当前链没走到文件里最后发生的那段对话。当前叶子本该是「物理最靠后
-    // 的分支末端」（readLiveChainUuids 的 ③），rewind 之后的新对话又总写在废弃段后面，所以这条正常恒成立；
-    // 不成立只能是选叶把别的东西当成了末端。
-    // 实例：SDK 0.3.283 起把 system 行（away_summary / informational）也算分支末端，而闲置的终端 CLI
-    // 会把这些行挂在它记得的旧叶子下——「终端停下、手机接着聊」的那段于是被判成撤销分支，照剪就整段
-    // 看不到。这是本产品的核心路径。旧规则也有它的形态：会话以 isMeta 行收尾时 0.3.281 落回压缩前的叶子。
-    // 10/15 全量实测 816 个会话：0.3.281 触发 1 个（cad10f35，回显 344 条只剩 33），0.3.300 触发 2 个
-    // （c78e8b47 丢 36 条、da2b6acb 丢末尾 2 条，都是 away_summary 挂旧叶），其余逐条与不加保护一致。
-    // 退回不剪，方向同 readLiveChainUuids 的 fail-open；代价是这时真被 rewind 掉的段也会露面
-    // （da2b6acb 因此多出一句终端里被丢弃的「继续」）。
-    // 第二遍读只在触发时发生；结果照常进缓存——文件没变，SDK 的选择就不会变。
-    if (liveUuids && pass.newestMainUuid && !liveUuids.has(pass.newestMainUuid)) {
-      passes = 2;
-      pass = await readHistoryMessages(historyFile, null);
-    }
-    ({ messages, total } = pass);
+    ({ messages, total } = await readHistoryMessages(historyFile, liveUuids));
   } catch {
     return NO_HISTORY; // 读取失败（含不是普通文件）
   }
@@ -216,174 +222,202 @@ async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR 
   // 写入用 setCapped（FIFO 占位）：命中路径已负责刷新位置；这里只保证新键不把表撑破。
   setCapped(_histCache, historyFile, { mtimeMs, size, messages, total, unfiltered: chainSourceAvailable && !liveUuids }, HIST_CACHE_MAX);
 
-  return { messages: messages.slice(-limit), total, timing: { cache: 'miss', chainMs, parseMs, passes } };
+  // passes：读了几遍文件。3d 起退回不剪也不再重读，恒 1；键留着，[PERF] 那行的形态不变。
+  return { messages, total, timing: { cache: 'miss', chainMs, parseMs, passes: 1 } };
 }
 
-// 流式读一遍 transcript 出回显条目；liveUuids 非 null 时剪掉当前链开始之后的废弃分支（判据见循环里）。
-// 顺带回报物理上最新的那条主链 user/assistant 的 uuid，供调用方判断 SDK 选的叶子对不对。
+// 流式读一遍 transcript 出回显条目；liveUuids 非 null 时剪掉当前链开始之后的废弃分支（判据见 feedHistory）。
 // 读不出来（含不是普通文件）直接抛，由调用方回 []。
 async function readHistoryMessages(historyFile, liveUuids) {
-  const messages = [];
-  // 同 uuid 去重：真实 transcript 存在「interrupt+queue 竞态导致同一消息重复落盘」（同 uuid 写两次）→
-  // 回显成重复气泡（实证 234 会话中 1 个含 8 条）。uuid 是每条唯一标识，同 uuid = 同一逻辑消息（非合法重复），
-  // 按 uuid 去重安全——合法重复内容（两次「继续」）是不同 uuid、不误删。Set 为本次读取的瞬时结构（返回即释放）。
-  const seenUuids = new Set();
-  const toolNames = new Map(); // tool_use id → 工具名：tool_result 按它取摘要上限（Bash 2000，见 toolResultCap）
-  // 主链最近 Agent/Task toolUseId：sidechain 行常无 parent_tool_use_id 落盘，靠此挂到折叠卡
-  let lastMainAgentToolId = null;
-  // 当前链是否已经开始（读到第一条命中 liveUuids 的主链消息）。在那之前的主链消息一律保留：
-  // 它们不在集合里只说明「已被移出模型上下文」（compact），不说明「已被撤销」（rewind）。
-  let chainStarted = false;
-  // 物理上最新的主链 user/assistant（口径与下面剪枝的那道闸相同、另跳过 teamName，剪掉的也算）。
+  const pruned = historyState();
+  // 不剪的那份：第一次剪掉消息时从 pruned 复制出来，此后两份一起喂，读完再挑（见末尾）。没剪过就不复制——
+  // 剪枝是两份唯一的差别，一条没剪时两份逐条相同。2026-10-31 之前是读完发现要退回不剪再整份重读一遍。
+  let unpruned = null;
+  // 物理上最新的主链 user/assistant（口径与剪枝那道闸相同、另跳过 teamName，剪掉的也算）。
   let newestMainUuid = null;
-  // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
-  // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
-  // 「always-on 要稳」的目标。超 2× 才批量 splice → 均摊 O(1)、不每条 shift。
-  // total：削顶前一共入列多少条，削掉的也算（getSessionHistoryWithTotal 据此告诉前端「只显示了最近的」）。
-  let total = 0;
-  const pushCapped = (item) => {
-    total++;
-    messages.push(item);
-    if (messages.length > HISTORY_MAX_MESSAGES * 2) {
-      messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
+  // 逐行流式读、不一次性 buffer 整个文件——会话可增长到数十 MB，流式读才稳、不阻塞事件循环
+  // （取代原「尾部 1MB」截断方案）。累积数组封顶到 HISTORY_MAX_MESSAGES，内存不随会话无限增长。
+  // 写到一半的尾行解析不了，引擎直接跳过。
+  await scanJsonl((await openRegularFile(historyFile)).fh, (entry) => {
+    // 跳过 meta 条目（local-command 输出等）
+    if (entry.isMeta) return;
+
+    // teamName 条目 SDK 选叶本就跳过（两版同），它排在最后不说明叶子选错了。
+    if (isMainMessage(entry) && !entry.teamName) newestMainUuid = entry.uuid;
+    if (unpruned) feedHistory(unpruned, entry, null);
+    // 被剪的条目没动过 pruned 的状态，这时复制与在它之前复制等价
+    if (!feedHistory(pruned, entry, liveUuids) && !unpruned) {
+      unpruned = cloneHistoryState(pruned);
+      feedHistory(unpruned, entry, null);
     }
-  };
-  let input;
-  try {
-    // 逐行读、不一次性 buffer 整个文件——会话可增长到数十 MB，流式读才稳、不阻塞事件循环
-    // （取代原「尾部 1MB」截断方案）。累积数组下方封顶到 HISTORY_MAX_MESSAGES，内存不随会话无限增长。
-    input = (await openRegularFile(historyFile)).fh.createReadStream({ encoding: 'utf-8' });
-    const rl = createInterface({ input, crlfDelay: Infinity });
-    for await (const line of rl) {
-      if (!line.trim()) continue;
-      let entry;
-      try { entry = JSON.parse(line); } catch { continue; } // 末行可能是写入中途的半行 → 跳过
-
-      // 跳过 meta 条目（local-command 输出等）
-      if (entry.isMeta) continue;
-
-      // 当前链【开始之后】不在链上的主链消息 = 被 /rewind 撤销的分支，CLI 自己也不再显示它们。
-      // 只筛 user/assistant：type:'system' 的本地命令输出不在 SDK 的返回里，一并筛会把它们全删掉。
-      // sidechain 也豁免——子 agent 的 uuid 不挂主链，按 live 过滤会误删整棵折叠卡。
-      //
-      // 【为什么要等链开始】liveUuids 表达的是「还在模型上下文里」，compact 会把边界之前的整段
-      // 移出上下文却一行不删——那段记录仍属于这个会话，用户仍该看到（抽屉里这条会话的标题就取自
-      // 开头那段）。不等的话它们会被当成废弃分支一起剪掉：真机 349 个会话里 16 个压缩过，13 个
-      // 丢了开头，最狠的 1284 条只剩 3 条（1ee3b415，标题还挂着开头那句话）。
-      // 边界之前若也 rewind 过，那段废弃分支会重新露面——与本模块既有取舍同向（见 readLiveChainUuids
-      // 的 fail-open）：少显示历史是静默的，多显示几条废弃分支是看得见的。
-      // 【已知窗口，有意不修】compactMetadata 点名保留的 uuid 物理上位于边界之前（实测 preservedSegment
-      // 的 head/anchor/tail 都是边界前那几条），会让这里提前认定「链已开始」，于是它到边界之间那一小段
-      // 仍按当前链剪。全量实测 16 个压缩会话共 3 条，且全部是触发压缩的 `/compact` 命令行本身——要消掉
-      // 这个窗口得改成按 compact_boundary 定位，代价是多读一遍最大 22MB 的 transcript（或把边界前的条目
-      // 全缓冲起来事后再剪），为剪掉一条本就不该显示的命令行付这个代价不划算。
-      if (entry.uuid && !entry.isSidechain && (entry.type === 'user' || entry.type === 'assistant')) {
-        // teamName 条目 SDK 选叶本就跳过（两版同），它排在最后不说明叶子选错了。
-        if (!entry.teamName) newestMainUuid = entry.uuid;
-        if (liveUuids) {
-          if (liveUuids.has(entry.uuid)) chainStarted = true;
-          else if (chainStarted) continue;
-        }
-      }
-
-
-      // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use + thinking 混排：按 content block
-      // 顺序展开。sidechain（子 agent）一并回显（带 isSidechain / parentToolUseId），前端收进折叠卡；
-      // 不再整段丢弃——刷新后也能看子 agent 详情（与 live parentToolUseId 卡对齐）。
-      // parent_tool_use_id 若意外落盘则直接用作 parent；否则用最近主链 Agent/Task 的 toolUseId 挂靠。
-      if (entry.type === 'user' || entry.type === 'assistant') {
-        // 同 uuid 重复落盘去重（仅 uuid 存在时；缺 uuid 的旧条目不因 undefined 相撞而互删）。
-        // 一条 uuid 对应整条 JSONL entry，展开出的多条 tool/text 共享同一 uuid——只在 entry 级去重一次。
-        if (entry.uuid) { if (seenUuids.has(entry.uuid)) continue; seenUuids.add(entry.uuid); }
-
-        // /compact 写下的压缩摘要（type:user、没有 isMeta、带 isCompactSummary）是给模型的上下文，不是用户
-        // 说的话（O115）：终端主视图不显示它，live 侧只发一条「上下文已压缩」。这里换成同义的标记条目，
-        // 【不能整条跳过】：终端 /compact 落盘的只有它和被忽略的 compact_boundary，丢掉它 catchUpStep
-        // 就看不到这次外部写入、不标 externalDirty，手机下一条会从压缩前的叶子写下去，两端分叉。
-        if (entry.isCompactSummary) {
-          const marker = { role: 'system', kind: 'compact_summary', content: '', timestamp: entry.timestamp };
-          if (entry.entrypoint) marker.entrypoint = entry.entrypoint;
-          pushCapped(marker);
-          continue;
-        }
-
-        const role = entry.message?.role || entry.type;
-        const isSide = Boolean(entry.isSidechain || entry.parent_tool_use_id);
-        const parentFromDisk = entry.parent_tool_use_id || entry.parentToolUseId || entry.agentId || null;
-        const expanded = expandHistoryEntry(entry.message?.content, role, entry.timestamp, {
-          toolNames,
-          isSidechain: isSide,
-          parentToolUseId: isSide ? (parentFromDisk || lastMainAgentToolId || 'sidechain') : null,
-          // 分叉锚点只在主链上有效：sidechain（子 agent）消息的 parentUuid 链是另一条支线，forkSession
-          // 「保留到该 uuid 为止」对子 agent 消息语义不明确；前端也只在主链气泡上挂长按分叉入口。
-          uuid: isSide ? null : entry.uuid,
-          // API 报错条（CLI 落盘为普通 assistant + model:'<synthetic>' + 这三个顶层字段）。
-          // 不带出来的话，刷新后 live 侧的红条会退化成看不出异常的普通助手气泡。
-          isApiErrorMessage: entry.isApiErrorMessage === true,
-          apiErrorStatus: entry.apiErrorStatus ?? null,
-          apiError: entry.error ?? null,
-          // 额度墙自动续跑发出的那句（server/auto-continue.js，SDK 归属 auto-continuation）。只认这一种：
-          // human 是缺省，其余来源（peer / task-notification…）另有各自的呈现，不在这里混进来。
-          autoContinuation: entry.origin?.kind === 'auto-continuation',
-        });
-        for (const item of expanded) {
-          // 谁写的这一条（sdk-ts=己方 / cli=终端）。catchUpStep 靠它判增量是不是己方写盘——
-          // 「磁盘变长」回答不了这个问题，而 localBusy/wasBusy 那两道时序防线漏得掉秒级轮次
-          // （见 catchUpStep 里那段注释）。磁盘自报，缺字段就不带、由下游按未知保守处理。
-          if (entry.entrypoint) item.entrypoint = entry.entrypoint;
-          // 主链 spawn 工具（Agent/Task/Workflow）：记住 id，供后续无 parent 字段的 sidechain 行挂靠
-          if (!isSide && item.kind === 'tool_use'
-              && (item.name === 'Agent' || item.name === 'Task' || item.name === 'Workflow')
-              && item.toolUseId) {
-            lastMainAgentToolId = item.toolUseId;
-          }
-          pushCapped(item);
-        }
-        continue;
-      }
-
-      // 本地 slash 命令的输出（web 形态）：{ type:'system', subtype:'local_command',
-      // content:'<local-command-stdout>…</local-command-stdout>' }——content 是顶层字段、不在 message 里，
-      // 故被上面那道 user/assistant 闸整条跳过。/code-review 的结果正落在这个形态上：真机跑满 13 分钟、
-      // 结果完整落盘，刷新后历史里却什么都没有（2026-08-03）。live 侧同一段正文走 agent.js 的
-      // local_command_output 分支，两边共用 parseLocalCommandOutput，形态一致（否则刷新前后两个样）。
-      //
-      // 【为什么 CLI 形态不一并放开】终端里同样的输出以 type:'user' + <local-command-stdout> 落盘，被
-      // isCliSystemLine 当噪音丢弃（实测切 model/effort 的会话里这类回执可占回显 ~30%），那条判断保持不动：
-      // CLI 形态的输出用户在终端里当场看过、web 只是只读回看；web 形态的输出则是用户从没见过的那一份。
-      if (entry.type === 'system' && entry.subtype === 'local_command') {
-        const out = parseLocalCommandOutput(entry.content);
-        // 只收「整段就是完整包装」的形态：这个 subtype 是个大杂烩，同名 subtype 下还落命令名回显等
-        // 非输出条目，裸文本无从判断是不是命令结果。live 侧不看这个标记（那条通道本身就是输出语义）。
-        if (!out?.wrapped) continue;
-        if (entry.uuid) { if (seenUuids.has(entry.uuid)) continue; seenUuids.add(entry.uuid); }
-        // 【out.isError 有意不用】live 侧 stderr 会另发一条 notice 标失败，这里不复刻：notice 是瞬时通道，
-        // 整个通道的内容（informational/mirror_error/notification/compact_error…）刷新后一律不回显，
-        // 不为本地命令一家单开历史标记。正文本身两侧一字不差，失败信息在正文里。
-        // 也不能借 isApiErrorMessage：那个标记在前端渲染成【居中小红条】（app.js renderOne），
-        // 是给一句 "API Error: 503" 用的，几 KB 的命令输出塞进去会整段变成挤在中间的小红字。
-        //
-        // 剥掉包装再交给 expandHistoryEntry：带包装的原文会被 isCliSystemLine 判成噪音丢掉。
-        // 【uuid 传 null】同上面主链分支对 sidechain 的处理：分叉锚点只在对话主链上有效。这是一条
-        // type:'system' 的条目，带出 uuid 会让前端在这个气泡的操作栏挂「分叉」按钮（appendCopyAction
-        // 见 anchorUuid 即挂），sdkForkSession 遂拿到一个非对话行的 upToMessageId。上面那道 seenUuids 去重仍用 entry.uuid，两者用途不同。
-        for (const item of expandHistoryEntry(out.text, 'assistant', entry.timestamp, { uuid: null })) {
-          // 同 225 行：catchUpStep 判「这段增量是不是己方写盘」靠 entrypoint，local_command 分支
-          // （斜杠命令的 web 端输出）同样要透出，否则秒回的 /status、/model 等命令会重现
-          // fix/own-write-misjudged-as-terminal（25ef4424）修的那个 bug——只是换了个分支。
-          if (entry.entrypoint) item.entrypoint = entry.entrypoint;
-          pushCapped(item);
-        }
-      }
-    }
-    // 循环后精裁到上限（批量裁剪可能残留至多 2×）：缓存的数组严格 ≤ HISTORY_MAX_MESSAGES。
-    if (messages.length > HISTORY_MAX_MESSAGES) {
-      messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
-    }
-  } finally {
-    input?.destroy(); // 读完已自行关闭；中途抛出时也要把句柄关掉
+  });
+  // 【SDK 选的叶子不是用户最后看到的那条 ⇒ 不剪】（2026-10-15）物理上最新的那条主链 user/assistant
+  // 不在 liveUuids 里，就是 SDK 认定的当前链没走到文件里最后发生的那段对话。当前叶子本该是「物理最靠后
+  // 的分支末端」（readLiveChainUuids 的 ③），rewind 之后的新对话又总写在废弃段后面，所以这条正常恒成立；
+  // 不成立只能是选叶把别的东西当成了末端。
+  // 实例：SDK 0.3.283 起把 system 行（away_summary / informational）也算分支末端，而闲置的终端 CLI
+  // 会把这些行挂在它记得的旧叶子下——「终端停下、手机接着聊」的那段于是被判成撤销分支，照剪就整段
+  // 看不到。这是本产品的核心路径。旧规则也有它的形态：会话以 isMeta 行收尾时 0.3.281 落回压缩前的叶子。
+  // 10/15 全量实测 816 个会话：0.3.281 触发 1 个（cad10f35，回显 344 条只剩 33），0.3.300 触发 2 个
+  // （c78e8b47 丢 36 条、da2b6acb 丢末尾 2 条，都是 away_summary 挂旧叶），其余逐条与不加保护一致。
+  // 退回不剪，方向同 readLiveChainUuids 的 fail-open；代价是这时真被 rewind 掉的段也会露面
+  // （da2b6acb 因此多出一句终端里被丢弃的「继续」）。结果照常进缓存——文件没变，SDK 的选择就不会变。
+  const s = unpruned && newestMainUuid && !liveUuids.has(newestMainUuid) ? unpruned : pruned;
+  // 循环后精裁到上限（批量裁剪可能残留至多 2×）：缓存的数组严格 ≤ HISTORY_MAX_MESSAGES。
+  if (s.messages.length > HISTORY_MAX_MESSAGES) {
+    s.messages.splice(0, s.messages.length - HISTORY_MAX_MESSAGES);
   }
-  return { messages, newestMainUuid, total };
+  return { messages: s.messages, total: s.total };
+}
+
+// 回显 reducer 的状态。一遍读要喂一份或两份（见 readHistoryMessages），所以拆成可复制的状态 + 逐条喂的函数。
+function historyState() {
+  return {
+    messages: [],
+    // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
+    // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
+    // 「always-on 要稳」的目标。超 2× 才批量 splice（pushCapped）→ 均摊 O(1)、不每条 shift。
+    // total：削顶前一共入列多少条，削掉的也算（getSessionHistoryWithTotal 据此告诉前端「只显示了最近的」）。
+    total: 0,
+    // 同 uuid 去重：真实 transcript 存在「interrupt+queue 竞态导致同一消息重复落盘」（同 uuid 写两次）→
+    // 回显成重复气泡（实证 234 会话中 1 个含 8 条）。uuid 是每条唯一标识，同 uuid = 同一逻辑消息（非合法重复），
+    // 按 uuid 去重安全——合法重复内容（两次「继续」）是不同 uuid、不误删。Set 为本次读取的瞬时结构（返回即释放）。
+    seenUuids: new Set(),
+    toolNames: new Map(), // tool_use id → 工具名：tool_result 按它取摘要上限（Bash 2000，见 toolResultCap）
+    // 主链最近 Agent/Task toolUseId：sidechain 行常无 parent_tool_use_id 落盘，靠此挂到折叠卡
+    lastMainAgentToolId: null,
+    // 当前链是否已经开始（读到第一条命中 liveUuids 的主链消息）。在那之前的主链消息一律保留：
+    // 它们不在集合里只说明「已被移出模型上下文」（compact），不说明「已被撤销」（rewind）。
+    chainStarted: false,
+  };
+}
+
+// 复制出来的那份往后各喂各的：已入列的条目都是新建的对象、入列后不再改，数组和两张表各自一份就够。
+function cloneHistoryState(s) {
+  return { ...s, messages: s.messages.slice(), seenUuids: new Set(s.seenUuids), toolNames: new Map(s.toolNames) };
+}
+
+function pushCapped(s, item) {
+  s.total++;
+  s.messages.push(item);
+  if (s.messages.length > HISTORY_MAX_MESSAGES * 2) {
+    s.messages.splice(0, s.messages.length - HISTORY_MAX_MESSAGES);
+  }
+}
+
+const isMainMessage = e => Boolean(e.uuid) && !e.isSidechain && (e.type === 'user' || e.type === 'assistant');
+
+// 把一条（已跳过 isMeta 的）条目喂进 s。返回 false = 这条在当前链开始之后、不在链上，剪掉了，s 没动。
+function feedHistory(s, entry, liveUuids) {
+  // 当前链【开始之后】不在链上的主链消息 = 被 /rewind 撤销的分支，CLI 自己也不再显示它们。
+  // 只筛 user/assistant：type:'system' 的本地命令输出不在 SDK 的返回里，一并筛会把它们全删掉。
+  // sidechain 也豁免——子 agent 的 uuid 不挂主链，按 live 过滤会误删整棵折叠卡。
+  //
+  // 【为什么要等链开始】liveUuids 表达的是「还在模型上下文里」，compact 会把边界之前的整段
+  // 移出上下文却一行不删——那段记录仍属于这个会话，用户仍该看到（抽屉里这条会话的标题就取自
+  // 开头那段）。不等的话它们会被当成废弃分支一起剪掉：真机 349 个会话里 16 个压缩过，13 个
+  // 丢了开头，最狠的 1284 条只剩 3 条（1ee3b415，标题还挂着开头那句话）。
+  // 边界之前若也 rewind 过，那段废弃分支会重新露面——与本模块既有取舍同向（见 readLiveChainUuids
+  // 的 fail-open）：少显示历史是静默的，多显示几条废弃分支是看得见的。
+  // 【已知窗口，有意不修】compactMetadata 点名保留的 uuid 物理上位于边界之前（实测 preservedSegment
+  // 的 head/anchor/tail 都是边界前那几条），会让这里提前认定「链已开始」，于是它到边界之间那一小段
+  // 仍按当前链剪。全量实测 16 个压缩会话共 3 条，且全部是触发压缩的 `/compact` 命令行本身——要消掉
+  // 这个窗口得改成按 compact_boundary 定位，代价是多读一遍最大 22MB 的 transcript（或把边界前的条目
+  // 全缓冲起来事后再剪），为剪掉一条本就不该显示的命令行付这个代价不划算。
+  if (liveUuids && isMainMessage(entry)) {
+    if (liveUuids.has(entry.uuid)) s.chainStarted = true;
+    else if (s.chainStarted) return false;
+  }
+
+  // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use + thinking 混排：按 content block
+  // 顺序展开。sidechain（子 agent）一并回显（带 isSidechain / parentToolUseId），前端收进折叠卡；
+  // 不再整段丢弃——刷新后也能看子 agent 详情（与 live parentToolUseId 卡对齐）。
+  // parent_tool_use_id 若意外落盘则直接用作 parent；否则用最近主链 Agent/Task 的 toolUseId 挂靠。
+  if (entry.type === 'user' || entry.type === 'assistant') {
+    // 同 uuid 重复落盘去重（仅 uuid 存在时；缺 uuid 的旧条目不因 undefined 相撞而互删）。
+    // 一条 uuid 对应整条 JSONL entry，展开出的多条 tool/text 共享同一 uuid——只在 entry 级去重一次。
+    if (entry.uuid) { if (s.seenUuids.has(entry.uuid)) return true; s.seenUuids.add(entry.uuid); }
+
+    // /compact 写下的压缩摘要（type:user、没有 isMeta、带 isCompactSummary）是给模型的上下文，不是用户
+    // 说的话（O115）：终端主视图不显示它，live 侧只发一条「上下文已压缩」。这里换成同义的标记条目，
+    // 【不能整条跳过】：终端 /compact 落盘的只有它和被忽略的 compact_boundary，丢掉它 catchUpStep
+    // 就看不到这次外部写入、不标 externalDirty，手机下一条会从压缩前的叶子写下去，两端分叉。
+    if (entry.isCompactSummary) {
+      const marker = { role: 'system', kind: 'compact_summary', content: '', timestamp: entry.timestamp };
+      if (entry.entrypoint) marker.entrypoint = entry.entrypoint;
+      pushCapped(s, marker);
+      return true;
+    }
+
+    const role = entry.message?.role || entry.type;
+    const isSide = Boolean(entry.isSidechain || entry.parent_tool_use_id);
+    const parentFromDisk = entry.parent_tool_use_id || entry.parentToolUseId || entry.agentId || null;
+    const expanded = expandHistoryEntry(entry.message?.content, role, entry.timestamp, {
+      toolNames: s.toolNames,
+      isSidechain: isSide,
+      parentToolUseId: isSide ? (parentFromDisk || s.lastMainAgentToolId || 'sidechain') : null,
+      // 分叉锚点只在主链上有效：sidechain（子 agent）消息的 parentUuid 链是另一条支线，forkSession
+      // 「保留到该 uuid 为止」对子 agent 消息语义不明确；前端也只在主链气泡上挂长按分叉入口。
+      uuid: isSide ? null : entry.uuid,
+      // API 报错条（CLI 落盘为普通 assistant + model:'<synthetic>' + 这三个顶层字段）。
+      // 不带出来的话，刷新后 live 侧的红条会退化成看不出异常的普通助手气泡。
+      isApiErrorMessage: entry.isApiErrorMessage === true,
+      apiErrorStatus: entry.apiErrorStatus ?? null,
+      apiError: entry.error ?? null,
+      // 额度墙自动续跑发出的那句（server/auto-continue.js，SDK 归属 auto-continuation）。只认这一种：
+      // human 是缺省，其余来源（peer / task-notification…）另有各自的呈现，不在这里混进来。
+      autoContinuation: entry.origin?.kind === 'auto-continuation',
+    });
+    for (const item of expanded) {
+      // 谁写的这一条（sdk-ts=己方 / cli=终端）。catchUpStep 靠它判增量是不是己方写盘——
+      // 「磁盘变长」回答不了这个问题，而 localBusy/wasBusy 那两道时序防线漏得掉秒级轮次
+      // （见 catchUpStep 里那段注释）。磁盘自报，缺字段就不带、由下游按未知保守处理。
+      if (entry.entrypoint) item.entrypoint = entry.entrypoint;
+      // 主链 spawn 工具（Agent/Task/Workflow）：记住 id，供后续无 parent 字段的 sidechain 行挂靠
+      if (!isSide && item.kind === 'tool_use'
+          && (item.name === 'Agent' || item.name === 'Task' || item.name === 'Workflow')
+          && item.toolUseId) {
+        s.lastMainAgentToolId = item.toolUseId;
+      }
+      pushCapped(s, item);
+    }
+    return true;
+  }
+
+  // 本地 slash 命令的输出（web 形态）：{ type:'system', subtype:'local_command',
+  // content:'<local-command-stdout>…</local-command-stdout>' }——content 是顶层字段、不在 message 里，
+  // 故被上面那道 user/assistant 闸整条跳过。/code-review 的结果正落在这个形态上：真机跑满 13 分钟、
+  // 结果完整落盘，刷新后历史里却什么都没有（2026-08-03）。live 侧同一段正文走 agent.js 的
+  // local_command_output 分支，两边共用 parseLocalCommandOutput，形态一致（否则刷新前后两个样）。
+  //
+  // 【为什么 CLI 形态不一并放开】终端里同样的输出以 type:'user' + <local-command-stdout> 落盘，被
+  // isCliSystemLine 当噪音丢弃（实测切 model/effort 的会话里这类回执可占回显 ~30%），那条判断保持不动：
+  // CLI 形态的输出用户在终端里当场看过、web 只是只读回看；web 形态的输出则是用户从没见过的那一份。
+  if (entry.type === 'system' && entry.subtype === 'local_command') {
+    const out = parseLocalCommandOutput(entry.content);
+    // 只收「整段就是完整包装」的形态：这个 subtype 是个大杂烩，同名 subtype 下还落命令名回显等
+    // 非输出条目，裸文本无从判断是不是命令结果。live 侧不看这个标记（那条通道本身就是输出语义）。
+    if (!out?.wrapped) return true;
+    if (entry.uuid) { if (s.seenUuids.has(entry.uuid)) return true; s.seenUuids.add(entry.uuid); }
+    // 【out.isError 有意不用】live 侧 stderr 会另发一条 notice 标失败，这里不复刻：notice 是瞬时通道，
+    // 整个通道的内容（informational/mirror_error/notification/compact_error…）刷新后一律不回显，
+    // 不为本地命令一家单开历史标记。正文本身两侧一字不差，失败信息在正文里。
+    // 也不能借 isApiErrorMessage：那个标记在前端渲染成【居中小红条】（app.js renderOne），
+    // 是给一句 "API Error: 503" 用的，几 KB 的命令输出塞进去会整段变成挤在中间的小红字。
+    //
+    // 剥掉包装再交给 expandHistoryEntry：带包装的原文会被 isCliSystemLine 判成噪音丢掉。
+    // 【uuid 传 null】同上面主链分支对 sidechain 的处理：分叉锚点只在对话主链上有效。这是一条
+    // type:'system' 的条目，带出 uuid 会让前端在这个气泡的操作栏挂「分叉」按钮（appendCopyAction
+    // 见 anchorUuid 即挂），sdkForkSession 遂拿到一个非对话行的 upToMessageId。上面那道 seenUuids 去重仍用 entry.uuid，两者用途不同。
+    for (const item of expandHistoryEntry(out.text, 'assistant', entry.timestamp, { uuid: null })) {
+      // 同 225 行：catchUpStep 判「这段增量是不是己方写盘」靠 entrypoint，local_command 分支
+      // （斜杠命令的 web 端输出）同样要透出，否则秒回的 /status、/model 等命令会重现
+      // fix/own-write-misjudged-as-terminal（25ef4424）修的那个 bug——只是换了个分支。
+      if (entry.entrypoint) item.entrypoint = entry.entrypoint;
+      pushCapped(s, item);
+    }
+  }
+  return true;
 }
 
 // 只读「追平」状态机（纯函数，便于单测）——server 每 tick 用它决定该把哪些【新落定】消息推给 web 端。
