@@ -96,7 +96,7 @@ test.describe('打开会话的回执带服务端耗时（真 server，零 token�
     const opened = await emit('session:switch', { sessionId: SWITCH_ID, cwd: workDir });
     assert.equal(opened.ok, true, `前提：会话要能打开：${JSON.stringify(opened)}`);
     assert.deepEqual(Object.keys(opened.timing ?? {}).sort(),
-      ['defaultsMs', 'divergenceMs', 'ms', 'priorExitMs', 'readsMs', 'resolveMs', 'resumeMs'], JSON.stringify(opened.timing));
+      ['defaultsMs', 'ms', 'priorExitMs', 'readsMs', 'resolveMs', 'resumeMs'], JSON.stringify(opened.timing));
     assert.ok(Object.values(opened.timing).every(Number.isFinite), JSON.stringify(opened.timing));
     // 聚焦已在跑的实例：resume 各段是它当初打开时的数，带上就像这一次又 resume 了一遍
     const again = await emit('session:switch', { sessionId: SWITCH_ID, cwd: workDir });
