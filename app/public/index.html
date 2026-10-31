@@ -28,25 +28,17 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="CCM">
   <!-- 前端库自托管（vendored，见 public/vendor/）：原走 CDN（jsdelivr/tailwind），但手机网络常连不上 CDN，
-       阻塞式 <script> 会卡住后续 app.js 执行 → socket 永不初始化、页面死在「未连接」。改本地后任何网络（含纯局域网）皆可用。 -->
-  <script src="/vendor/marked.min.js"></script>
-  <script src="/vendor/purify.min.js"></script>
+       阻塞式 <script> 会卡住后续 app.js 执行 → socket 永不初始化、页面死在「未连接」。改本地后任何网络（含纯局域网）皆可用。
+       全部 defer：不挡首帧解析；classic defer 按文档顺序执行、排在 body 末尾的 app.js（module）之前，app.js 拿到的全局不变。 -->
+  <script src="/vendor/marked.min.js" defer></script>
+  <script src="/vendor/purify.min.js" defer></script>
   <link id="hljsThemeLight" rel="stylesheet" href="/vendor/github-light.min.css" media="(prefers-color-scheme: light)">
   <link id="hljsThemeDark" rel="stylesheet" href="/vendor/github-dark.min.css" media="(prefers-color-scheme: dark)">
-  <script src="/vendor/highlight.min.js"></script>
-  <!-- 文件浏览器代码查看/编辑（CM5，见 public/js/app/file-browser.js）；核心须先于各语言 mode 加载 -->
+  <script src="/vendor/highlight.min.js" defer></script>
+  <!-- 文件浏览器代码查看/编辑（CM5）：脚本由 public/js/app/file-browser.js 在第一次打开文件时按需插入，不进启动链。
+       样式表留在这里：app.css 里 .cm-ccm-viewer 的配色与 CM 默认主题同特异性，靠排在它后面胜出，插到 head 末尾就反过来了。 -->
   <link rel="stylesheet" href="/vendor/codemirror/codemirror.min.css">
-  <script src="/vendor/codemirror/codemirror.min.js"></script>
-  <script src="/vendor/codemirror/mode-javascript.min.js"></script>
-  <script src="/vendor/codemirror/mode-xml.min.js"></script>
-  <script src="/vendor/codemirror/mode-css.min.js"></script>
-  <script src="/vendor/codemirror/mode-htmlmixed.min.js"></script>
-  <script src="/vendor/codemirror/mode-jsx.min.js"></script>
-  <script src="/vendor/codemirror/mode-markdown.min.js"></script>
-  <script src="/vendor/codemirror/mode-python.min.js"></script>
-  <script src="/vendor/codemirror/mode-shell.min.js"></script>
-  <script src="/vendor/codemirror/mode-yaml.min.js"></script>
-  <script src="/socket.io/socket.io.js"></script>
+  <script src="/socket.io/socket.io.min.js" defer></script>
   <link rel="stylesheet" href="/css/app.css">
   <!-- Tailwind 工具类：npm run build:css 按 tailwind.config.js 预编译的产物，别手改（npm run check 会拿重编结果逐字节比对）。
        必须排在 app.css 之后：此前浏览器内编译出的样式表追加在 head 末尾，同特异性的规则一直是工具类胜出。 -->

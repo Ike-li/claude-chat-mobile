@@ -5,7 +5,7 @@
 //
 // 组件清单按「实际分发」算，不拿 dependencies 减 devDependencies：装机是 `npm ci --omit=dev`，分发出去的是
 // 锁文件里的非 dev 条目（含间接依赖），且只算本机真装上了的——别的平台的可选包锁文件里有、磁盘上没有。
-// 浏览器端的 Socket.IO 客户端是服务端从 socket.io 包里吐出的 /socket.io/socket.io.js，发到手机上运行，
+// 浏览器端的 Socket.IO 客户端是服务端从 socket.io 包里吐出的 /socket.io/socket.io.min.js，发到手机上运行，
 // 不在 vendor 目录、也不是一个独立安装的包，单列一条。
 
 import { readFileSync } from 'node:fs';
@@ -46,7 +46,7 @@ function licenseOf(pkg) {
 }
 
 function socketIoBrowserClient(rootDir) {
-  const head = readText(join(rootDir, 'node_modules/socket.io/client-dist/socket.io.js'))?.slice(0, 400);
+  const head = readText(join(rootDir, 'node_modules/socket.io/client-dist/socket.io.min.js'))?.slice(0, 400);
   const version = head && /Socket\.IO v(\d+\.\d+\.\d+)/.exec(head)?.[1];
   if (!version) return null;
   return { name: 'socket.io-client', version, license: /Released under the (\S+) License/.exec(head)?.[1] ?? null, scope: 'browser' };

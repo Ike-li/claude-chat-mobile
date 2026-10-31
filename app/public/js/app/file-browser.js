@@ -30,6 +30,12 @@ const CM_MIME_BY_EXT = {
 // 无高亮 mode 的文件挂 CM 的行数上限（见 renderContent）；有 mode 的文件不受此限，沿用既有行为。
 const PLAIN_CM_MAX_LINES = 2000;
 
+// public/vendor/codemirror/ 下按需加载的脚本（见 loadCodeMirror），核心排第一。
+const CM_SCRIPTS = [
+  'codemirror.min.js', 'mode-javascript.min.js', 'mode-xml.min.js', 'mode-css.min.js', 'mode-htmlmixed.min.js',
+  'mode-jsx.min.js', 'mode-markdown.min.js', 'mode-python.min.js', 'mode-shell.min.js', 'mode-yaml.min.js',
+];
+
 export function cmModeForFileName(name) {
   const dot = String(name || '').lastIndexOf('.');
   if (dot < 0) return null;
@@ -63,8 +69,30 @@ export function createFileBrowser(context, {
   let editMode = 'view';   // 'view' | 'editing'；离开 content 模式（back/loadContent 新文件）即复位
   let baseHash = null;     // files:write 的冲突基线——来自最近一次 browse:read 或 files:write 成功后的 contentHash
   let editOnDemand = false; // 行多的纯文本：查看留在 <pre>，点「编辑」才挂 CM（验收 O103，见 renderContent）
+  let codeMirrorLoad = null; // CM 脚本的按需加载，见 loadCodeMirror
 
   function relativePath() { return segments.join('/') || '.'; }
+
+  // CM5（核心＋9 个语言 mode，约 250KB）只有文件浏览器用，不进启动链：第一次打开文件时才插 <script>，与 browse:read
+  // 并行拉。async = false 让动态插入的脚本按插入顺序执行，mode 才挂得到核心上。vendor 按 immutable 缓存一年，
+  // URL 得带版本戳才换得到新文件：服务端给全部相对 import 戳了 ?v=，本模块自己的 URL 上就有。
+  // 已经加载过返回 null，调用方照旧同步渲染。拉不到也照常 resolve：renderContent 本来就会在 CM 不在时回退 <pre>；
+  // 单例随之清空，下次打开文件重拉，别让一次网络抖动记一整个会话。
+  function loadCodeMirror() {
+    if (typeof CodeMirror !== 'undefined') return null;
+    if (!codeMirrorLoad) {
+      const version = new URL(import.meta.url).searchParams.get('v');
+      codeMirrorLoad = Promise.all(CM_SCRIPTS.map(name => new Promise((resolve, reject) => {
+        const script = documentRef.createElement('script');
+        script.async = false;
+        script.onload = resolve;
+        script.onerror = reject;
+        script.src = `/vendor/codemirror/${name}${version ? `?v=${version}` : ''}`;
+        documentRef.head.appendChild(script);
+      }))).catch(() => { codeMirrorLoad = null; });
+    }
+    return codeMirrorLoad;
+  }
 
   function renderHeader() {
     const rootList = mode === 'list' && segments.length === 0;
@@ -175,11 +203,13 @@ export function createFileBrowser(context, {
 
   // 只认最近一次读请求的回执。只比路径不够：打开、返回、再打开同一个文件（或换了 cwd 后同名的相对路径），
   // 两次回执都过得了路径检查，正文被接两遍，而 baseHash 仍是合法的，保存会把两遍的正文写回磁盘。
-  function fetchContentPage(requestedPath, offset) {
+  // codeMirrorReady：loadCodeMirror() 的返回值，正文到了先等它再渲染，CM 才挂得上；等完要再认一遍，等的这段里用户可能已换了文件。
+  function fetchContentPage(requestedPath, offset, codeMirrorReady = null) {
     const gen = ++contentReadGen;
+    const stale = () => gen !== contentReadGen || mode !== 'content'
+      || segments.concat(fileName || '').join('/') !== requestedPath;
     context.socket.emit('browse:read', { cwd, relPath: requestedPath, offset }, response => {
-      const currentPath = segments.concat(fileName || '').join('/');
-      if (gen !== contentReadGen || mode !== 'content' || currentPath !== requestedPath) return;
+      if (stale()) return;
       if (!response?.ok) {
         showMessage(`${t('无法加载：')}${response?.error || t('未知错误')}`, 'text-danger');
         return;
@@ -188,9 +218,14 @@ export function createFileBrowser(context, {
         showMessage(`${t('二进制文件（')}${formatFileSize(response.totalSize)}${t('），不支持预览')}`);
         return;
       }
-      contentText += response.content;
-      contentOffset = offset + (response.bytesRead ?? response.content.length);
-      renderContent(response.truncated, response.totalSize, response.contentHash);
+      const render = () => {
+        if (stale()) return;
+        contentText += response.content;
+        contentOffset = offset + (response.bytesRead ?? response.content.length);
+        renderContent(response.truncated, response.totalSize, response.contentHash);
+      };
+      if (codeMirrorReady) codeMirrorReady.then(render);
+      else render();
     });
   }
 
@@ -205,7 +240,7 @@ export function createFileBrowser(context, {
     hideSaveError();
     renderHeader();
     showMessage(t('加载中…'));
-    fetchContentPage(segments.concat(name).join('/'), 0);
+    fetchContentPage(segments.concat(name).join('/'), 0, loadCodeMirror());
   }
 
   function hideSaveError() {
