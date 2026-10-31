@@ -17,18 +17,21 @@ const DEFAULT_HIGH_WATER_MARK = 1024 * 1024;
 /**
  * 从头逐行扫 fh，每个能解析的行 JSON.parse 一次，交给 onEntry(entry, end)。end 是这一行内容结束处的字节偏移
  * （换行符的位置；最后一行没有换行时是扫描范围的末尾）。空行、解析失败的行（写到一半的尾行）跳过。
- * opts.end：只扫 [0, end) 这段字节。返回时（含抛出）fh 已关闭。
+ * opts.start / opts.end：只扫 [start, end) 这段字节，start 须在行首。返回时（含抛出）fh 已关闭。
+ * 返回续读位置：扫过的最后一个换行符之后（一个都没有就是 start）。没有换行的尾行即使解析成功交出去了，
+ * 也不算扫过——它可能写到一半，下次从它的行首重扫。
  */
-export async function scanJsonl(fh, onEntry, { end, highWaterMark = DEFAULT_HIGH_WATER_MARK } = {}) {
-  if (end === 0) { await fh.close(); return; }
-  const stream = fh.createReadStream({ highWaterMark, ...(end != null ? { start: 0, end: end - 1 } : {}) });
+export async function scanJsonl(fh, onEntry, { start = 0, end, highWaterMark = DEFAULT_HIGH_WATER_MARK } = {}) {
+  if (end != null && end <= start) { await fh.close(); return start; }
+  const stream = fh.createReadStream({ highWaterMark, start, ...(end != null ? { end: end - 1 } : {}) });
   const emit = (text, lineEnd) => {
     let entry;
     try { entry = JSON.parse(text); } catch { return; }
     onEntry(entry, lineEnd);
   };
   let pending = []; // 跨块的半行
-  let base = 0; // 当前块开头在文件里的偏移
+  let base = start; // 当前块开头在文件里的偏移
+  let resume = start;
   try {
     for await (const chunk of stream) {
       let from = 0, nl;
@@ -42,6 +45,7 @@ export async function scanJsonl(fh, onEntry, { end, highWaterMark = DEFAULT_HIGH
         }
         from = nl + 1;
       }
+      if (from > 0) resume = base + from;
       if (from < chunk.length) pending.push(chunk.subarray(from));
       base += chunk.length;
     }
@@ -49,4 +53,5 @@ export async function scanJsonl(fh, onEntry, { end, highWaterMark = DEFAULT_HIGH
   } finally {
     stream.destroy(); // 读完已自行关闭；中途抛出（含 onEntry 抛）时也要把句柄关掉
   }
+  return resume;
 }

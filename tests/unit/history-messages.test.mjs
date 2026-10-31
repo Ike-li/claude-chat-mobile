@@ -6,7 +6,8 @@
 // 这份从原 history.test.mjs 拆出，同源的还有 -files、-list、-sync。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { appendFileSync, copyFileSync, renameSync, writeFileSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
@@ -1250,4 +1251,223 @@ test('getSessionHistory: show_widget 的 tool_use 条目带完整 widget 源码�
   assert.match(w.inputSummary, /已截断/);
   const b = msgs.find(m => m.toolUseId === 'b');
   assert.equal('widget' in b, false);
+});
+
+// ── 性能改造 4a：增量解析 ──────────────────────────────────────────────────────
+// 终端在写的会话每次 mirror tick 都撞上「文件变了」，原来每次都整份重来：SDK 求链（它自己把整份
+// transcript 读一遍）+ 从头解析。4a 记住上次解析到哪，文件只往后长、新写的接在当前链末端时只解析
+// 新写的那段；接不上（rewind、compact、并行工具的兄弟…）就退回整份重来。
+// 判据一律是「与同一份内容换个会话 id 冷读一遍逐条相同」；链交给真 SDK 去求（同上面 away_summary
+// 那条的接法），选叶、compact 缝合、按 message.id 补兄弟都是它的原样行为，用例不手算它会返回什么。
+const incLine = (type, uuid, parentUuid, content, extra = {}) => ({
+  type, uuid, parentUuid, isSidechain: false, message: { role: type, content }, timestamp: '2026-10-31T12:00:00.000Z', ...extra,
+});
+const incTurn = (n, parentUuid) => [incLine('user', `u-${n}`, parentUuid, `问${n}`), incLine('assistant', `a-${n}`, `u-${n}`, `答${n}`)];
+
+// 先读 before，再按 steps 逐步往同一份文件后面追加（条目数组，或原样的一段字节）、每步读一次；
+// 最后把这份文件逐字节复制成另一个会话 id 冷读作对照。first 是 before 那次读的，second / askedChain 是最后一步那次读的。
+async function readAfterAppend(before, ...steps) {
+  const configDir = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-hist-inc-')));
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-hist-inc-cwd-')));
+  const projects = join(configDir, 'projects');
+  const dir = join(projects, getProjectDir(cwd));
+  const id = randomUUID(), coldId = randomUUID(); // SDK 只认 UUID 形态的会话 id
+  const prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = configDir;
+  let calls = 0;
+  __setSdkGetSessionMessagesForTest((...args) => { calls++; return sdkGetSessionMessages(...args); });
+  try {
+    writeJSONL(dir, id, before);
+    // 正对照：真 SDK 读到了夹具。读不到它返回空、history fail-open 不剪，各条「与冷读相同」就恒绿了
+    assert.ok((await sdkGetSessionMessages(id, { dir: cwd })).length > 0, '真 SDK 没读到夹具——先修夹具路径');
+    const first = await getSessionHistoryWithTotal(id, cwd, { baseDir: projects });
+    let second, askedChain;
+    for (const step of steps) {
+      appendFileSync(join(dir, `${id}.jsonl`), typeof step === 'string' ? step : step.map(e => JSON.stringify(e)).join('\n') + '\n');
+      const callsBefore = calls;
+      second = await getSessionHistoryWithTotal(id, cwd, { baseDir: projects });
+      askedChain = calls > callsBefore;
+    }
+    copyFileSync(join(dir, `${id}.jsonl`), join(dir, `${coldId}.jsonl`));
+    const cold = await getSessionHistoryWithTotal(coldId, cwd, { baseDir: projects });
+    return { first, second, cold, askedChain };
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+    if (prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = prevConfigDir;
+  }
+}
+
+function assertSameAsCold({ second, cold }) {
+  assert.deepEqual(second.messages, cold.messages, '增量读出来的回显与冷读同一份文件不同');
+  assert.equal(second.total, cold.total);
+}
+
+test('4a getSessionHistoryWithTotal: 新写的几轮接在当前链末端，只解析新写的那段、不再求链，结果与冷读相同', async () => {
+  const r = await readAfterAppend([...incTurn(1, null)], [...incTurn(2, 'a-1'), ...incTurn(3, 'a-2')]);
+  assert.equal(r.askedChain, false, '文件只往后长、新写的接在链尾，又整份求了一遍链（大会话上每个 tick 几百毫秒）');
+  assert.equal(r.second.timing?.cache, 'incremental', JSON.stringify(r.second.timing));
+  assertSameAsCold(r);
+});
+
+test('4a getSessionHistoryWithTotal: 新写的接在旧节点下（rewind 之后重来），退回整份重读，撤销的那轮照旧剪掉', async () => {
+  const r = await readAfterAppend([...incTurn(1, null), ...incTurn(2, 'a-1')], incTurn(3, 'a-1'));
+  assert.ok(!r.cold.messages.some(m => m.content === '问2'), '对照：冷读本该剪掉撤销的那轮——夹具没构成 rewind');
+  assertSameAsCold(r);
+});
+
+test('4a getSessionHistoryWithTotal: 上次是 SDK 选错叶、退回不剪的那份，新写的接在链尾也退回整份重读', async () => {
+  // 以 isMeta 行收尾：SDK 选它当叶子，物理最新的问2/答2 不在链上 → 保护触发、整份不剪。之后接着它写的新一轮让
+  // SDK 选回正常的叶子，问2/答2 成了被撤销的分支——上次那份不剪的状态接着长就会把它们留下
+  const meta = incLine('user', 'm-1', 'a-1', '<meta>', { isMeta: true });
+  const r = await readAfterAppend([...incTurn(1, null), ...incTurn(2, 'a-1'), meta], incTurn(3, 'm-1'));
+  assert.ok(r.first.messages.some(m => m.content === '问2'), '对照：第一次读本该退回不剪——夹具没触发保护');
+  assert.ok(!r.cold.messages.some(m => m.content === '问2'), '对照：冷读本该剪掉问2——夹具没让 SDK 选回正常叶子');
+  assertSameAsCold(r);
+});
+
+test('4a getSessionHistoryWithTotal: 上次物理最后那条往上走不到一问一答（父节点不在文件里），新写的接在它下面也退回整份重读', async () => {
+  // SDK 选叶从物理最后的末端往上找第一条 user/assistant，走断了就换下一个末端：上次的叶子 a-3 不是从 s-1 走到的。
+  // 新写的一轮接在 s-1 下，链变成 a-4 → u-4 → s-1 → 断，问1…答3 都不在链上了——链开始前的照 compact 的口径全留
+  const orphan = { type: 'system', subtype: 'away_summary', uuid: 's-1', parentUuid: 'gone', isSidechain: false, content: '离开期间', timestamp: '2026-10-31T12:00:00.000Z' };
+  const r = await readAfterAppend([...incTurn(1, null), ...incTurn(2, 'a-1'), ...incTurn(3, 'a-1'), orphan], incTurn(4, 's-1'));
+  assert.ok(!r.first.messages.some(m => m.content === '问2'), '对照：第一次读本该剪掉撤销的问2');
+  assert.ok(r.cold.messages.some(m => m.content === '问2'), '对照：冷读本该从 u-4 才算链开始、问2 留着');
+  assertSameAsCold(r);
+});
+
+// /compact 落盘的形态（真机 228 条 compact_boundary 全是这样）：边界 parentUuid 为 null，摘要挂在边界下、
+// 同时是 compactMetadata 的 anchor；保留段 head…tail 是压缩前最后那几条。SDK 求链时把挂在 anchor 下的条目改挂到 tail。
+function incCompact({ cmd, head, tail }) {
+  const preserved = { anchorUuid: 'sum-1', headUuid: head, tailUuid: tail };
+  return [
+    incLine('user', 'cmd-1', tail, '压缩一下'),
+    { type: 'system', subtype: 'compact_boundary', uuid: 'cb-1', parentUuid: null, logicalParentUuid: cmd ?? 'cmd-1', isSidechain: false,
+      content: 'Conversation compacted', compactMetadata: { trigger: 'manual', preservedSegment: preserved, preservedMessages: { anchorUuid: 'sum-1', uuids: [head, tail] } },
+      timestamp: '2026-10-31T12:00:00.000Z' },
+    incLine('user', 'sum-1', 'cb-1', '压缩摘要', { isCompactSummary: true }),
+  ];
+}
+
+test('4a getSessionHistoryWithTotal: 上次停在压缩摘要上，新写的挂在摘要下（SDK 改挂到保留段末尾），退回整份重读', async () => {
+  // 改挂之后 tail 下面有了新的一轮，触发压缩的那句命令成了旁支、不在链上；上次它在链上
+  const r = await readAfterAppend([...incTurn(1, null), ...incTurn(2, 'a-1'), ...incCompact({ head: 'u-2', tail: 'a-2' })], incTurn(3, 'sum-1'));
+  assert.ok(r.first.messages.some(m => m.content === '压缩一下'), '对照：第一次读那句命令在链上');
+  assert.ok(!r.cold.messages.some(m => m.content === '压缩一下'), '对照：冷读本该剪掉那句命令——夹具没构成改挂');
+  assertSameAsCold(r);
+});
+
+// 一次 API 回复按内容块拆成几行落盘、共用一个 message.id。SDK 求链后按 message.id 把同一回复里不在链上的那几行补进链（dxe）
+const incAsst = (uuid, parentUuid, content, id) => incLine('assistant', uuid, parentUuid, content, { message: { role: 'assistant', id, content } });
+
+test('4a getSessionHistoryWithTotal: 新写的回复与上次剪掉的一行同属一个 message.id（SDK 会把那行补回链上），退回整份重读', async () => {
+  const before = [...incTurn(1, null), incLine('user', 'u-2', 'a-1', '问2'), incAsst('a-2', 'u-2', '答2', 'msg-2'), ...incTurn(3, 'a-1')];
+  const r = await readAfterAppend(before, [incAsst('a-4', 'a-3', '答4', 'msg-2')]);
+  assert.ok(!r.first.messages.some(m => m.content === '答2'), '对照：第一次读本该剪掉撤销的答2');
+  assert.ok(r.cold.messages.some(m => m.content === '答2'), '对照：冷读本该把答2 按 message.id 补回链上');
+  assertSameAsCold(r);
+});
+
+test('4a getSessionHistoryWithTotal: 新写的工具结果回答了一个已有结果的工具调用（SDK 补进链的那条随之出链），退回整份重读', async () => {
+  // r-x 不挂在 a-1 下、不在链上，但回答的是 a-1 发起的 tu-1、而链上还没人回答它：SDK 把它补进链（dxe 的 z）。
+  // 链上有了别的行回答 tu-1，SDK 就不再补它
+  const toolUse = [{ type: 'tool_use', id: 'tu-1', name: 'Bash', input: { command: 'ls' } }];
+  const result = text => [{ type: 'tool_result', tool_use_id: 'tu-1', content: text }];
+  const before = [incLine('user', 'u-1', null, '问1'), incAsst('a-1', 'u-1', toolUse, 'msg-1'), incLine('user', 'r-x', 'u-1', result('旧结果')),
+    incLine('user', 'u-2', 'a-1', '问2'), incLine('assistant', 'a-2', 'u-2', '答2')];
+  const r = await readAfterAppend(before, [incLine('user', 'r-new', 'a-2', result('新结果')), incLine('assistant', 'a-3', 'r-new', '答3')]);
+  const has = (read, text) => JSON.stringify(read.messages).includes(text);
+  assert.ok(has(r.first, '旧结果'), '对照：第一次读 SDK 本该把 r-x 补进链');
+  assert.ok(!has(r.cold, '旧结果'), '对照：冷读本该剪掉 r-x——夹具没让它出链');
+  assertSameAsCold(r);
+});
+
+// 超过 5MB 的 transcript，SDK 只拿最后一条压缩边界之后的那段求链（sdk.mjs 的 qL）。用一行垫料把文件撑过去
+const incPad = () => ({ type: 'ccm-test-padding', pad: 'x'.repeat(5.3e6) });
+
+test('4a getSessionHistoryWithTotal: 超过 5MB 的文件新写进一条 sidechain 的压缩边界（SDK 照样从它之后才求链），退回整份重读', async () => {
+  // 主链的边界 parentUuid 为 null、接不上链尾，早被挡下；sidechain 的不是链节点，可 SDK 截段时不看 isSidechain。
+  // 截完链只剩新写的那轮，链开始前的照 compact 的口径全留——上次剪掉的问2 回来了
+  const cb = { type: 'system', subtype: 'compact_boundary', uuid: 'cb-s', parentUuid: null, isSidechain: true,
+    content: 'Conversation compacted', compactMetadata: { trigger: 'auto' }, timestamp: '2026-10-31T12:00:00.000Z' };
+  const r = await readAfterAppend([...incTurn(1, null), ...incTurn(2, 'a-1'), ...incTurn(3, 'a-1'), incPad()], [cb, ...incTurn(4, 'a-3')]);
+  assert.ok(!r.first.messages.some(m => m.content === '问2'), '对照：第一次读本该剪掉撤销的问2');
+  assert.ok(r.cold.messages.some(m => m.content === '问2'), '对照：冷读本该只从新边界之后求链、问2 留着——夹具没让 SDK 截段');
+  assertSameAsCold(r);
+});
+
+test('4a getSessionHistoryWithTotal: 文件这次才长过 5MB（SDK 从读整份改成只读最后一条边界之后），退回整份重读', async () => {
+  // a-1 与边界之后的 a-3 同属一个 message.id：读整份时 SDK 按 message.id 把 a-1 补进链，链从 a-1 就开始了、问2 被剪；
+  // 只读边界之后时它看不见 a-1，链从压缩摘要才开始，问2 照 compact 的口径留着
+  const cb = { type: 'system', subtype: 'compact_boundary', uuid: 'cb-1', parentUuid: null, isSidechain: false,
+    content: 'Conversation compacted', compactMetadata: { trigger: 'manual' }, timestamp: '2026-10-31T12:00:00.000Z' };
+  const before = [incLine('user', 'u-1', null, '问1'), incAsst('a-1', 'u-1', '答1', 'msg-x'), ...incTurn(2, 'a-1'), cb,
+    incLine('user', 'sum-1', 'cb-1', '压缩摘要', { isCompactSummary: true }), incLine('user', 'u-3', 'sum-1', '问3'), incAsst('a-3', 'u-3', '答3', 'msg-x')];
+  const r = await readAfterAppend(before, [incPad(), ...incTurn(4, 'a-3')]);
+  assert.ok(!r.first.messages.some(m => m.content === '问2'), '对照：第一次读本该把 a-1 补进链、剪掉问2');
+  assert.ok(r.cold.messages.some(m => m.content === '问2'), '对照：冷读本该只读边界之后、问2 留着——夹具没撑过 5MB');
+  assertSameAsCold(r);
+});
+
+// 拿不到链的实例（CCM_DATA_DIR 隔离：SDK 够不着那个根，不剪）同样只解析新长的那截。before 是条目数组或原样的一段字节；
+// 每个 change(file) 改一次文件、读一次，second 是最后那次。
+// 文件变小、换了 inode、续读位置这几条用它测：按链剪的那份另有「新写的接不上链尾就回退」挡着，测不到这几道闸本身。
+async function readNoChainAfter(before, ...changes) {
+  const projects = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-hist-inc-nochain-')));
+  const cwd = '/work/inc-nochain';
+  const dir = join(projects, getProjectDir(cwd));
+  const id = randomUUID(), coldId = randomUUID();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${id}.jsonl`), typeof before === 'string' ? before : jsonlText(before));
+  await getSessionHistoryWithTotal(id, cwd, { baseDir: projects });
+  let second;
+  for (const change of changes) {
+    change(join(dir, `${id}.jsonl`));
+    second = await getSessionHistoryWithTotal(id, cwd, { baseDir: projects });
+  }
+  copyFileSync(join(dir, `${id}.jsonl`), join(dir, `${coldId}.jsonl`));
+  const cold = await getSessionHistoryWithTotal(coldId, cwd, { baseDir: projects });
+  return { second, cold };
+}
+const jsonlText = entries => entries.map(e => JSON.stringify(e)).join('\n') + '\n';
+
+test('4a getSessionHistoryWithTotal: 拿不到链的实例里文件往后长，同样只解析新长的那截', async () => {
+  const r = await readNoChainAfter(incTurn(1, null), file => appendFileSync(file, jsonlText(incTurn(2, 'a-1'))));
+  assert.equal(r.second.timing?.cache, 'incremental', JSON.stringify(r.second.timing));
+  assertSameAsCold(r);
+});
+
+test('4a getSessionHistoryWithTotal: 文件变小了（原地截短重写），退回整份重读', async () => {
+  const r = await readNoChainAfter([...incTurn(1, null), ...incTurn(2, 'a-1')], file => writeFileSync(file, jsonlText(incTurn(1, null))));
+  assertSameAsCold(r);
+});
+
+test('4a getSessionHistoryWithTotal: 文件被换掉了（另写一份更长的 rename 覆盖，inode 变了），退回整份重读', async () => {
+  const r = await readNoChainAfter(incTurn(1, null), (file) => {
+    writeFileSync(`${file}.tmp`, jsonlText([...incTurn(7, null), ...incTurn(8, 'a-7'), ...incTurn(9, 'a-8')]));
+    renameSync(`${file}.tmp`, file);
+  });
+  assertSameAsCold(r);
+});
+
+test('4a getSessionHistoryWithTotal: 写到一半的尾行下次写完了，接着读不重不漏', async () => {
+  const line = JSON.stringify(incTurn(2, 'a-1')[0]);
+  const cut = line.length >> 1;
+  const r = await readNoChainAfter(incTurn(1, null),
+    file => appendFileSync(file, line.slice(0, cut)),
+    file => appendFileSync(file, `${line.slice(cut)}\n${JSON.stringify(incTurn(2, 'a-1')[1])}\n`));
+  assert.equal(r.second.timing?.cache, 'incremental', JSON.stringify(r.second.timing));
+  assertSameAsCold(r);
+});
+
+// 一行完整的 JSON 已经写下、换行还没到：引擎照样交出它，但续读位置停在它行首（它可能还没写完）。下次从行首重扫
+// 会把它再喂一遍——没有 uuid 的条目（web 端 slash 命令输出）没有去重兜着，回显成两个气泡。
+const noUuidLocalCommand = JSON.stringify({ type: 'system', subtype: 'local_command', isMeta: false,
+  content: '<local-command-stdout>本地命令的输出</local-command-stdout>', timestamp: '2026-10-31T12:00:00.000Z' });
+
+test('4a getSessionHistoryWithTotal: 新长的那截以没换行的完整一行收尾，下次接着读不把它喂第二遍', async () => {
+  const r = await readNoChainAfter(incTurn(1, null),
+    file => appendFileSync(file, noUuidLocalCommand),
+    file => appendFileSync(file, `\n${jsonlText(incTurn(2, 'a-1'))}`));
+  assertSameAsCold(r);
 });
