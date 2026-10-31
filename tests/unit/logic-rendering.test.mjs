@@ -5,7 +5,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-session、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ansiToHtml, urlBase64ToUint8Array, nextHistoryRenderChunk, resolveUnreadAnchorIndex, formatPushStatusRow, describePushTestResult } from '../../app/public/js/logic.js';
+import { ansiToHtml, urlBase64ToUint8Array, nextHistoryRenderChunk, historyRenderSplit, resolveUnreadAnchorIndex, formatPushStatusRow, describePushTestResult } from '../../app/public/js/logic.js';
 import { createRingBuffer } from '../../app/public/js/ring-buffer.js';
 
 test('ansiToHtml: 纯文本被 esc', () => {
@@ -148,6 +148,68 @@ test.describe('nextHistoryRenderChunk', () => {
 
   test('total=0：一步 done=true，end=0', () => {
     assert.deepEqual(nextHistoryRenderChunk({ processed: 0, total: 0, chunkSize: 40 }), { end: 0, done: true });
+  });
+});
+
+// ---- historyRenderSplit：长会话切入先画最近一段，切点只落在回合边界（主链用户文本） ----
+test.describe('historyRenderSplit', () => {
+  const user = (content, extra = {}) => ({ role: 'user', content, ...extra });
+  const reply = (content, extra = {}) => ({ role: 'assistant', content, ...extra });
+
+  test('最近段至少 minRecent 条，切在离那条线最近的主链用户消息上；tool_result 也是 role=user，不算边界', () => {
+    const msgs = [
+      user('u0'), reply('a1'), user('u2'), reply('a3'),
+      { kind: 'tool_result', role: 'user', toolUseId: 'orphan', ok: true },
+      reply('a5'), reply('a6'),
+    ];
+    assert.equal(historyRenderSplit(msgs, 3).cut, 2);
+  });
+
+  // 早段后画：配对表 / 子 agent 卡若跨了切点，结果会找不到卡、子卡会建在错的位置
+  test('工具配对、子 agent 分组跨了某个边界，就退到更早的边界；退无可退则不切', () => {
+    const toolUse = (id, name = 'Bash') => ({ kind: 'tool_use', role: 'assistant', toolUseId: id, name });
+    const toolResult = id => ({ kind: 'tool_result', role: 'user', toolUseId: id, ok: true });
+    // 回合中途插进来的用户消息（排队消息）落在 tool_use 与 tool_result 之间
+    const pairAcross = [
+      user('u0'), reply('a1'), user('u2'), reply('a3'),
+      toolUse('T'), user('u5'), toolResult('T'), reply('a7'), reply('a8'),
+    ];
+    assert.equal(historyRenderSplit(pairAcross, 3).cut, 2);
+    // 子 agent 条目路由进 parentToolUseId 那张卡，卡建在 spawn 的 tool_use 处
+    const groupAcross = [
+      user('u0'), reply('a1'), user('u2'), toolUse('P', 'Agent'), toolResult('P'),
+      user('u5'), reply('sub', { parentToolUseId: 'P', isSidechain: true }), reply('a7'), reply('a8'),
+    ];
+    assert.equal(historyRenderSplit(groupAcross, 3).cut, 2);
+    // 只带 isSidechain 的旧形态共用一张「sidechain」卡
+    const legacySidechain = [
+      user('u0'), reply('s1', { isSidechain: true }), reply('a2'),
+      user('u3'), user('s4', { isSidechain: true }), reply('a5'), reply('a6'),
+    ];
+    assert.equal(historyRenderSplit(legacySidechain, 3).cut, 0);
+  });
+
+  // 最近段先画，它开头那条要不要出日期线 / 时刻行，取决于切点前最后一条打了时间戳的气泡。
+  // 只有主链文本气泡打戳：思考、工具卡、压缩标记、API 报错条、子 agent 正文都不打，没有 ts 的也跳过
+  test('seedPrevTs = 切点前最后一条主链文本气泡的时间戳；一条都没有就是 null（会话首条）', () => {
+    const at = iso => ({ timestamp: iso });
+    const msgs = [
+      user('u0', at('2026-10-01T08:00:00Z')),
+      reply('a1', at('2026-10-01T08:01:00Z')),
+      reply('no-ts'),
+      { kind: 'thinking', role: 'assistant', content: 't', ...at('2026-10-02T09:00:00Z') },
+      { kind: 'tool_use', role: 'assistant', toolUseId: 'X', name: 'Bash', ...at('2026-10-02T09:00:01Z') },
+      { kind: 'tool_result', role: 'user', toolUseId: 'X', ok: true, ...at('2026-10-02T09:00:02Z') },
+      { role: 'system', kind: 'compact_summary', content: '', ...at('2026-10-02T09:00:03Z') },
+      reply('API Error: 529', { isApiErrorMessage: true, ...at('2026-10-02T09:00:04Z') }),
+      reply('sub', { isSidechain: true, parentToolUseId: 'Q', ...at('2026-10-02T09:00:05Z') }),
+      reply('sub2', { isSidechain: true, parentToolUseId: 'Q', ...at('2026-10-02T09:00:06Z') }),
+      user('u10', at('2026-10-03T10:00:00Z')),
+      reply('a11', at('2026-10-03T10:00:01Z')),
+    ];
+    assert.deepEqual(historyRenderSplit(msgs, 2), { cut: 10, seedPrevTs: Date.parse('2026-10-01T08:01:00Z') });
+    const noStampBefore = [reply('no-ts'), user('u1'), reply('a2'), user('u3', at('2026-10-03T10:00:00Z')), reply('a4')];
+    assert.deepEqual(historyRenderSplit(noStampBefore, 2), { cut: 3, seedPrevTs: null });
   });
 });
 

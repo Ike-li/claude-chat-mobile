@@ -1,7 +1,8 @@
 // helpers: tests/helpers/playwright.ts
 //
 // #307「只有『加载了 N 条历史消息』提示条、下面没有气泡」。
-// 历史是分块渲染的（每块 40 条，全部跑完才一次性插入 #messages），中途放弃或某条抛错都会停在只有提示条的样子。
+// 历史是分块渲染的（每块 40 条）。长会话先画最近一段（2000 条里是 #1940 起的 60 条）、画完一次性插入，更早的那段
+// 在空闲里画完再插到前面。最近一段没落地前中途放弃或某条抛错，都会停在只有提示条的样子。
 //   · 已修的一条（1b/1d/1e）：分块没画完、或回执还在路上（只有加载卡）时切走或同会话换实例，这份半成品曾被存进
 //     sessionDomCache，切回时原样贴回，sync:since 判 keep、不再拉历史。现在半成品不进缓存，切回会重新完整加载。
 //   · 观测：中途放弃、某条抛错各记一条客户端日志（日志面板里看得到），带会话号、两个实例号、已渲染条数。
@@ -190,8 +191,9 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
   });
 
   for (const scenario of [
-    { id: '2b', index: 1, persistent: false, title: '第一块同步抛错' },
-    { id: '2c', index: 61, persistent: true, title: '第二块持续抛错' },
+    // 最近一段从 #1940 起：#1941 在同步跑的第一块里，#1981 在第二块里
+    { id: '2b', index: 1941, rendered: 1, persistent: false, title: '第一块同步抛错' },
+    { id: '2c', index: 1981, rendered: 41, persistent: true, title: '第二块持续抛错' },
   ]) {
     test(`P0-HIST-STALL-${scenario.id} ${scenario.title}：保留异常和精确进度，重试入口可再次使用`, async ({ page }) => {
       const failures: Array<{ message: string; stack?: string }> = [];
@@ -217,7 +219,7 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
       await expect(bubbles(page)).toHaveCount(0);
       const log = await consoleLogText(page);
       await expect(log).toContainText(`渲染第 ${scenario.index + 1}/2000 条历史时抛错`);
-      await expect(log).toContainText(`session=mock-session-long-history instance=inst_long_history 当前=inst_long_history 已渲染 ${scenario.index}/2000`);
+      await expect(log).toContainText(`session=mock-session-long-history instance=inst_long_history 当前=inst_long_history 已渲染 ${scenario.rendered}/2000`);
       await expect(log).toContainText(/\[JS_ERROR\] (?:Uncaught Error: )?injected history assertion failure/);
       await expect.poll(() => failures.filter(e => e.message === 'injected history assertion failure').length).toBe(1);
       expect(failures[0].stack, '原异常的渲染堆栈不能被吞掉').toContain('processChunk');
@@ -239,6 +241,36 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
       expect(pageErrorsExcept(page, 'injected history assertion failure')).toEqual([]);
     });
   }
+
+  test('P0-HIST-STALL-2d 更早那段抛错：最近一段照常看得到，提示条仍算没画完，原地重新加载后恰好 2000 条', async ({ page }) => {
+    await gotoMock(page);
+    await page.evaluate(() => {
+      const m = (window as unknown as { marked: { parse: (s: string, ...rest: unknown[]) => string } }).marked;
+      const parse = m.parse;
+      let thrown = false;
+      m.parse = function (this: unknown, src: string, ...rest: unknown[]) {
+        if (!thrown && src === 'Long history stress message #61') { thrown = true; throw new Error('injected render failure'); }
+        return parse.call(this, src, ...rest);
+      };
+    });
+    await openLongHistory(page);
+    const reload = page.locator('#messages [data-testid="history-reload"]');
+    await expect(reload).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="assistant-message"]', { hasText: 'Long history final message marker' })).toBeVisible();
+    await expect(bubbles(page), '最近一段已经插进去了，更早那段一条都没进来').toHaveCount(60);
+    // 没画完的提示条不能让 bindView 把这份半成品存进缓存（#307）
+    await expect(page.locator('#messages [data-history-pending]')).toHaveCount(1);
+
+    const log = await consoleLogText(page);
+    await expect(log).toContainText('渲染第 62/2000 条历史时抛错');
+    await expect(log).toContainText('已渲染 121/2000');
+    await page.locator('#consoleClose').click();
+
+    await reload.click();
+    await expectCompleteLongHistory(page);
+    await expect(page.locator('#messages [data-history-pending]')).toHaveCount(0);
+    expect(pageErrorsExcept(page, 'injected render failure')).toEqual([]);
+  });
 
   test('P0-HIST-STALL-1 渲染第 2 块时切到别的会话：日志记下中途放弃，带会话号、两个实例号、已渲染条数', async ({ page }) => {
     await gotoMock(page);
@@ -273,15 +305,15 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
     expect(ids![1], '两个实例号应当不同').not.toBe(ids![2]);
   });
 
-  test('P0-HIST-STALL-2 第 62 条渲染抛错：日志记下是哪条、带齐字段；提示条上点「重新加载」后消息完整恢复，不重复', async ({ page }) => {
+  test('P0-HIST-STALL-2 最近一段第 2 块里的一条渲染抛错：日志记下是哪条、带齐字段；提示条上点「重新加载」后消息完整恢复，不重复', async ({ page }) => {
     await gotoMock(page);
-    // 第 62 条（第 2 块里）让 marked.parse 抛一次：之后照常，好让「重新加载」那一趟画得出来
+    // #1981（最近一段的第 2 块里）让 marked.parse 抛一次：之后照常，好让「重新加载」那一趟画得出来
     await page.evaluate(() => {
       const m = (window as unknown as { marked: { parse: (s: string, ...rest: unknown[]) => string } }).marked;
       const parse = m.parse;
       let thrown = false;
       m.parse = function (this: unknown, src: string, ...rest: unknown[]) {
-        if (!thrown && src === 'Long history stress message #61') { thrown = true; throw new Error('injected render failure'); }
+        if (!thrown && src === 'Long history stress message #1981') { thrown = true; throw new Error('injected render failure'); }
         return parse.call(this, src, ...rest);
       };
     });
@@ -294,9 +326,9 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
     const log = await consoleLogText(page);
     await expect(log).toContainText('[HISTORY_RENDER]');
     const line = (await log.innerText()).split('\n').find(l => l.includes('[HISTORY_RENDER]')) || '';
-    expect(line, '没写是第几条').toContain('62/2000');
+    expect(line, '没写是第几条').toContain('第 1982/2000 条');
     expect(line, '没写会话号').toContain('mock-session-long-history');
-    expect(line, '没写已渲染条数').toContain('已渲染 61/2000');
+    expect(line, '没写已渲染条数').toContain('已渲染 41/2000');
     expect(line, '没写错误原文').toContain('injected render failure');
     expect(line, `没写两个实例号：${line}`).toMatch(/instance=\S+ 当前=\S+/);
     await page.locator('#consoleClose').click();
@@ -325,7 +357,7 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
       const parse = m.parse;
       let thrown = false;
       m.parse = function (this: unknown, src: string, ...rest: unknown[]) {
-        if (!thrown && src === 'Long history stress message #61') { thrown = true; throw new Error('injected render failure'); }
+        if (!thrown && src === 'Long history stress message #1981') { thrown = true; throw new Error('injected render failure'); }
         return parse.call(this, src, ...rest);
       };
     });

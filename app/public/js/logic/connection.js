@@ -9,12 +9,63 @@
 
 import { t, tk } from '../i18n.js';
 import { formatUptime } from './format.js';
+import { normalizeMessageTs } from './message-time.js';
 
 // 长会话切入分块渲染的推进数学：给定已处理条数/总数/块大小，算出这一块的结束位置与是否处理完。
 // chunkSize<=0 防呆到至少推进 1 条，避免调用方传入非法值时死循环。
 export function nextHistoryRenderChunk({ processed, total, chunkSize }) {
   const end = Math.min(processed + Math.max(1, chunkSize | 0), total);
   return { end, done: end >= total };
+}
+
+// 回合边界 = 主链用户文本。tool_result 也是 role=user，子 agent 的条目带 parentToolUseId / isSidechain，都不算
+const isTurnStart = msg => msg?.role === 'user' && !msg.kind && !msg.parentToolUseId && !msg.isSidechain;
+
+// 渲染时靠同一个 key 串起来的条目：tool_use↔tool_result 走配对表，子 agent 条目路由进 parentToolUseId 那张卡
+// （只带 isSidechain 的旧形态共用「sidechain」卡），卡建在首次出现处。口径同 app.js renderHistoryBubbles
+function renderKeysOf(msg) {
+  const keys = [];
+  if (msg?.toolUseId) keys.push(msg.toolUseId);
+  if (msg?.parentToolUseId) keys.push(msg.parentToolUseId);
+  else if (msg?.isSidechain) keys.push('sidechain');
+  return keys;
+}
+
+// 长会话切入先画最近一段：返回切点 cut，msgs[cut] 是一条主链用户消息，最近段 msgs[cut..] 至少 minRecent 条。
+// cut = 0 表示不切，整段照旧一次画完。
+// 早段是后画的，所以任何 key 都不能一头在切点前、一头在切点后：配对会找不到卡，子 agent 卡会建在最近段里。
+export function historyRenderSplit(msgs, minRecent) {
+  const list = Array.isArray(msgs) ? msgs : [];
+  const first = new Map();
+  const last = new Map();
+  list.forEach((msg, i) => {
+    for (const key of renderKeysOf(msg)) {
+      if (!first.has(key)) first.set(key, i);
+      last.set(key, i);
+    }
+  });
+  // 切点 c 落在某个 key 的 (首次, 末次] 里就会把它切断；差分数组一遍算出每个位置被几个 key 跨着
+  const crossing = new Array(list.length + 1).fill(0);
+  for (const [key, from] of first) {
+    const to = last.get(key);
+    if (to > from) { crossing[from + 1]++; crossing[to + 1]--; }
+  }
+  for (let i = 1; i < crossing.length; i++) crossing[i] += crossing[i - 1];
+  for (let i = list.length - Math.max(1, minRecent | 0); i > 0; i--) {
+    if (isTurnStart(list[i]) && crossing[i] === 0) return { cut: i, seedPrevTs: lastStampedTsBefore(list, i) };
+  }
+  return { cut: 0, seedPrevTs: null };
+}
+
+// 只有主链文本气泡打时间戳（口径同 renderHistoryBubbles 的 stampIntoFrag）；null = 前面一条都没有，即会话首条
+function lastStampedTsBefore(list, end) {
+  for (let i = end - 1; i >= 0; i--) {
+    const msg = list[i];
+    if (msg?.kind || msg?.isApiErrorMessage || msg?.parentToolUseId || msg?.isSidechain) continue;
+    const ts = normalizeMessageTs(msg?.timestamp);
+    if (ts != null) return ts;
+  }
+  return null;
 }
 
 // 全量重载时，未确认乐观气泡该由哪条历史消息认领（否则 null）。
