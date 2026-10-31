@@ -5,6 +5,7 @@ import {
   esc,
   formatToolSummary,
   toolOutputHighlightClass,
+  toolInputHighlightClass,
   formatToolCardTitle,
   formatTaskToolTitle,
   renderTaskToolResultText,
@@ -2651,6 +2652,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
           card.querySelector('.t-in')?.classList.add('hidden');
         } else {
           inCode.textContent = formatToolSummary(p.inputSummary || '');
+          inCode.className = toolInputHighlightClass(inCode.textContent);
           try { hljs.highlightElement(inCode); } catch { /* 高亮失败不影响显示 */ }
         }
       }
@@ -6141,6 +6143,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
             card.querySelector('.t-in')?.classList.add('hidden'); // 空对象输入不显（同 live）
           } else {
             inCode.textContent = formatToolSummary(msg.inputSummary || '');
+            inCode.className = toolInputHighlightClass(inCode.textContent);
             codeBlocks.push(inCode);
           }
         }

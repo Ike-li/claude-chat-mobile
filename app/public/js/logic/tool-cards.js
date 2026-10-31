@@ -37,6 +37,14 @@ export function toolOutputHighlightClass(text) {
   try { JSON.parse(trimmed); return 'language-json'; } catch { return 'nohighlight'; }
 }
 
+// 工具输入块的高亮 class（性能改造 1a）：原来也一律交给 hljs 自动识别，每块把 36 种语法全试一遍，一次打开几百块就是
+// 秒级长任务，还常认成 swift / css。输入摘要是服务端 stringify 的 JSON（toolSummary），截断了也还是 JSON、词法高亮
+// 不在乎残缺，所以与输出不同：只看开头，不要求能完整解析。
+export function toolInputHighlightClass(text) {
+  const trimmed = typeof text === 'string' ? text.trimStart() : '';
+  return trimmed[0] === '{' || trimmed[0] === '[' ? 'language-json' : 'nohighlight';
+}
+
 // UX-001：审批 sheet 内容可读化（数据→数据）。
 // ExitPlanMode 计划书走 markdown 源文（调用方 renderMarkdown + DOMPurify）；
 // 普通命令去掉 JSON.stringify 对字符串包的引号/\n 转义，保留纯文本供 mono 展示。

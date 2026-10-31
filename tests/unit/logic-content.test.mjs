@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setLang } from '../../app/public/js/i18n.js';
-import { esc, formatToolSummary, localizeServerThinkingText, toolOutputHighlightClass, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';
+import { esc, formatToolSummary, localizeServerThinkingText, toolOutputHighlightClass, toolInputHighlightClass, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';
 
 test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
@@ -586,4 +586,14 @@ test('toolOutputHighlightClass：JSON 才高亮，纯文本与残缺 JSON 不高
   assert.equal(toolOutputHighlightClass('body { color: red }'), 'nohighlight');
   assert.equal(toolOutputHighlightClass('{"cut": "trunc …（已截断）'), 'nohighlight');
   assert.equal(toolOutputHighlightClass(''), 'nohighlight');
+});
+
+// 输入块原来也一律交给 hljs 自动识别：每块把 36 种语法全试一遍，一次打开几百块就是秒级长任务，还常认成 swift / css。
+// 输入摘要是服务端 stringify 的 JSON，截断了也还是 JSON（词法高亮不在乎残缺），所以与输出不同：截断的照样按 json
+test('toolInputHighlightClass：JSON 形态（含截断的）按 json 高亮，其余不高亮', () => {
+  assert.equal(toolInputHighlightClass('{\n  "command": "npm test"\n}'), 'language-json');
+  assert.equal(toolInputHighlightClass('[{"q":1}]'), 'language-json');
+  assert.equal(toolInputHighlightClass('{"file_path":"a.js","content":"line1\\nli …（已截断）'), 'language-json');
+  assert.equal(toolInputHighlightClass('npm test'), 'nohighlight');
+  assert.equal(toolInputHighlightClass(''), 'nohighlight');
 });

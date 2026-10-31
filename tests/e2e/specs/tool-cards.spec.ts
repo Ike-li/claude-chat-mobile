@@ -305,6 +305,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 性能改造 1a：输入块直接按 json 高亮，不交给 hljs 自动识别（每块把 36 种语法试一遍，还常认错）。
+  // 历史路径由 P0-05-HIST-FULL 守，这条守 live 路径。
+  test('P0-05-IN-HL live 工具卡的输入块按 JSON 上色，不走自动识别', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:file-changes');
+    await waitForIdle(page);
+
+    // Write 的输入排成多行 JSON，自动识别会认成 swift
+    const inCode = page.locator('[data-tool-name="Write"] .t-in code');
+    await expect(inCode).toHaveClass(/\bhljs\b/);
+    await expect(inCode).toHaveClass(/\blanguage-json\b/);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // P0-05h（2026-09-09）：历史回放路径的工具卡状态色。
   // live 路径在 tool_result 里换图标【并且】加 text-success；历史回放路径（renderHistoryBubbles）
   // 此前只调 setStatusIcon 换图标，模板里那个表示「进行中」的 text-warning 原样留着——
@@ -367,8 +383,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 验收 O55：从历史打开的会话，Bash 输出原来只给 600 字（契约写 2000，服务端那半由 display-contracts 守），
   // 并且历史卡片没有「展开全文」——那个按钮只挂在 live 卡片上、从实例内存取全文，刷新或换台设备就没了。
   // 历史卡片截断时同样挂按钮，请求带上会话坐标，服务端回落去 transcript 取（mock 只在带坐标时给全文）。
-  // 附带：纯文本输出不再被 hljs 自动认成 css / vbnet 上色。
-  test('P0-05-HIST-FULL 历史回放里被截断的 Bash 卡：有「展开全文」，点开从记录取回全文；纯文本不上语法色', async ({ page }) => {
+  // 附带：纯文本输出不再被 hljs 自动认成 css / vbnet 上色；输入块直接按 json 高亮，不再交给自动识别（性能改造 1a）。
+  test('P0-05-HIST-FULL 历史回放里被截断的 Bash 卡：有「展开全文」，点开从记录取回全文；输入按 JSON 上色、纯文本输出不上色', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:arm-history-long-tool');
     await openSessionsSidebar(page);
@@ -384,6 +400,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(out).not.toContainText('BUILD DONE');
     // 栅栏：历史里的代码块是空闲时一批高亮的；同一张卡的输入块（JSON）已高亮 ⇒ 输出块也已轮到过
     await expect(card.locator('.t-in code')).toHaveClass(/\bhljs\b/, { timeout: 5_000 });
+    await expect(card.locator('.t-in code')).toHaveClass(/\blanguage-json\b/);   // 这条多行命令自动识别会认成 swift
     await expect(out.locator('[class^="hljs-"]')).toHaveCount(0);
 
     const expand = card.locator('[data-testid="tool-expand-full"]');
