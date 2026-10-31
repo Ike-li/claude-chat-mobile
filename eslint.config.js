@@ -109,12 +109,12 @@ export default [
     files: ['app/public/js/i18n.js'],
     rules: { 'no-restricted-syntax': 'off' },
   },
-  // 经典 <script>（非 ESM）：tw-config 写入 tailwind 全局、sw-cleanup 操作 navigator
+  // 经典 <script>（非 ESM）：sw-cleanup 操作 navigator
   {
-    files: ['app/public/js/tw-config.js', 'app/public/js/sw-cleanup.js'],
+    files: ['app/public/js/sw-cleanup.js'],
     languageOptions: {
       sourceType: 'script',
-      globals: { ...globals.browser, tailwind: 'writable' },
+      globals: { ...globals.browser },
     },
   },
   // Service Worker 上下文

@@ -298,7 +298,9 @@ export function createApprovalController(context, {
       const on = btn.getAttribute('data-exit-mode') === selectedExitMode;
       btn.classList.toggle('border-accent', on);
       btn.classList.toggle('bg-accent-wash', on);
-      btn.classList.toggle('text-ink', on);
+      // Bypass 的红字写在标记里：选中时不叠 text-ink——tw.css 里同组 utility 按字母序产出，text-ink 排在
+      // text-danger 后面，会把红字盖掉
+      btn.classList.toggle('text-ink', on && !btn.classList.contains('text-danger'));
       btn.classList.toggle('border-line', !on);
       btn.classList.toggle('text-ink-soft', !on);
     });

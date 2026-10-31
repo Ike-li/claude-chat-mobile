@@ -79,6 +79,17 @@ test('the HTML shell loads app.css and contains no inline style block', async ()
   assert.match(css, /\.msg-body\s*\{/);
 });
 
+test('the HTML shell links the prebuilt tw.css after app.css instead of compiling Tailwind in the browser', async () => {
+  const html = await readFile(new URL('../../app/public/index.html', import.meta.url), 'utf8');
+
+  const appCss = html.indexOf('<link rel="stylesheet" href="/css/app.css">');
+  const twCss = html.indexOf('<link rel="stylesheet" href="/css/tw.css">');
+  assert.ok(twCss !== -1, '外壳没链 tw.css：页面上所有 Tailwind 工具类都没有样式');
+  assert.ok(twCss > appCss, 'tw.css 排到了 app.css 前面：同特异性的规则改由 app.css 胜出，层叠顺序与此前 Play CDN 追加在 head 末尾时相反');
+  assert.doesNotMatch(html, /\/vendor\/tailwind\.js|\/js\/tw-config\.js/,
+    '外壳又在加载 Tailwind 运行时：启动时同步执行 400KB 脚本，之后每批 DOM 变化都全量扫一遍 class');
+});
+
 test('alert controller owns persisted preferences while tap haptics remain unconditional', () => {
   const values = new Map();
   const vibrations = [];

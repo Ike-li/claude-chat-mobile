@@ -154,8 +154,6 @@ const CLAIMS = [
       const filters = /taskBackgrounded\.get\(doneTaskId\) === false/.test(src);
       return hasMap && filters ? '按 is_backgrounded 过滤' : '过滤已失效';
     }, expect: '按 is_backgrounded 过滤' },
-  { diagram: '12', shown: '16 道零 token 门禁',
-    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 16 },
 ];
 
 // ── 图还没说、但代码已经成立的事实。──────────────────────────────────
@@ -172,7 +170,12 @@ const CLAIMS = [
 // 四行（凭据 gitignore / 一次性环境守卫 / 容器配置隔离 自成一行），仍与 check 链逐项对应。
 // PINNED_REVISION 未动：那个字段只跟三张 architecture 图的重出走，手工改图 12 的文字不构成推进理由
 // （判据见上面 PINNED_REVISION 处的注释）。
+// 2026-10-31：16 → 17 道（新增 check-tailwind-css，守预编译的 tw.css 与源码同步）。
+// 按本文件上面那条约定从 CLAIMS 挪下来：图 12 的四处文字仍写着 16，代码侧先被守住。
+// 重出图之后把这条挪回 CLAIMS，`shown` 改成图上的新文字。
 const PENDING_CLAIMS = [
+  { diagram: '12', todo: 'check 链 16 → 17 道（新增 check-tailwind-css，排在 playwright 禁用写法之后）',
+    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 17 },
 ];
 
 function git(args) {

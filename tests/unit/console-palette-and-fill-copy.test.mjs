@@ -9,7 +9,7 @@ import { readAppJsSource } from '../helpers/frontend-source.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const css = readFileSync(join(root, 'app/public/css/app.css'), 'utf8');
-const tw = readFileSync(join(root, 'app/public/js/tw-config.js'), 'utf8');
+const tw = readFileSync(join(root, 'tailwind.config.js'), 'utf8');
 const html = readFileSync(join(root, 'app/public/index.html'), 'utf8');
 const appJs = readAppJsSource();
 const i18n = readFileSync(join(root, 'app/public/js/i18n.js'), 'utf8');
@@ -33,7 +33,7 @@ test('#368 app.css 定义 --console-* 深色终端色板', () => {
   assert.match(css, /--console-ink\s*:\s*#EEEEEC/i);
 });
 
-test('#368 tw-config 桥接 console 语义色', () => {
+test('#368 tailwind.config 桥接 console 语义色', () => {
   assert.match(tw, /console\s*:\s*\{/);
   assert.match(tw, /DEFAULT:\s*token\('--console-bg'\)/);
   assert.match(tw, /ink:\s*token\('--console-ink'\)/);
@@ -43,7 +43,7 @@ test('#368 #consoleModal 壳层不用 Tailwind gray-*', () => {
   const block = consoleModalBlock();
   assert.doesNotMatch(block, /\b(?:bg|text|border|hover:bg|hover:text|hover:border)-gray-\d+/);
   // 半透明底只走 app.css 的 .console-panel color-mix 一处。写这条时 console-* 还是裸 var(--x)、/NN 生成不出 CSS；
-  // #359 起 tw-config 的 token() 已支持 /NN，这条仍保留，免得同一张面板两处各定一份透明度
+  // #359 起 token() 已支持 /NN，这条仍保留，免得同一张面板两处各定一份透明度
   assert.doesNotMatch(block, /\b(?:bg|text|border)-console(?:-[a-z-]+)?\/\d+/, '#consoleModal 不得用 console-* 透明度类');
   assert.match(block, /\bconsole-panel\b/);
   assert.match(css, /\.console-panel\s*\{[^}]*color-mix\(in srgb, var\(--console-bg\)/);

@@ -112,7 +112,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(reply.locator('strong')).toContainText('safe bold markdown');
     await expect(reply.locator('code', { hasText: 'safe_inline_code' })).toHaveCount(1);
 
-    // class 走白名单：Tailwind 运行时会把任意 class 现编成 CSS，工具类不剥就能做出盖住审批按钮的遮罩；
+    // class 走白名单：tw.css 里有现成的 fixed、inset-0、z-50，工具类不剥就能做出盖住审批按钮的遮罩；
     // 而 markdown 自己产出的 language-xxx 必须留下（hljs 靠它选语言）。
     // 用会重试的断言：回复在收尾时可能整块重渲染，一次性 evaluate 会打在刚被换下、已脱离文档的旧节点上
     // （getComputedStyle 对它返回空串），重复 12 次红 3 次。

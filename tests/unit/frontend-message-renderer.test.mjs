@@ -58,9 +58,9 @@ test('markdown sanitizer forbids clickjacking and form-exfiltration primitives',
   assert.ok(tags.includes('style'), '必须禁 <style> 元素：它是整页生效的样式表，能按 id 改写 #permAllow/#permDeny 的位置、文字与颜色');
 });
 
-// SEC（2026-09-22 review P0）：禁了 style 还不够——页面跑的是 Tailwind **运行时**（vendor/tailwind.js 用
-// MutationObserver 盯 class 现编 CSS），class="fixed z-[2147483647] pointer-events-none …" 能做到 style
-// 能做的一切：在真「允许」按钮上方画一个「拒绝」，点击穿透过去（真 Chromium 实测触发 allow）。
+// SEC（2026-09-22 review P0）：禁了 style 还不够——tw.css 里现成的工具类就够拼出遮罩，
+// class="fixed inset-0 z-50 pointer-events-none …" 能做到 style 能做的一切：在真「允许」按钮上方画一个「拒绝」，
+// 点击穿透过去（review 时页面跑的还是 Tailwind 运行时，真 Chromium 实测触发 allow）。
 // markdown 自己只产出 <code class="language-xxx">（hljs 据此选语言），其余 class 一律不该出现。
 function captureClassHook() {
   const hooks = {};
@@ -72,7 +72,7 @@ function captureClassHook() {
   });
   createMessageRenderer(context);
   const hook = hooks.uponSanitizeAttribute;
-  assert.equal(typeof hook, 'function', '必须注册 uponSanitizeAttribute 过滤 class——否则 Tailwind 运行时把任意 class 编成 CSS');
+  assert.equal(typeof hook, 'function', '必须注册 uponSanitizeAttribute 过滤 class——否则模型输出能借 tw.css 里的工具类拼出遮罩');
   return value => {
     const data = { attrName: 'class', attrValue: value, keepAttr: true };
     hook({ nodeName: 'DIV' }, data);
@@ -80,7 +80,7 @@ function captureClassHook() {
   };
 }
 
-test('markdown sanitizer drops utility classes that Tailwind runtime would compile into an overlay', () => {
+test('markdown sanitizer drops utility classes that tw.css would style into an overlay', () => {
   const filter = captureClassHook();
   assert.equal(filter('fixed inset-0 z-[2147483647] pointer-events-none'), null, '纯工具类必须整条剥掉，否则就是一个可盖住审批按钮的遮罩');
   assert.equal(filter('language-js fixed z-50'), 'language-js', '混入的工具类要剥掉，代码语言标注要留');

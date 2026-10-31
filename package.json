@@ -59,7 +59,8 @@
     "app:install": "node scripts/app-build.js --install",
     "app:test": "node scripts/app-build.js --test-only",
     "dev": "node --watch app/server.js",
-    "check": "eslint . --cache --cache-location node_modules/.cache/eslint/ && node tests/gates/check-import-boundaries.js && node tests/gates/contract-check.js && node scripts/doc-consistency.js && node tests/gates/check-diagram-claims.js && node tests/gates/check-n1-assumptions.js && node tests/gates/i18n-check.js && node tests/gates/check-destructive-deletes.js && node tests/gates/check-shell-pitfalls.js && node tests/gates/check-invariant-ids.js && node tests/gates/check-config-gitignored.js && node tests/gates/check-disposable-env-guard.js && node tests/gates/check-container-config-isolation.js && node tests/gates/check-playwright-forbidden-patterns.js && node scripts/app-build.js --test-only && npm run inventory:check",
+    "build:css": "tailwindcss -c tailwind.config.js -o app/public/css/tw.css",
+    "check": "eslint . --cache --cache-location node_modules/.cache/eslint/ && node tests/gates/check-import-boundaries.js && node tests/gates/contract-check.js && node scripts/doc-consistency.js && node tests/gates/check-diagram-claims.js && node tests/gates/check-n1-assumptions.js && node tests/gates/i18n-check.js && node tests/gates/check-destructive-deletes.js && node tests/gates/check-shell-pitfalls.js && node tests/gates/check-invariant-ids.js && node tests/gates/check-config-gitignored.js && node tests/gates/check-disposable-env-guard.js && node tests/gates/check-container-config-isolation.js && node tests/gates/check-playwright-forbidden-patterns.js && node tests/gates/check-tailwind-css.js && node scripts/app-build.js --test-only && npm run inventory:check",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "lint:fix": "eslint . --fix --cache --cache-location node_modules/.cache/eslint/",
     "inventory:check": "node tests/gates/repo-inventory.js",
@@ -116,6 +117,7 @@
     "eslint": "^10.13.0",
     "eslint-plugin-unused-imports": "^4.4.1",
     "globals": "^17.13.0",
-    "socket.io-client": "^4.8.4"
+    "socket.io-client": "^4.8.4",
+    "tailwindcss": "3.4.17"
   }
 }

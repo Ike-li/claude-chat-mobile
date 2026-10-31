@@ -61,4 +61,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#permModal')).toBeHidden();
     await expectNoBrowserErrors(page);
   });
+
+  // tw.css 由 Tailwind CLI 预编译，同组工具类按字母序产出、排在后面的胜出：选中时叠上的 text-ink 排在
+  // Bypass 标记里的 text-danger 之后，红字被盖成正文色。此前浏览器内编译时 text-ink 先产出，碰巧没事。
+  test('P0-07c ExitPlanMode 选中 Bypass 退出档后仍是红字', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:exitplan');
+    await expect(page.locator('#permModal')).toBeVisible();
+
+    const bypass = page.locator('.perm-exit-mode[data-exit-mode="bypassPermissions"]');
+    await bypass.click();
+    await expect(bypass, '前提：Bypass 已选中').toHaveClass(/bg-accent-wash/);
+    const { got, danger } = await bypass.evaluate(el => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--danger)';
+      document.body.appendChild(probe);
+      const want = getComputedStyle(probe).color;
+      probe.remove();
+      return { got: getComputedStyle(el).color, danger: want };
+    });
+    expect(got, '选中的 Bypass 退出档不是红字').toBe(danger);
+
+    await page.locator('#permAllow').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    await expectNoBrowserErrors(page);
+  });
 });
