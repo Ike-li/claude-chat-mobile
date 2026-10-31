@@ -76,6 +76,16 @@ test.describe('formatOpenPerfLine：打开会话一行写清每一段花了多�
     assert.match(line, /长任务 6 次 共 1900ms 最长 856ms$/);
   });
 
+  test('长会话先插最近一段、空闲里再补更早的：两段分开记，看得出多久看到最近的消息', () => {
+    const line = formatOpenPerfLine({
+      source: 'tap',
+      steps: [{ name: 'bind', t: 0 }, { name: 'history', t: 900, count: 2000 }, { name: 'insert', t: 1000, count: 60 }, { name: 'backfill', t: 2600, count: 1940 }],
+      end: { t: 2600, outcome: 'done' },
+      longTasks: null,
+    });
+    assert.match(line, /插入 \+100（60 条） → 补齐更早 \+1600（1940 条）/);
+  });
+
   test('不拉历史时没有历史段；浏览器测不了长任务时写「不可测」而不是假装 0 次', () => {
     const line = formatOpenPerfLine({
       source: 'bind',

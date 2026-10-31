@@ -89,6 +89,9 @@ let queuedUndeliveredClientMessageIds = [];
 const mockStoppedTaskIds = new Set();
 // 一次性开关：让紧接着的那一次 session:history 走失败支。由 POST /__arm-history-error 置起。
 let historyErrorArmed = false;
+// 长会话（mock-session-long-history）带上形状：跨天的时间戳 + 一对跨在「最近一段」切点上的工具配对（P0-LH5 起）。
+// 不是一次性的：同一用例里重新加载也是这份形状。由 POST /__arm-long-history-shape 置起，/__reset 清。
+let longHistoryShapeArmed = false;
 // PR #250 review：下一次 tool:full 回「超过服务端上限、只给开头」（truncated:true）。一次性，/__reset 清。
 let toolFullTruncatedArmed = false;
 // 测试推送回执里 ntfy 那条通道的结果（'sent' / 'failed'）；null = 没配 ntfy，ack 里不带这个字段（同真 server 的旧形态）。
@@ -705,6 +708,7 @@ function resetMockState() {
   queuedUndeliveredClientMessageIds = [];
   mockStoppedTaskIds.clear();
   historyErrorArmed = false;
+  longHistoryShapeArmed = false;
   toolFullTruncatedArmed = false;
   pushTestNtfy = null;
   untitledSessionArmed = false;
@@ -1133,6 +1137,11 @@ app.post('/__arm-tool-full-truncated', (_req, res) => {
 
 app.post('/__arm-history-error', (_req, res) => {
   historyErrorArmed = true;
+  res.json({ ok: true });
+});
+
+app.post('/__arm-long-history-shape', (_req, res) => {
+  longHistoryShapeArmed = true;
   res.json({ ok: true });
 });
 
@@ -3031,6 +3040,16 @@ io.on('connection', socket => {
           role: i % 2 === 0 ? 'user' : 'assistant',
           content: i === 1999 ? 'Long history final message marker' : `Long history stress message #${i}`
         });
+      }
+      if (longHistoryShapeArmed) {
+        // 本地时间的三天：#1000、#1970 各跨一次日，同一天里每条隔 1 秒（不触发同日时间标记）。
+        // #1937 的 tool_use 与 #1943 的 tool_result 跨着 #1940（2000 - 60 那条用户消息），切点得退到 #1936
+        messages.forEach((m, i) => {
+          const day = i < 1000 ? 0 : i < 1970 ? 1 : 2;
+          m.timestamp = new Date(new Date(2026, 9, 1 + day, 10, 0, 0).getTime() + i * 1000).toISOString();
+        });
+        messages[1937] = { kind: 'tool_use', role: 'assistant', toolUseId: 'toolu_lh_cross', name: 'Read', inputSummary: '{"file_path":"cross.txt"}', timestamp: messages[1937].timestamp };
+        messages[1943] = { kind: 'tool_result', role: 'user', toolUseId: 'toolu_lh_cross', ok: true, outputSummary: 'cross-cut result', timestamp: messages[1943].timestamp };
       }
       // total：真 server 的 session:history 回削顶前的条数（getSessionHistoryWithTotal）。这个会话按「磁盘上有 2100 条、
       // 只回最近 2000 条」摆，前端据此要说清只显示了一部分（P0-LH4）。
