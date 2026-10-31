@@ -220,6 +220,22 @@ test('readResumeEntries：命令回显在精简后仍认得出（只留正文开
   assert.equal(resumeDivergence(slim)?.newestUuid, 'a-2');
 });
 
+// JSON.stringify 原样写 U+2028 / U+2029，readline 却当换行，按它读这一条会整条丢掉（同 history-messages 那条）
+test('readResumeEntries：正文含 U+2028 / U+2029 的条目照常读回，判定与全量解析相同', async () => {
+  const full = [
+    ...terminalTurn(),
+    U('u-2', 's-2', 'sdk-ts', 'phone question'),
+    S('s-3', 's-2', 'cli', 'away_summary'),
+    AT('at-2', 'u-2', 'sdk-ts'),
+    A('a-2', 'at-2', 'sdk-ts', '甲 乙 丙'),
+    S('s-4', 's-3', 'cli', 'informational', { level: 'warning' }),
+  ];
+  const { base } = writeTranscript(full.map(e => JSON.stringify(e)));
+  const slim = await readResumeEntries(CWD, SID, { baseDir: base });
+  assert.ok(slim.some(e => e.uuid === 'a-2'), '手机那条回答没读回来');
+  assert.deepEqual(resumeDivergence(slim), resumeDivergence(full));
+});
+
 // ── 判定在后台读（2026-10-31）：只认 spawn 前那一刻的字节 ──
 test('readResumeEntries upTo：只读快照那一刻的字节，之后追加的行（新 CLI resume 后自己重贴的 last-prompt）不算', async () => {
   const before = [...awayShape(), LP('a-2'), LP('s-4')];

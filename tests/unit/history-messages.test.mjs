@@ -48,6 +48,19 @@ test('getSessionHistory: 提取 user / assistant 消息', async () => {
   assert.equal(msgs[1].content, '你好！');
 });
 
+// JSON.stringify 把 U+2028 / U+2029 原样写进字符串，Node 的 readline 却把它们也当换行：按 readline 读的时候
+// 这种行被切成两半、两半都解析不了，整条消息不见（真机 1081 份 transcript 里 4 份共 12 条，2026-10-31）。
+test('getSessionHistory: 正文含 U+2028 / U+2029 的消息照常回显，不被当成换行切坏', async () => {
+  const cwd = '/test/line-separator-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'line-sep', [
+    { type: 'user', message: { role: 'user', content: '第一行 第二行' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'assistant', message: { role: 'assistant', content: '甲 乙' }, timestamp: '2024-01-01T00:00:01Z' },
+  ]);
+  const msgs = await getSessionHistory('line-sep', cwd, 50, { baseDir: BASE });
+  assert.deepEqual(msgs.map(m => m.content), ['第一行 第二行', '甲 乙']);
+});
+
 test('getSessionHistory: 文本消息透出 uuid（供「从这里分叉」定位分叉点）', async () => {
   const cwd = '/test/uuid-hist';
   const dir = join(BASE, getProjectDir(cwd));
@@ -1057,13 +1070,87 @@ test('getSessionHistory: 物理最新的主链消息不在 SDK 当前链上时�
   }
 });
 
-test('getSessionHistoryWithTotal: SDK 选错叶子触发第二遍读时，耗时拆分里记 2 遍', async () => {
+// 性能改造 3d：退回不剪不再重读文件——第一遍读到第一条被剪的消息时分出一份不剪的副本，两份一起往下读。
+test('getSessionHistoryWithTotal: SDK 选错叶子、退回不剪时，文件只读一遍（耗时拆分记 1 遍），内容仍是不剪的', async () => {
   const cwd = '/test/timing-away-summary';
   writeJSONL(join(BASE, getProjectDir(cwd)), 'timingaway', AWAY_SUMMARY_ENTRIES);
   __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-1' }, { uuid: 'a-1' }]);
   try {
-    const { timing } = await getSessionHistoryWithTotal('timingaway', cwd, { baseDir: BASE });
-    assert.equal(timing?.passes, 2);
+    const { messages, timing } = await getSessionHistoryWithTotal('timingaway', cwd, { baseDir: BASE });
+    assert.deepEqual(messages.map(m => m.content), AWAY_SUMMARY_EXPECTED);
+    assert.equal(timing?.passes, 1, '退回不剪时又把文件读了一遍');
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+// 性能改造 3d：同一份文件（大小、mtime 都没变）已经有一次在建，后到的等它的结果，不再从头求链、读文件。
+// 求链用钩子卡住，第一次就停在求链里；第二次此时进来，要么并进去，要么自己再求一次链（改动前）。
+// chains：第 n 次求链返回 chains[n-1]（不够就重复最后一份）
+async function heldChain(...chains) {
+  const state = { calls: 0 };
+  let release;
+  const gate = new Promise(r => { release = r; });
+  __setSdkGetSessionMessagesForTest(async () => {
+    const chain = chains[Math.min(state.calls++, chains.length - 1)];
+    await gate;
+    return chain;
+  });
+  state.release = release;
+  // 等不到就放行，交给后面的断言报红，不挂住整个文件
+  state.untilCalls = async n => {
+    const deadline = Date.now() + 2000;
+    while (state.calls < n && Date.now() < deadline) await new Promise(r => setImmediate(r));
+  };
+  return state;
+}
+
+test('getSessionHistoryWithTotal: 同一份没变的文件并发读两次，只求一次链、只读一遍，后到的拿同一份结果（记 shared）', async () => {
+  const cwd = '/test/inflight-hist';
+  writeJSONL(join(BASE, getProjectDir(cwd)), 'inflight', AWAY_SUMMARY_ENTRIES);
+  const chain = await heldChain([{ uuid: 'u-1' }, { uuid: 'a-1' }]);
+  try {
+    const first = getSessionHistoryWithTotal('inflight', cwd, { baseDir: BASE });
+    await chain.untilCalls(1);
+    const second = getSessionHistoryWithTotal('inflight', cwd, { baseDir: BASE });
+    // 等第二次走完 stat、到达并入点（或改动前的第二次求链）。卡着的第一次不会落缓存，第二次吃不到 hit。
+    await new Promise(r => setTimeout(r, 50));
+    chain.release();
+    const [a, b] = await Promise.all([first, second]);
+    assert.equal(chain.calls, 1, '第二次没并进在建的那次，又求了一遍链（大会话上是几百毫秒的 SDK 读盘）');
+    assert.deepEqual(b.messages, a.messages);
+    assert.equal(b.total, a.total);
+    assert.equal(a.timing?.cache, 'miss');
+    assert.deepEqual(b.timing, { cache: 'shared' });
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+// 在建那次的链是文件变长之前求的，新写的那条不在上面——并进去的话「物理最新的主链消息不在当前链上」那道
+// 保护会退回不剪，rewind 掉的那段又露出来。
+test('getSessionHistoryWithTotal: 在建期间文件变长了，后到的不并进去，按变长后的链剪', async () => {
+  const cwd = '/test/inflight-grow';
+  const dir = join(BASE, getProjectDir(cwd));
+  const msg = (type, uuid, parentUuid, text) => ({ type, uuid, parentUuid, isSidechain: false, message: { role: type, content: text }, timestamp: '2026-09-03T12:00:00.000Z' });
+  const before = [
+    msg('user', 'u-1', null, '问一'), msg('assistant', 'a-1', 'u-1', '答一'),
+    msg('user', 'u-x', 'a-1', '撤销的问'), msg('assistant', 'a-x', 'u-x', '撤销的答'),
+    msg('user', 'u-2', 'a-1', '重新问'), msg('assistant', 'a-2', 'u-2', '重新答'),
+  ];
+  writeJSONL(dir, 'inflightgrow', before);
+  const chainBefore = ['u-1', 'a-1', 'u-2', 'a-2'].map(uuid => ({ uuid }));
+  const chain = await heldChain(chainBefore, [...chainBefore, { uuid: 'u-3' }]);
+  try {
+    const first = getSessionHistoryWithTotal('inflightgrow', cwd, { baseDir: BASE });
+    await chain.untilCalls(1);
+    writeJSONL(dir, 'inflightgrow', [...before, msg('user', 'u-3', 'a-2', '新写的一条')]);
+    const second = getSessionHistoryWithTotal('inflightgrow', cwd, { baseDir: BASE });
+    await chain.untilCalls(2);
+    chain.release();
+    const [, b] = await Promise.all([first, second]);
+    assert.deepEqual(b.messages.map(m => m.content), ['问一', '答一', '重新问', '重新答', '新写的一条'],
+      '文件已经变了，后到的还并进了在建那次：那次的链不含新写的那条，rewind 掉的分支又露了出来');
   } finally {
     __setSdkGetSessionMessagesForTest(undefined);
   }

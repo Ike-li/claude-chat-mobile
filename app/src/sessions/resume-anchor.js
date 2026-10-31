@@ -18,10 +18,10 @@
 // 判定部分是纯函数；末尾的 readResumeEntries 是喂给它的那一勺 IO（同 rewind-plan.js 的做法）。
 
 import { stat } from 'node:fs/promises';
-import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 import { openRegularFile } from '../shared/regular-file.js';
+import { scanJsonl } from '../shared/jsonl-scan.js';
 import { getProjectDir, isSafeSessionId } from './history.js';
 
 const MESSAGE_TYPES = new Set(['user', 'assistant', 'system', 'attachment']);
@@ -272,27 +272,20 @@ export async function snapshotResumeTranscript(cwd, sessionId, { baseDir = CLAUD
  */
 export async function readResumeEntries(cwd, sessionId, { baseDir = CLAUDE_PROJECTS_DIR, upTo = null } = {}) {
   if (!isSafeSessionId(sessionId)) return []; // SS-003：非法 id 不拼进 join
-  let input = null;
   try {
     const { fh, st } = await openRegularFile(transcriptFile(baseDir, cwd, sessionId));
     if (upTo && (st.ino !== upTo.ino || st.size < upTo.size || !upTo.size)) {
       await fh.close();
       return [];
     }
-    input = fh.createReadStream({ encoding: 'utf-8', ...(upTo ? { start: 0, end: upTo.size - 1 } : {}) });
-    const rl = createInterface({ input, crlfDelay: Infinity });
     const out = [];
-    for await (const line of rl) {
-      if (!line.trim()) continue;
-      let e;
-      try { e = JSON.parse(line); } catch { continue; } // 写到一半的尾行
+    // 写到一半的尾行解析不了，引擎直接跳过
+    await scanJsonl(fh, (e) => {
       const slim = slimEntry(e);
       if (slim) out.push(slim);
-    }
+    }, upTo ? { end: upTo.size } : undefined);
     return out;
   } catch {
     return [];
-  } finally {
-    input?.destroy();
   }
 }
