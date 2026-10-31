@@ -544,3 +544,53 @@ test('列表缓存: 桌面端只改了旁路标题，下一次列表就是新标
     rmProjectDir(dir);
   }
 });
+
+// SDK 抛错时回落的是降级结果：自造扫盘不读旁路标题，搜索也没有 SDK summary 当匹配键。这种结果不能
+// 按目录指纹一直存着——SDK 恢复了而目录没变，就会一直给降级结果（PR #490 Codex review）。
+test('列表缓存: SDK 失败一次回落扫盘，过几秒 SDK 恢复了，目录没变也拿到 SDK 的结果', async (t) => {
+  const cwd = '/cache/degraded-browse';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const sid = '0e0e0e0e-1111-4222-8333-444444444444';
+  writeJSONL(dir, sid, [cliLine(sid, 'user', '首条提问', '2026-10-31T01:00:00.000Z')]);
+  let sdkDown = true;
+  __setSdkListSessionsForTest(async () => {
+    if (sdkDown) throw new Error('SDK boom');
+    return [{ sessionId: sid, summary: '桌面端改的名', lastModified: 1000 }];
+  });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  try {
+    const degraded = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(degraded.sessions[0]?.title, '首条提问', '夹具前提：SDK 抛错时走了回落扫盘');
+    sdkDown = false;
+    t.mock.timers.tick(5_000);
+    const recovered = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(recovered.sessions[0]?.title, '桌面端改的名', 'SDK 已经恢复，列表还是 SDK 失败那次的降级结果');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+test('列表缓存: 搜索时 SDK 失败一次，过几秒 SDK 恢复了，同一个词能按 SDK 标题搜到', async (t) => {
+  const cwd = '/cache/degraded-search';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const sid = '0f0f0f0f-1111-4222-8333-444444444444';
+  writeJSONL(dir, sid, [cliLine(sid, 'user', '首条提问', '2026-10-31T01:00:00.000Z')]);
+  let sdkDown = true;
+  __setSdkListSessionsForTest(async () => {
+    if (sdkDown) throw new Error('SDK boom');
+    return [{ sessionId: sid, summary: '桌面端改的名', lastModified: 1000 }];
+  });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  try {
+    const degraded = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5, query: '桌面端' });
+    assert.deepEqual(degraded.sessions.map(s => s.id), [], '夹具前提：没有 SDK summary 时这个词搜不到');
+    sdkDown = false;
+    t.mock.timers.tick(5_000);
+    const recovered = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5, query: '桌面端' });
+    assert.deepEqual(recovered.sessions.map(s => s.id), [sid], 'SDK 已经恢复，同一个词还是 SDK 失败那次的空结果');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});

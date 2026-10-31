@@ -53,7 +53,10 @@ const LIST_LIMIT = MAX_SESSION_LIMIT;
 const LIST_ACTIVITY_TAIL_BYTES = 64 * 1024;
 
 // B2：listSessions 结果按 dir 缓存，按目录内容指纹失效（见 listFingerprint）。重复打开列表不重扫盘。
-const _listCache = new Map(); // cacheKey → { fingerprint, result }
+const _listCache = new Map(); // cacheKey → { fingerprint, result, expiresAt }
+// SDK 抛错时回落的降级结果（缺 SDK 标题：自造扫盘不读旁路标题，搜索也少了 summary 这个匹配键）不能只按指纹存——
+// SDK 恢复了而目录没变，就会一直给降级结果。它沿用改指纹前的 4s 年龄窗，SDK 一直坏时的开销与那时相同。
+const DEGRADED_LIST_TTL = 4000;
 
 // B6：getSessionHistory 结果按文件路径缓存，按 mtimeMs 失效。切回同一会话无需重新读盘。
 const _histCache = new Map(); // filePath → { mtimeMs, size, messages }（失效判据见 getSessionHistory 的 B6）
@@ -1010,10 +1013,10 @@ async function scanOneCwd(cwd, baseDir, limit, normalizedQuery) {
   // 扫完再取会让这次写入永远藏在缓存后面。
   const fingerprint = await listFingerprint(dir);
   const cached = _listCache.get(cacheKey);
-  if (cached && cached.fingerprint === fingerprint) return cached.result;
+  if (cached && cached.fingerprint === fingerprint && cached.expiresAt > Date.now()) return cached.result;
   // 编码撞名：目录里记着别的 cwd 的会话，在排序、截 limit 之前剔掉（见 transcriptOwnerCwd）
-  const result = await scanSessionsPage(dir, cwd, limit, baseDir, normalizedQuery, await foreignSessionIds(dir, cwd));
-  _listCache.set(cacheKey, { fingerprint, result });
+  const { result, degraded } = await scanSessionsPage(dir, cwd, limit, baseDir, normalizedQuery, await foreignSessionIds(dir, cwd));
+  _listCache.set(cacheKey, { fingerprint, result, expiresAt: degraded ? Date.now() + DEGRADED_LIST_TTL : Infinity });
   return result;
 }
 
@@ -1452,23 +1455,25 @@ async function fetchSdkSummaryMap(cwd) {
 async function scanSessionsPage(dir, cwd, limit, baseDir, query = '', foreign = new Set()) {
   // 标题搜索必须绕开 SDK 快路径：其 fetchLimit≈51，窗外旧会话永远进不了候选集。
   // query 非空 → 强制全量 readdir + readHeadMeta 再过滤（n=1 下百~数百级可接受）。
+  // 返回 { result, degraded }：degraded = 本该问 SDK 却因它抛错没问成，结果缺 SDK 标题（见 DEGRADED_LIST_TTL）。
   if (query) {
     let titleById = new Map();
+    let degraded = false;
     if (useSdk(baseDir)) {
-      try { titleById = await fetchSdkSummaryMap(cwd); } catch { /* overlay 失败：仍按 readHeadMeta 搜 */ }
+      try { titleById = await fetchSdkSummaryMap(cwd); } catch { degraded = true; /* overlay 失败：仍按 readHeadMeta 搜 */ }
     }
-    return scanViaReaddir(dir, limit, query, titleById, foreign);
+    return { result: await scanViaReaddir(dir, limit, query, titleById, foreign), degraded };
   }
   // 目录里有别的 cwd 的会话（编码撞名）时也绕开 SDK：它按目录列，剔掉之后凑不满 limit、total 也不对
   if (useSdk(baseDir) && !foreign.size) {
     try {
-      return await scanSessionsViaSdk(cwd, limit);
+      return { result: await scanSessionsViaSdk(cwd, limit), degraded: false };
     } catch {
       // SDK 异常（CLI 版本/环境/编码不一致）不 fail-closed：回落自造扫盘兜底，列表照常出。
-      return scanViaReaddir(dir, limit, '');
+      return { result: await scanViaReaddir(dir, limit, ''), degraded: true };
     }
   }
-  return scanViaReaddir(dir, limit, '', new Map(), foreign);
+  return { result: await scanViaReaddir(dir, limit, '', new Map(), foreign), degraded: false };
 }
 
 // 自造扫盘（兜底路径 + baseDir 隔离测试实例 + 标题搜索唯一路径）：
