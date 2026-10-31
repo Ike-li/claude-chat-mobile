@@ -1,7 +1,31 @@
 // helpers: tests/helpers/playwright.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openSessionSettings, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
+
+// 三组磁贴逐张核对「画出来的样子」与 aria-pressed 是否一致：选中 = 30% accent-wash 淡底 + accent 标题，
+// 没选中 = surface 卡片底 + ink 标题；Bypass 的标题两种状态都是 danger。返回对不上的磁贴，
+// 色值能对上 token 的换回 token 名，对不上的原样给出计算值。
+async function tileLookMismatches(page: Page) {
+  return page.evaluate(() => {
+    const probe = document.createElement('div');
+    document.body.appendChild(probe);
+    const bg = (v: string) => { probe.style.backgroundColor = v; return getComputedStyle(probe).backgroundColor; };
+    const fg = (v: string) => { probe.style.color = v; return getComputedStyle(probe).color; };
+    const bgs: Record<string, string> = { wash: bg('color-mix(in srgb, var(--accent-wash) 30%, transparent)'), surface: bg('var(--surface)') };
+    const fgs: Record<string, string> = { accent: fg('var(--accent)'), ink: fg('var(--ink)'), danger: fg('var(--danger)') };
+    probe.remove();
+    const name = (table: Record<string, string>, c: string) => Object.keys(table).find(k => table[k] === c) ?? c;
+    const bad: string[] = [];
+    for (const tile of Array.from(document.querySelectorAll<HTMLElement>('#customModelGrid .model-tile, #customPermGrid .perm-tile, #customEffortGrid .effort-tile'))) {
+      const pressed = tile.getAttribute('aria-pressed') === 'true';
+      const want = `${pressed ? 'wash' : 'surface'} + ${tile.dataset.mode === 'bypassPermissions' ? 'danger' : pressed ? 'accent' : 'ink'}`;
+      const got = `${name(bgs, getComputedStyle(tile).backgroundColor)} + ${name(fgs, getComputedStyle(tile.firstElementChild as Element).color)}`;
+      if (got !== want) bad.push(`${tile.classList[0]}[${tile.dataset.model ?? tile.dataset.mode ?? tile.dataset.level}] aria-pressed=${pressed}：画成 ${got}，应为 ${want}`);
+    }
+    return bad;
+  });
+}
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09 设置面板：权限模式、模型选择、thinking effort 与 [1m] 后缀', async ({ page }) => {
@@ -56,6 +80,58 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillPermText')).toContainText('Plan');
     // 摘要 chip 连写
     await expect(page.locator('#pillDefaults')).toContainText('Plan');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // tw.css 由 Tailwind CLI 预编译，同一组工具类（bg-*、text-*）按字母序产出、排在后面的胜出：选中时只叠上
+  // bg-accent-wash/30、text-accent 而不摘掉 bg-surface、text-ink，画出来就和没选中一样。此前浏览器内编译按 class
+  // 首次出现的先后产出，选中态的类出现得晚，碰巧胜出。这里把渲染、切换、只读重置三条路径各走一遍。
+  test('P0-09-SELECTED 模型、权限、思考强度磁贴：选中的画成淡底加强调色标题，没选中的画成卡片底加正文色', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await openSessionSettings(page);
+    // 磁贴带 transition-all：切换后立刻读到的是过渡中间色，关掉过渡读终态
+    await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; }' });
+    const pressed = (selector: string) => expect(page.locator(selector)).toHaveAttribute('aria-pressed', 'true');
+
+    await pressed('.model-tile[data-model="claude-3-5-sonnet"]');
+    await pressed('.perm-tile[data-mode="default"]');
+    expect(await tileLookMismatches(page), '开局（在跑的 sonnet、default 权限档）').toEqual([]);
+
+    await openSettingsSection(page, 'effort');
+    await page.locator('.effort-tile[data-level="high"]').click();
+    await pressed('.effort-tile[data-level="high"]');
+    expect(await tileLookMismatches(page), '选 high 之后').toEqual([]);
+
+    // 换模型时思考强度整组按新模型重画：high 这次是渲染出来的选中态，不是切换出来的
+    await openSettingsSection(page, 'model');
+    await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
+    await pressed('.model-tile[data-model="claude-3-opus[1m]"]');
+    await pressed('.effort-tile[data-level="high"]');
+    expect(await tileLookMismatches(page), '换到 opus[1m] 之后').toEqual([]);
+
+    await openSettingsSection(page, 'perm');
+    await page.locator('.perm-tile[data-mode="bypassPermissions"]').click();
+    await page.locator('#confirmOk').click();
+    await pressed('.perm-tile[data-mode="bypassPermissions"]');
+    expect(await tileLookMismatches(page), '选 Bypass 之后').toEqual([]);
+    await page.locator('.perm-tile[data-mode="plan"]').click();
+    await pressed('.perm-tile[data-mode="plan"]');
+    expect(await tileLookMismatches(page), '从 Bypass 换到 plan 之后').toEqual([]);
+
+    // 选了模型还没发时清单重发：模型整组只走渲染路径重画
+    await page.request.post('/__replay-models');
+    await expect(page.locator('.model-tile[data-model="claude-replayed-model"]')).toBeAttached();
+    await expect(page.locator('#customModelGrid .model-tile[aria-pressed="true"]')).toHaveCount(1);
+    expect(await tileLookMismatches(page), '模型清单重发之后').toEqual([]);
+
+    // 只读镜像不知道 CLI 的模型和权限档：两组的选中态都要清掉，plan 此刻是选中的
+    await page.request.post('/__mirror-state?readonly=1&observed=empty');
+    await expect(page.locator('#pillModelText')).toHaveText('CLI 模型未知');
+    await expect(page.locator('#pillPermText')).toHaveText('CLI 模式未知');
+    await expect(page.locator('#customModelGrid .model-tile[aria-pressed="true"], #customPermGrid .perm-tile[aria-pressed="true"]')).toHaveCount(0);
+    expect(await tileLookMismatches(page), '只读镜像清空选中之后').toEqual([]);
 
     await expectNoBrowserErrors(page);
   });

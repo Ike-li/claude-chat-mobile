@@ -4182,9 +4182,13 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     syncDefaultsPillTitle();
     permModeSelect?.classList.remove('ring-1', 'ring-danger', 'text-danger');
     customPermGrid?.querySelectorAll('.perm-tile').forEach(tile => {
-      tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
-      tile.querySelector('.text-xs')?.classList.remove('text-accent');
       tile.setAttribute('aria-pressed', 'false'); // CLI 模式未知：读屏也不能说某一张选中（#403）
+      // 未选中的底色与标题色要补回来（同 setPermMode）：选中时摘掉了 bg-surface、text-ink；危险档标题恒为 text-danger
+      tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
+      tile.classList.add('bg-surface');
+      const title = tile.querySelector('.text-xs');
+      title?.classList.remove('text-accent');
+      if (title && !title.classList.contains('text-danger')) title.classList.add('text-ink');
     });
   }
 
@@ -4211,6 +4215,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         customModelGrid?.querySelectorAll('.model-tile').forEach(tile => {
           tile.setAttribute('aria-pressed', 'false'); // 界面说不知道，读屏也不能说某一张选中（#246 review）
           tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
+          tile.classList.add('bg-surface'); // 选中时摘掉了（见 syncModelUI），未选中的卡片底要补回来
           const title = tile.querySelector('.text-xs');
           title?.classList.remove('text-accent');
           title?.classList.add('text-ink');

@@ -59,6 +59,9 @@ export function createComposerControls(context, {
         const tileVal = tile.dataset.model;
         const isCurrent = tileVal === activeVal;
         tile.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
+        // 底色显式互斥（同 settings.js 语言按钮）：tw.css 里同组 utility 按字母序产出，bg-surface 排在
+        // bg-accent-wash/30 后面，留着它选中态就没有淡底
+        tile.classList.toggle('bg-surface', !isCurrent);
         const title = tile.querySelector('.text-xs');
         if (isCurrent) {
           tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
@@ -104,7 +107,7 @@ export function createComposerControls(context, {
       const using = active ? t(' · 使用中') : '';
       // 原生 button + aria-pressed（验收 O13），同权限六档：选中态给读屏的那一路靠 aria-pressed，syncModelUI 跟着改
       const card = el(`
-        <button type="button" data-model="${esc(val)}" aria-pressed="${active ? 'true' : 'false'}" class="model-tile w-full text-left p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
+        <button type="button" data-model="${esc(val)}" aria-pressed="${active ? 'true' : 'false'}" class="model-tile w-full text-left p-2 rounded-xl border border-line active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : 'bg-surface'}">
           <div class="text-xs font-semibold truncate ${active ? 'text-accent' : 'text-ink'}">${esc(display)}${using ? `<span class="text-[11px] font-normal opacity-80">${esc(using)}</span>` : ''}</div>
           <div class="text-xs text-ink-soft truncate mt-0.5">${esc(subtitle || val)}</div>
         </button>
@@ -554,15 +557,18 @@ export function createComposerControls(context, {
         // 选中态有两条通道，必须一起更新：ring 那圈给看得见的人，aria-pressed 给读屏。
         // 只改样式的话，辅助技术用户读到的是六个一模一样的按钮、无从知道当前在哪一档。
         tile.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
+        const title = tile.querySelector('.text-xs');
         if (isCurrent) {
           tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
-          const title = tile.querySelector('.text-xs');
           if (title) title.classList.add('text-accent');
         } else {
           tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
-          const title = tile.querySelector('.text-xs');
           if (title) title.classList.remove('text-accent');
         }
+        // 底色与标题色显式互斥（同 settings.js 语言按钮）：tw.css 里同组 utility 按字母序产出，bg-surface、text-ink
+        // 排在 bg-accent-wash/30、text-accent 后面，留着它们选中态就画不出来。危险档的标题恒为 text-danger，不碰。
+        tile.classList.toggle('bg-surface', !isCurrent);
+        if (title && !title.classList.contains('text-danger')) title.classList.toggle('text-ink', !isCurrent);
       });
     }
     syncDefaultsPillTitle();
@@ -619,15 +625,17 @@ export function createComposerControls(context, {
         const isCurrent = activeLevel === tileVal;
         // 选中态两条通道同 perm/model 磁贴：ring 给看得见的人，aria-pressed 给读屏（#403）
         tile.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
+        const title = tile.querySelector('.text-xs') || tile;
         if (isCurrent) {
           tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
-          const title = tile.querySelector('.text-xs') || tile;
           title.classList.add('text-accent');
         } else {
           tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
-          const title = tile.querySelector('.text-xs') || tile;
           title.classList.remove('text-accent');
         }
+        // 同 perm 磁贴：底色与标题色显式互斥，否则 tw.css 里排在后面的 bg-surface、text-ink 盖掉选中态
+        tile.classList.toggle('bg-surface', !isCurrent);
+        title.classList.toggle('text-ink', !isCurrent);
       });
     }
     syncDefaultsPillTitle();
@@ -715,7 +723,7 @@ export function createComposerControls(context, {
         // 原生 button + aria-pressed：与 .perm-tile / .model-tile 对齐，Tab 可达、读屏能报选中态（#403）。
         // 故意不加 w-full：#customEffortGrid 是 flex-wrap 芯片行；w-full 会竖排撑高，把权限尾格挤出首屏（P0-09r）。
         const lvTile = el(`
-          <button type="button" data-level="${esc(lv)}" aria-pressed="${active ? 'true' : 'false'}" class="effort-tile text-left p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
+          <button type="button" data-level="${esc(lv)}" aria-pressed="${active ? 'true' : 'false'}" class="effort-tile text-left p-2 rounded-xl border border-line active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : 'bg-surface'}">
             <div class="text-xs font-semibold ${active ? 'text-accent' : 'text-ink'}">${esc(lv)}</div>
             ${sub ? `<div class="text-xs text-ink-soft mt-0.5">${esc(sub)}</div>` : ''}
           </button>

@@ -7,7 +7,7 @@
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
 
-// class 里的色名 → :root 上的 token（与 app/public/js/tw-config.js 一致）
+// class 里的色名 → :root 上的 token（与 tailwind.config.js 一致）
 const TOKENS: Record<string, string> = {
   canvas: '--canvas', surface: '--surface', sunk: '--surface-sunk',
   ink: '--ink', 'ink-soft': '--ink-soft', 'ink-faint': '--ink-faint',

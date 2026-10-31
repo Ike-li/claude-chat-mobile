@@ -1,4 +1,4 @@
-/* ── Claude 设计 token（暖米白浅色默认；深色走 data-theme=dark 或系统 prefers-color-scheme；改色只动此处，tw-config.js 把它们桥接成语义类）── */
+/* ── Claude 设计 token（暖米白浅色默认；深色走 data-theme=dark 或系统 prefers-color-scheme；改色只动此处，tailwind.config.js 把它们桥接成语义类）── */
 :root {
   color-scheme: light dark;
   --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
@@ -497,7 +497,7 @@ body.ccm-sheet-open #messages {
 
 /* 连接状态横幅（header 与消息区之间的一行，非阻断）。
    刻意不在这里写 display —— 交给 Tailwind 的 hidden/flex 工具类（#unreadPill 是同款既有组合），
-   免得自建样式表与 Play CDN 运行时注入的 <style> 谁先谁后决定显隐，那是不确定的。
+   免得显隐要看 app.css 与 tw.css 在 index.html 里谁排在后面。
    淡底一律走 color-mix：语义 token 在 tw-config 里是裸 var(--x)，`色/NN` 透明度类对它们是死代码。 */
 .conn-banner {
   border-bottom: 1px solid var(--line-soft);

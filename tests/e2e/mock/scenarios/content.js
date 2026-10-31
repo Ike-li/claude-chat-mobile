@@ -1268,7 +1268,7 @@ export function createContentScenarios(getContext) {
           '<a href="javascript:window.__ccmUnsafeMarkdownClickFired = true">unsafe javascript link</a>',
           '<span onclick="window.__ccmUnsafeMarkdownClickFired = true">unsafe click probe</span>',
           '',
-          // Tailwind 运行时会把 class 现编成 CSS：不剥的话这就是一个盖住审批按钮的全屏遮罩
+          // tw.css 里有现成的 fixed、inset-0、z-50 这类工具类：不剥的话就能拼出盖住审批按钮的全屏遮罩
           '<div class="fixed inset-0 z-[2147483647] pointer-events-none" data-probe="class-overlay">class overlay probe</div>',
           '',
           // <style> 元素整页生效、按 id 就能改写审批按钮：不剥的话「允许」成了铺满视口的透明层，点哪都是批准。

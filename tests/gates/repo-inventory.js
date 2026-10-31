@@ -34,6 +34,7 @@ const ROOT_FILES = new Map([
   ['package-lock.json', 'Generated lockfile'],
   ['app/server.js', 'Runtime entrypoint'],
   ['eslint.config.js', 'Project configuration'],
+  ['tailwind.config.js', 'Project configuration'],
   ['.claude/settings.json', 'Project configuration'],
   ['.dockerignore', 'Test configuration'],
   ['.gitignore', 'Project configuration'],

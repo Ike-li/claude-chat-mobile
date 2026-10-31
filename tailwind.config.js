@@ -1,7 +1,11 @@
-// Tailwind 运行时配置（CSP script-src 'self'：必须外置脚本、不可内联；在 vendor/tailwind.js 之后加载）。
-// 把 Claude 设计 token（:root CSS 变量，定义见 index.html <style>）桥接为语义工具类——
-// 用 bg-canvas / text-accent / border-line 这类**预设类**（JIT 成熟、active:/focus: 变体齐全、可读），
-// 而非 bg-[var(--x)] 任意值类（运行时对动态注入元素的任意值 JIT 是边缘路径）。改色只动 :root，一处生效。
+// Tailwind CLI 配置：`npm run build:css` 据此预编译 app/public/css/tw.css。产物提交进仓库——分发是 master
+// 源码归档，装机不跑构建；tests/gates/check-tailwind-css.js 按同一份配置重编，与提交的产物逐字节比对。
+// 此前是浏览器里跑的 Play CDN（vendor/tailwind.js + js/tw-config.js）：启动时同步执行 400KB 脚本，之后每批
+// DOM 变化都全量扫一遍 class 再现编 CSS。content 只扫源码文本，动态拼出来的类名（`bg-${x}`）扫不到，要写全名。
+//
+// 把 Claude 设计 token（:root CSS 变量，定义见 app/public/css/app.css）桥接为语义工具类——
+// 用 bg-canvas / text-accent / border-line 这类**预设类**（active:/focus: 变体齐全、可读），
+// 而非 bg-[var(--x)] 任意值类。改色只动 :root，一处生效。
 //
 // #359：色值写成函数而不是裸 'var(--x)' 字符串——Tailwind 对裸 var() 合不出 alpha，bg-danger/10、border-warning/40
 // 这类带 /NN 的类整条规则不产出（底色直接透明、边框回落默认灰）。只有显式 /NN 时才走 color-mix；不带修饰的
@@ -12,7 +16,11 @@ const token = (name) => ({ opacityValue }) =>
     ? `var(${name})`
     : `color-mix(in srgb, var(${name}) calc(${opacityValue} * 100%), transparent)`;
 
-tailwind.config = {
+export default {
+  content: {
+    relative: true,
+    files: ['./app/public/index.html', './app/public/js/**/*.js'],
+  },
   theme: {
     extend: {
       colors: {

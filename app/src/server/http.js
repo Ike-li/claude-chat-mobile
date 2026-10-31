@@ -187,7 +187,7 @@ function listJsFilesRecursive(dir) {
   return out.sort();
 }
 
-// vendor/ 下的 .js/.css 同样进版本链。这批文件（tailwind.js、marked/purify/highlight、
+// vendor/ 下的 .js/.css 同样进版本链。这批文件（marked/purify/highlight、
 // CodeMirror 核心+9 个语言 mode、github-light/dark、codemirror.min.css）被静态服务那端
 // 打了 immutable, max-age=31536000（见 configureHttpShell 的 setHeaders）——一年内浏览器
 // 绝不会重新请求，唯一能逼它换新的手段就是让 URL 本身变。之前它们不在这个哈希范围内，
