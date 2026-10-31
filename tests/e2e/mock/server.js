@@ -1183,6 +1183,21 @@ app.post('/__release-history-ack', (_req, res) => {
   res.json({ ok: true, released: held.length });
 });
 
+// #307：同一会话仅替换实例。历史正文不变；让前端自己决定复用提示条缓存还是重新加载。
+// 只接受已打开的长历史夹具，避免用例在未完成切入时悄悄置换了别的会话。
+app.post('/__replace-history-instance', (_req, res) => {
+  const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+  if (inst?.sessionId !== 'mock-session-long-history') {
+    res.status(409).json({ ok: false, error: 'long history session is not being viewed' });
+    return;
+  }
+  const previousInstanceId = inst.instanceId;
+  inst.instanceId = `${previousInstanceId}_replacement`;
+  viewingInstanceId = inst.instanceId;
+  broadcastMockInstances();
+  res.json({ ok: true, sessionId: inst.sessionId, previousInstanceId, instanceId: inst.instanceId });
+});
+
 // O66：结束 test:arm-outbox-turns 挂住的那一轮（result + turnRunning:false 的 instances 广播）。
 app.post('/__outbox-turn-end', (_req, res) => {
   const open = outboxTurnOpen;
