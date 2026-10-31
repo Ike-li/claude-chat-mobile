@@ -3,7 +3,7 @@
 // #359 Step 4 从 app.js 原样迁出；只有本模块用的几份状态（显示更多档位、终端聚合态、保鲜计时器、未读跳转）随代码搬入，
 // 与 app.js 共用的可变态经 getter / setter 注入，声明在实例化点之后的依赖经惰性包装注入。
 
-import { MISSING_FOLDERS_NOTICE_ID, disconnectFolderConfirm, displaySessionTitle, esc, folderReasonText, folderRowMenuItems, formatServiceNoticeRows, formatSessionRowSubtitle, formatSessionRowTime, liveRowsForSection, openSessionsUnderRoot, orphanLiveRows, remainingOlderSessionCount, resolveDrawerStatus, resolveDrawerStatusChip, resolveHeaderAttentionChip, resolveHeaderConnBadge, resolveRowTerminalState, sessionRowMenuItems, shouldRerenderSessionList, summarizeOtherWorkspaces, undismissedServiceNotices, unownedLiveInstances, whatNeedsAttention } from '../logic.js';
+import { MISSING_FOLDERS_NOTICE_ID, disconnectFolderConfirm, displaySessionTitle, esc, folderReasonText, folderRowMenuItems, formatServiceNoticeRows, formatSessionRowSubtitle, formatSessionRowTime, liveRowsForSection, mergeOrphanRowsByTime, openSessionsUnderRoot, orphanLiveRows, remainingOlderSessionCount, resolveDrawerStatus, resolveDrawerStatusChip, resolveHeaderAttentionChip, resolveHeaderConnBadge, resolveRowTerminalState, sessionRowMenuItems, shouldRerenderSessionList, summarizeOtherWorkspaces, undismissedServiceNotices, unownedLiveInstances, whatNeedsAttention } from '../logic.js';
 import { attachFolderDrag } from './folder-drag.js';
 import { bindSessionRowsHost, bindSessionSearchInput } from './session-search.js';
 import { createDrawerUnreadJump } from './drawer-unread-jump.js';
@@ -768,23 +768,22 @@ export function createSessionSidebar(context, {
         const rowsHost = bindSessionRowsHost(container, el);
         rowsHost.innerHTML = '';
 
+        let orphans = [];
         if (!query) {
           for (const inst of freshTabs) {
             rowsHost.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
           }
-          // SESSION-02：在跑、但列表没返回的会话（被分页挤出、transcript 被迁走）照样画一行，排在前面——
+          // SESSION-02：开着、但列表没返回的会话（被分页挤出、transcript 被迁走）照样画一行，按时间插进列表——
           // 否则它正在跑，抽屉里却既看不见也关不掉。
           // 标题与时间用 session:list 的 open（服务端按 transcript 补回的元数据，验收 O46）：实例广播里的 title
           // 只来自 sessions.json，终端来的会话那里是 null，画出来就是一行没有时间的「新会话」。
           // transcript 被搬走的找不到元数据，才回落实例自己的 title。
           const listedIds = new Set([...sessions, ...pinned].map(s => s.id));
           const openById = new Map(open.map(s => [s.id, s]));
-          for (const inst of orphanLiveRows(liveMap, listedIds)) {
-            const meta = openById.get(inst.sessionId) || { id: inst.sessionId, title: inst.title, lastUsedAt: null, entrypoint: null };
-            rowsHost.appendChild(sessionRow(meta, inst, cwd));
-          }
+          orphans = orphanLiveRows(liveMap, listedIds)
+            .map(inst => openById.get(inst.sessionId) || { id: inst.sessionId, title: inst.title, lastUsedAt: null, entrypoint: null });
         }
-        for (const s of sessions) {
+        for (const s of mergeOrphanRowsByTime(sessions, orphans)) {
           rowsHost.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
         }
         if (query && sessions.length === 0) {

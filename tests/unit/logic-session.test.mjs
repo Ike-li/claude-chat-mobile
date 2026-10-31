@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, resolveRowTerminalState, mirrorRowLockChanged, isBlockedSurfaceTarget, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, resolveRowTerminalState, mirrorRowLockChanged, isBlockedSurfaceTarget, formatSessionRowSubtitle, mergeOrphanRowsByTime, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -1254,4 +1254,26 @@ test('draftKeyFor: 有 sessionId 用它，没有才退回 new:<cwd>，两者都�
   assert.equal(draftKeyFor({ sessionId: null, cwd: '/w/x' }), 'new:/w/x');
   assert.equal(draftKeyFor({ sessionId: null, cwd: null }), null);
   assert.equal(draftKeyFor(), null);
+});
+
+// 2026-10-31 真机：收起列表后两条 10 月 28 日的已开会话顶在今天的会话上面，点「显示更多」又排回原位。
+// 它们只是被分页挤出了这一页，按时间该接在页尾，而不是插到最前。
+test('mergeOrphanRowsByTime: 补画的已开会话按时间插回列表，不顶到最前', () => {
+  const page = [{ id: 'a', lastUsedAt: 500 }, { id: 'b', lastUsedAt: 300 }, { id: 'c', lastUsedAt: 100 }];
+  const orphans = [{ id: 'old2', lastUsedAt: 40 }, { id: 'old1', lastUsedAt: 80 }, { id: 'moved', lastUsedAt: 400 }];
+  assert.deepEqual(
+    mergeOrphanRowsByTime(page, orphans).map(s => s.id),
+    ['a', 'moved', 'b', 'c', 'old1', 'old2'],
+    '被挤出页的旧会话应接在页尾、按时间排；比页内某些行新的（transcript 迁走的）插到它的时间位置',
+  );
+});
+
+test('mergeOrphanRowsByTime: 没有时间的已开会话排最前，列表本身的顺序不动', () => {
+  const page = [{ id: 'a', lastUsedAt: 500 }, { id: 'b', lastUsedAt: 300 }];
+  assert.deepEqual(
+    mergeOrphanRowsByTime(page, [{ id: 'gone', lastUsedAt: null }]).map(s => s.id),
+    ['gone', 'a', 'b'],
+    'transcript 找不到的会话没有时间可排，放最前才看得见它开着',
+  );
+  assert.deepEqual(mergeOrphanRowsByTime(page, []).map(s => s.id), ['a', 'b']);
 });

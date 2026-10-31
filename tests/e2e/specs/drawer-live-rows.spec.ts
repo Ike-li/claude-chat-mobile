@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, chooseSessionMenuItem, expandWorkspace, openSessionsSidebar, sessionRowByInstance } from '../../helpers/sidebar-ui';
+import { MAIN_WORKSPACE, chooseSessionMenuItem, expandWorkspace, openSessionsSidebar, sessionRowByInstance, workspaceSubtree } from '../../helpers/sidebar-ui';
 
 // SESSION-02：活着的实例在抽屉里必须有一行。
 // 2026-09-23 真机会话 1c401b5d：EnterWorktree 把 transcript 迁到了平级目录的 project 目录，
@@ -24,9 +24,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(row).not.toContainText('新会话（未保存）');
   });
 
-  // 验收 O46：开着的旧会话按时间排不进收起列表的这一页，被画在最前面，标题却是「新会话」、没有时间——
+  // 验收 O46：开着的旧会话按时间排不进收起列表的这一页，标题却是「新会话」、没有时间——
   // 那一行只拿得到实例广播里的 title（终端来的会话不在 sessions.json 里，是 null）。看起来像多出一个空白新会话。
-  test('P0-LIVE-3 被分页挤出本页的已开会话：照样画在前面，但标题和时间是它自己的', async ({ page }) => {
+  // 2026-10-31 真机：这种行曾被顶到列表最前，收起后两条旧会话压在今天的会话上面，读起来像排序坏了。
+  test('P0-LIVE-3 被分页挤出本页的已开会话：按时间接在页尾，标题和时间是它自己的', async ({ page }) => {
     await sendChatMessage(page, 'test:live-paged-out');
     await waitForIdle(page);
     await openSessionsSidebar(page);
@@ -39,6 +40,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const subtitle = row.locator('button').first().locator(':scope > div').last();
     await expect(subtitle).toContainText('已打开');
     await expect(subtitle, '没有时间').not.toHaveText(/^已打开/);
+
+    const listedIds = () => workspaceSubtree(page, MAIN_WORKSPACE)
+      .locator('[data-testid="session-row"]:not([data-session-id=""])')
+      .evaluateAll(els => els.map(e => e.getAttribute('data-session-id')));
+    await expect.poll(async () => (await listedIds()).length).toBeGreaterThan(1);
+    expect((await listedIds()).at(-1), '它比本页的会话都旧，顶到最前就是把时间序打乱').toBe('mock-session-older-migration');
   });
 
   // 验收 O104：关掉一条只在活实例里的会话行（搬走了 transcript 的、平级 worktree 的、被挤出页的）后，服务端

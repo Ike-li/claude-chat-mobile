@@ -4418,7 +4418,7 @@ registerSocketConnection(io, socket => {
     const pinnedIds = query ? [] : readState.manualUnreadIds({ floor: readState.folderReadAt(cwd) ?? undefined })
       .filter(id => !inPage.has(id) && !pendingDeleteIds.has(id));
     const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds, { memberOptions }) : [];
-    // 开着、但不在本页也不在 pinned 里的会话（验收 O46）：抽屉照样把它们画在前面（SESSION-02），可实例广播里
+    // 开着、但不在本页也不在 pinned 里的会话（验收 O46）：抽屉照样按时间给它们画行（SESSION-02），可实例广播里
     // 的 title 只来自 sessions.json——终端来的会话那里是 null，画出来是一行没有时间的「新会话」。按 transcript
     // 补回元数据。listSessionsByIds 只认这个项目（及其成员目录）下的 transcript，别处开着的不会混进来；
     // 搜索态不补（同 pinned）。
