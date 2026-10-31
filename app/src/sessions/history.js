@@ -63,6 +63,11 @@ const _histCache = new Map(); // filePath → { mtimeMs, size, messages }（失�
 const HIST_CACHE_MAX = 10;
 // 在建的那一次：filePath → { mtimeMs, size, promise }。建完即删，不设上限（同时在建的就那么几个）。
 const _histInflight = new Map();
+// 4a：上次解析到哪、解析出的状态。filePath → { ino, size, offset, state, track }，见 extendHistory。
+// 存的是未精裁的 reducer 状态（最多 2×HISTORY_MAX_MESSAGES 条 + 去重表），比 B6 那份重，表也开得小：
+// 实测一项比只进 B6 多常驻约 2.6MB（54.5MB、2.1 万行那份，去重表随行数长）/ 0.7MB（300.8MB、1.3 万行），2026-10-31。
+const _histIncremental = new Map();
+const HIST_INCREMENTAL_MAX = 4;
 
 // 根据 cwd 推断项目目录名。编码规则见 src/shared/project-dir.js（与 CLI/SDK 逐字节对齐的唯一实现）。
 // cwd 须先经 realpath 规范化（src/server/app.js 的 preflight 启动期做），才与 CLI 的 ~/.claude/projects 命名一致（如 /tmp→/private/tmp）。
@@ -152,9 +157,9 @@ async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR 
   const projectDir = getProjectDir(cwd);
   const historyFile = join(baseDir, projectDir, `${sessionId}.jsonl`);
 
-  let mtimeMs, size;
+  let mtimeMs, size, ino;
   try {
-    ({ mtimeMs, size } = await stat(historyFile));
+    ({ mtimeMs, size, ino } = await stat(historyFile));
   } catch {
     return NO_HISTORY; // 文件不存在：新会话或已删
   }
@@ -191,7 +196,7 @@ async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR 
     const built = await inflight.promise;
     return built === NO_HISTORY ? NO_HISTORY : { messages: built.messages.slice(-limit), total: built.total, timing: { cache: 'shared' } };
   }
-  const unit = { mtimeMs, size, promise: buildSessionHistory(sessionId, cwd, baseDir, historyFile, { mtimeMs, size, chainSourceAvailable }) };
+  const unit = { mtimeMs, size, promise: buildSessionHistory(sessionId, cwd, baseDir, historyFile, { mtimeMs, size, ino, chainSourceAvailable }) };
   _histInflight.set(historyFile, unit);
   let built;
   try {
@@ -203,21 +208,40 @@ async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR 
 }
 
 // 缓存没命中时建一次回显，结果进 _histCache。返回不按 limit 切的整份（并进来的调用各按自己的 limit 切）。
-async function buildSessionHistory(sessionId, cwd, baseDir, historyFile, { mtimeMs, size, chainSourceAvailable }) {
+async function buildSessionHistory(sessionId, cwd, baseDir, historyFile, { mtimeMs, size, ino, chainSourceAvailable }) {
   // timing 随 session:history 回执带给前端（2026-10-31 性能改造 Stage 0）：慢在求链、解析，
   // 还是没吃上缓存，机主导出的手机日志里分得清。
   const t0 = Date.now();
+
+  // 4a：上次读到哪还记着、文件只往后长了一截，就只解析新长的那截，不再求链、不重读整份。接不上的一律走下面的全量。
+  // 先从表里取出来再改：同一份状态不让两次在建各改一半（接不上时它已经改坏了，直接丢掉）。
+  const prev = _histIncremental.get(historyFile);
+  _histIncremental.delete(historyFile);
+  if (prev && await extendHistory(historyFile, prev, { size, ino })) {
+    setCapped(_histIncremental, historyFile, prev, HIST_INCREMENTAL_MAX);
+    const { messages: all, total } = prev.state;
+    const messages = all.slice(-HISTORY_MAX_MESSAGES); // 状态里的数组下次还要接着长，交出去和进缓存的是副本
+    setCapped(_histCache, historyFile, { mtimeMs, size, messages, total, unfiltered: false }, HIST_CACHE_MAX);
+    return { messages, total, timing: { cache: 'incremental', parseMs: Date.now() - t0 } };
+  }
+
   // 当前链的 uuid 集合。放在缓存判定【之后】：文件没变链就没变，命中缓存时连这次读盘也省掉。
   const liveUuids = await readLiveChainUuids(sessionId, cwd, baseDir);
   const chainMs = Date.now() - t0;
 
-  let messages, total;
+  let read;
   try {
-    ({ messages, total } = await readHistoryMessages(historyFile, liveUuids));
+    read = await readHistoryMessages(historyFile, liveUuids, size);
   } catch {
     return NO_HISTORY; // 读取失败（含不是普通文件）
   }
   const parseMs = Date.now() - t0 - chainMs;
+  const { total } = read.state;
+  const messages = read.state.messages.slice();
+  // 该按链剪却没拿到链（fail-open）的那份不能接着长：同 B6 的 unfiltered，下次得重新求链。
+  if (read.resume && !(chainSourceAvailable && !liveUuids)) {
+    setCapped(_histIncremental, historyFile, { ino, size, ...read.resume, state: read.state }, HIST_INCREMENTAL_MAX);
+  }
 
   // B6：缓存消息（LRU 淘汰：上方命中路径 delete+set 移到 Map 末尾，超上限淘汰最久未用的）；已在流式阶段封顶到
   // HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。正常会话（≤上限）即全量历史；仅极端超大会话被削顶——
@@ -229,10 +253,13 @@ async function buildSessionHistory(sessionId, cwd, baseDir, historyFile, { mtime
   return { messages, total, timing: { cache: 'miss', chainMs, parseMs, passes: 1 } };
 }
 
-// 流式读一遍 transcript 出回显条目；liveUuids 非 null 时剪掉当前链开始之后的废弃分支（判据见 feedHistory）。
+// 流式读一遍 transcript 的 [0, size) 出回显状态；liveUuids 非 null 时剪掉当前链开始之后的废弃分支（判据见 feedHistory）。
 // 读不出来（含不是普通文件）直接抛，由调用方回 []。
-async function readHistoryMessages(historyFile, liveUuids) {
+// resume：这份状态能不能留给下次只解析新长的那截（4a，见 extendHistory），能就带上续读位置和链的跟踪，不能是 null。
+async function readHistoryMessages(historyFile, liveUuids, size) {
   const pruned = historyState();
+  const track = liveUuids ? chainTrack() : null;
+  let lastEnd = 0;
   // 不剪的那份：第一次剪掉消息时从 pruned 复制出来，此后两份一起喂，读完再挑（见末尾）。没剪过就不复制——
   // 剪枝是两份唯一的差别，一条没剪时两份逐条相同。2026-10-31 之前是读完发现要退回不剪再整份重读一遍。
   let unpruned = null;
@@ -241,7 +268,9 @@ async function readHistoryMessages(historyFile, liveUuids) {
   // 逐行流式读、不一次性 buffer 整个文件——会话可增长到数十 MB，流式读才稳、不阻塞事件循环
   // （取代原「尾部 1MB」截断方案）。累积数组封顶到 HISTORY_MAX_MESSAGES，内存不随会话无限增长。
   // 写到一半的尾行解析不了，引擎直接跳过。
-  await scanJsonl((await openRegularFile(historyFile)).fh, (entry) => {
+  const offset = await scanJsonl((await openRegularFile(historyFile)).fh, (entry, end) => {
+    lastEnd = end;
+    if (track) { observeChain(track, entry); noteFill(track, entry, liveUuids); }
     // 跳过 meta 条目（local-command 输出等）
     if (entry.isMeta) return;
 
@@ -253,7 +282,7 @@ async function readHistoryMessages(historyFile, liveUuids) {
       unpruned = cloneHistoryState(pruned);
       feedHistory(unpruned, entry, null);
     }
-  });
+  }, { end: size });
   // 【SDK 选的叶子不是用户最后看到的那条 ⇒ 不剪】（2026-10-15）物理上最新的那条主链 user/assistant
   // 不在 liveUuids 里，就是 SDK 认定的当前链没走到文件里最后发生的那段对话。当前叶子本该是「物理最靠后
   // 的分支末端」（readLiveChainUuids 的 ③），rewind 之后的新对话又总写在废弃段后面，所以这条正常恒成立；
@@ -267,10 +296,113 @@ async function readHistoryMessages(historyFile, liveUuids) {
   // （da2b6acb 因此多出一句终端里被丢弃的「继续」）。结果照常进缓存——文件没变，SDK 的选择就不会变。
   const s = unpruned && newestMainUuid && !liveUuids.has(newestMainUuid) ? unpruned : pruned;
   // 循环后精裁到上限（批量裁剪可能残留至多 2×）：缓存的数组严格 ≤ HISTORY_MAX_MESSAGES。
+  // 留作增量状态也无妨：往后只从头裁，尾部这些条始终是全量结果的尾部。
   if (s.messages.length > HISTORY_MAX_MESSAGES) {
     s.messages.splice(0, s.messages.length - HISTORY_MAX_MESSAGES);
   }
-  return { messages: s.messages, total: s.total };
+  // 不留作增量状态的：最后那行没换行却已经喂进去了的（见 extendHistory 末尾）；退回不剪的那份——往后新写的
+  // 可能让 SDK 选回正常的叶子，那时这次没剪的就该剪了；叶子不是从物理最后那个节点走到的（见 chainTrack）
+  const resume = lastEnd > offset || s === unpruned || (track && !track.tailOk) ? null : { offset, track };
+  return { state: s, resume };
+}
+
+// ── 4a 增量解析（2026-10-31 性能改造）──
+// mirror 每个 tick、每次 session:history 都要一份回显；文件变了就得整份重读，大会话上每次还要 SDK 把整份 transcript
+// 再读一遍求链（几百毫秒）。可 CLI 对 transcript 只追加：新写的那几轮接在当前链末端时，链就是旧链加上它们，
+// 旧条目剪不剪一条都不变——这时只解析新长的那截，接着喂上次留下的状态。
+
+// SDK 求链时当作对话节点的条目（sdk.mjs 0.3.310 的 _d：进它那张 uuid 表的类型，去掉 sidechain、team、
+// progress 和 fork_briefing 附件）。选叶、往上走链都只看这些。
+function isChainNode(e) {
+  if (typeof e.uuid !== 'string' || e.isSidechain || e.teamName) return false;
+  if (e.type === 'attachment') return e.attachment?.type !== 'fork_briefing';
+  return e.type === 'user' || e.type === 'assistant' || e.type === 'system';
+}
+
+// 全量读时顺手记下的、判断新写的接不接得上要用的东西。只有按链剪的那份要它，不剪的（拿不到链）没有链可接。
+function chainTrack() {
+  return {
+    tip: null, // 物理上最后一个链节点：新写的必须一个接一个挂在它下面
+    // 从 tip 往上走能走到一条 user/assistant（SDK 就选它当叶子）：tip 本身是，或一个接一个挂在这样的节点下。
+    // 走不到（中间的父节点不在文件里…）SDK 会换下一个末端，上次的叶子就不是从 tip 走到的，新写的接在 tip 下也不等于接在链尾。
+    tailOk: false,
+    // 压缩边界的 anchor（压缩摘要）：SDK 求链时把挂在它下面的条目改挂到保留段末尾（见 _d）。新写的挂在它下面，
+    // 实际的父节点就不是 tip——触发压缩的那句命令随之掉出链外（feedHistory 里那个「已知窗口」）。
+    // 新写的边界本身 parentUuid 为 null（真机 228 条全是），接不上 tip，不用在这里另记。
+    anchors: new Set(),
+    // 下面两样给 SDK 求链的最后一步（dxe）：它把不在链上、却和链上的回复连着的行补进链。
+    // 不在链上的主链 assistant 的 message.id。一次 API 回复按内容块拆成几行落盘、共用一个 message.id，
+    // 同一回复里不在链上的那几行会被补进链：新写的回复撞上这里的 id，上次剪掉的那行就回到了链上。
+    offMsgIds: new Set(),
+    // 主链上回答过的 tool_use id。回答了链上某个调用、链上却还没人回答它的行会被补进链；新写的再回答一次，
+    // 链上就有人回答了，上次补进来的那行随之出链。
+    answered: new Set(),
+  };
+}
+
+// SDK 的 nF：有 parentUuid、内容里有 tool_result 的 user。sidechain 的不算：补链只认与链上那行同在主链的。
+function toolResultIds(e) {
+  if (e.type !== 'user' || !e.parentUuid || e.isSidechain || !Array.isArray(e.message?.content)) return [];
+  return e.message.content.filter(b => b?.type === 'tool_result' && typeof b.tool_use_id === 'string').map(b => b.tool_use_id);
+}
+
+function noteFill(t, e, onChain) {
+  if (e.type === 'assistant' && !e.isSidechain && !onChain.has(e.uuid) && typeof e.message?.id === 'string') t.offMsgIds.add(e.message.id);
+  for (const id of toolResultIds(e)) t.answered.add(id);
+}
+
+function observeChain(t, e) {
+  if (e.type === 'system' && e.subtype === 'compact_boundary') {
+    const m = e.compactMetadata;
+    for (const a of [m?.preservedMessages?.anchorUuid, m?.preservedSegment?.anchorUuid]) if (a) t.anchors.add(a);
+  }
+  if (!isChainNode(e)) return;
+  t.tailOk = e.type === 'user' || e.type === 'assistant' || (t.tailOk && e.parentUuid === t.tip);
+  t.tip = e.uuid;
+}
+
+const CANNOT_EXTEND = new Error('history: 新写的接不上上次的状态');
+
+// SDK 求链读多少按文件大小分两档（sdk.mjs 的 WL）：超过 5MB 只读最后一条压缩边界之后的那段。
+const SDK_TAIL_READ_BYTES = 5 * 1024 * 1024;
+
+// 把 inc（上次留下的状态）接着喂到文件当前的 size。接得上返回 true、inc 已更新；接不上返回 false，
+// inc 已改了一半，调用方丢掉它走全量。
+async function extendHistory(historyFile, inc, { size, ino }) {
+  // 换了文件（rename 覆盖）、没变长（截短、原地重写）都不是追加：上次的状态对不上现在的内容
+  if (ino !== inc.ino || size <= inc.size) return false;
+  const { state: s, track: t } = inc;
+  // 这次才长过 5MB：SDK 看不见边界之前的了，那里按 message.id、工具调用补进链的行随之出链
+  if (t && inc.size <= SDK_TAIL_READ_BYTES && size > SDK_TAIL_READ_BYTES) return false;
+  const newChain = t ? new Set() : null; // 新写的、接在链上的 user/assistant：按链剪时它们都在链上
+  let offset, lastEnd = 0;
+  try {
+    offset = await scanJsonl((await openRegularFile(historyFile)).fh, (entry, end) => {
+      lastEnd = end;
+      // 新写的压缩边界：主链的 parentUuid 为 null、下面那道闸挡得住；sidechain 的不是链节点，可文件超过 5MB 时
+      // SDK 只拿最后一条边界之后的那段求链、截段不看 isSidechain（qL），链开始的位置就变了
+      if (t && entry.type === 'system' && entry.subtype === 'compact_boundary') throw CANNOT_EXTEND;
+      if (t && isChainNode(entry)) {
+        // 没挂在上一个节点下 = 分支（rewind 之后重来、并行工具的兄弟…）：当前叶子可能换到别的分支，旧条目剪不剪都可能变
+        if (entry.parentUuid !== t.tip || t.anchors.has(entry.parentUuid)) throw CANNOT_EXTEND;
+        if (entry.type === 'assistant' && t.offMsgIds.has(entry.message?.id)) throw CANNOT_EXTEND;
+        if (toolResultIds(entry).some(id => t.answered.has(id))) throw CANNOT_EXTEND;
+        if (entry.type === 'user' || entry.type === 'assistant') newChain.add(entry.uuid);
+        t.tip = entry.uuid;
+      }
+      if (t) noteFill(t, entry, newChain);
+      if (entry.isMeta) return;
+      feedHistory(s, entry, newChain);
+    }, { start: inc.offset, end: size });
+  } catch {
+    return false;
+  }
+  // 最后那行没换行却已经喂进去了：续读位置停在它行首，下次会把它再喂一遍。这种状态不留（CLI 一行连换行一次写下，
+  // 只在两次写之间被撞上时出现）。
+  if (lastEnd > offset) return false;
+  inc.size = size;
+  inc.offset = offset;
+  return true;
 }
 
 // 回显 reducer 的状态。一遍读要喂一份或两份（见 readHistoryMessages），所以拆成可复制的状态 + 逐条喂的函数。
@@ -284,7 +416,7 @@ function historyState() {
     total: 0,
     // 同 uuid 去重：真实 transcript 存在「interrupt+queue 竞态导致同一消息重复落盘」（同 uuid 写两次）→
     // 回显成重复气泡（实证 234 会话中 1 个含 8 条）。uuid 是每条唯一标识，同 uuid = 同一逻辑消息（非合法重复），
-    // 按 uuid 去重安全——合法重复内容（两次「继续」）是不同 uuid、不误删。Set 为本次读取的瞬时结构（返回即释放）。
+    // 按 uuid 去重安全——合法重复内容（两次「继续」）是不同 uuid、不误删。Set 随状态留作 4a 增量状态时常驻（_histIncremental 封顶），否则读完即释放。
     seenUuids: new Set(),
     toolNames: new Map(), // tool_use id → 工具名：tool_result 按它取摘要上限（Bash 2000，见 toolResultCap）
     // 主链最近 Agent/Task toolUseId：sidechain 行常无 parent_tool_use_id 落盘，靠此挂到折叠卡

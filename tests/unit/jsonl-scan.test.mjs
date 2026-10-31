@@ -91,3 +91,26 @@ test('scanJsonl：end 只扫前这么多字节，与 readline 读同一段结果
   }
 });
 
+
+// 4a 增量解析：上次扫到哪、文件变长后从哪接着扫。写到一半的尾行不算扫过，下次从它的行首重扫。
+test('scanJsonl：start 从行首接着扫，交出的与从头扫时这之后的行相同；返回最后一个换行符之后的位置', async () => {
+  const text = PIECES.join('');
+  const file = writeFixture('resume.jsonl', PIECES);
+  const full = await scan(file);
+  const resumeAt = end => Buffer.from(text).subarray(0, end).lastIndexOf(10) + 1;
+  let start = 0;
+  for (const p of PIECES) {
+    for (const end of [undefined, ...expectedEnds(PIECES).filter(e => e > start)]) {
+      for (const highWaterMark of [3, undefined]) {
+        const got = [];
+        const resume = await scanJsonl(await open(file), (entry, lineEnd) => got.push({ entry, end: lineEnd }), { start, end, highWaterMark });
+        const stop = end ?? Buffer.byteLength(text);
+        assert.deepEqual(got, full.filter(g => g.end >= start && g.end <= stop),
+          `从 start=${start} 接着扫（end=${end}）与从头扫的这一段不同：增量解析会漏行或多行`);
+        assert.equal(resume, Math.max(start, resumeAt(stop)),
+          `start=${start} end=${end}：续读位置不在最后一个换行符之后，下次会重喂或跳过一行`);
+      }
+    }
+    start += Buffer.byteLength(p);
+  }
+});
