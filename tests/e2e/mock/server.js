@@ -369,9 +369,21 @@ let unpairedToolTurnEndsDuringLoad = false;
 let outboxPermanentArmed = false;
 // #302：离线重放（fromOutbox）的 ack 先压住，/__release-outbox-acks 才回 ok——让前端停在「重发中」（批处理在途）。null = 不压。
 let outboxAckHold = null;
-// #354 review：下一次 session:history 的回执先扣住（一次性），/__release-history-ack 才回——让前端停在「历史回执在路上」
+// #354 review：下一次 session:history 的回执先扣住（一次性），/__release-history-ack 才回——让前端停在「历史回执在路上」。
+// 'load' 扣页面最终画出来的那次；'prefetch' 只扣 3b 点击时的预取
 let historyAckHoldArmed = false;
 let heldHistoryAcks = [];
+// 3b 预取：下一次 session:switch 整个扣住（连同 instances 广播和回执），/__release-switch 才处理——
+// 让用例看得见「切换还没回来，历史已经在拉」。一次性
+let switchHoldArmed = false;
+let heldSwitches = [];
+// 3b 预取：下一次读长会话读到的是旧的那份，末条换成绝不该出现的标记。一次性，落在点击时的预取上。
+// 'shorter'：少 10 条（读完终端又写了 10 条），sync:since 报的条数对不上，前端必须重新拉；
+// 'same-length'：条数不变（截顶窗口往后滑了），只有截顶时才摆得出来，前端看不出、必须一开始就不信它
+let staleLongHistoryArmed = false;
+// 3b 预取：长会话改成磁盘只有 1999 条、不截顶（session:history 与 sync:since 一起变），预取才核对得了。
+// 持续到 reset
+let uncappedLongHistory = false;
 // P0-02d14（验收 O31）：'armed' → 下一次连入时按 server 重启处理（实例全部消失、viewing 归 null、startedAt 变）；
 // 之后（'restarted'）离线重放指向不在册的实例，照真 server 的 BE-001 分支回 sysTo + stale 负 ack。
 let outboxRestartStaleArmed = null;
@@ -792,6 +804,10 @@ function resetMockState() {
   outboxAckHold = null;
   historyAckHoldArmed = false;
   heldHistoryAcks = [];
+  switchHoldArmed = false;
+  heldSwitches = [];
+  staleLongHistoryArmed = false;
+  uncappedLongHistory = false;
   outboxRestartStaleArmed = null;
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
@@ -1201,8 +1217,9 @@ app.post('/__release-outbox-acks', (_req, res) => {
 });
 
 // #354 review：扣住 / 放行 session:history 的回执（见 historyAckHoldArmed）
-app.post('/__hold-next-history-ack', (_req, res) => {
-  historyAckHoldArmed = true;
+// 默认扣页面最终画出来的那次（不吃 3b 的预取）；?prefetch=1 只扣下一次预取
+app.post('/__hold-next-history-ack', (req, res) => {
+  historyAckHoldArmed = req.query.prefetch ? 'prefetch' : 'load';
   res.json({ ok: true });
 });
 app.post('/__release-history-ack', (_req, res) => {
@@ -1210,6 +1227,26 @@ app.post('/__release-history-ack', (_req, res) => {
   heldHistoryAcks = [];
   for (const release of held) release();
   res.json({ ok: true, released: held.length });
+});
+
+// 3b 预取：扣住 / 放行下一次 session:switch（见 switchHoldArmed）
+app.post('/__hold-next-switch', (_req, res) => {
+  switchHoldArmed = true;
+  res.json({ ok: true });
+});
+app.post('/__release-switch', (_req, res) => {
+  const held = heldSwitches;
+  heldSwitches = [];
+  for (const release of held) release();
+  res.json({ ok: true, released: held.length });
+});
+app.post('/__arm-stale-long-history', (req, res) => {
+  staleLongHistoryArmed = req.query.same_length ? 'same-length' : 'shorter';
+  res.json({ ok: true });
+});
+app.post('/__arm-uncapped-long-history', (_req, res) => {
+  uncappedLongHistory = true;
+  res.json({ ok: true });
 });
 
 // #307：同一会话仅替换实例。历史正文不变；让前端自己决定复用提示条缓存还是重新加载。
@@ -2360,6 +2397,14 @@ io.on('connection', socket => {
   });
 
   socket.on('session:switch', (payload, callback) => {
+    if (switchHoldArmed) {
+      switchHoldArmed = false;
+      heldSwitches.push(() => handleSessionSwitch(payload, callback));
+      return;
+    }
+    handleSessionSwitch(payload, callback);
+  });
+  function handleSessionSwitch(payload, callback) {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:switch sessionId=${sessionId}, cwd=${cwd}`);
     const knownArchived = {
@@ -2467,7 +2512,7 @@ io.on('connection', socket => {
       }
     });
     if (typeof callback === 'function') callback({ ok: true, instanceId: archivedInst.instanceId, sessionId: archivedInst.sessionId });
-  });
+  }
 
   // 文件轴 Rewind 预览。ack 形状与真 server 逐字对齐（app/src/server/app.js 的 session:rewind:preview）——
   // 这里是平行实现，字段漂了 E2E 也不会红，改真 server 的 ack 时必须回来同步这一处。
@@ -2770,11 +2815,21 @@ io.on('connection', socket => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:history sessionId=${sessionId}, cwd=${cwd}`);
     if (typeof rawCallback !== 'function') return;
+    // 3b 预取（app/public/js/app/history-prefetch.js）：点开非活会话时，前端在 session:switch 的同时多拉一份，
+    // payload 带 prefetch。下面的一次性夹具（扣回执、失败支、P0-ORDER 的抢先增量……）都是按「页面最终画出来的
+    // 那次拉取」写的，让预取吃掉就测歪了；这些会话的 sync:since 不报 diskLen（或报的不是 0），回空的预取
+    // 前端必判对不上、照常再拉。只有长会话的预取走真分支：它的 sync:since 如实报 diskLen。默认截顶（2000 条）时
+    // 前端核对不了、照常再拉，/__arm-uncapped-long-history 之后（1999 条）预取才能被复用。
+    if (payload?.prefetch && sessionId !== 'mock-session-long-history') {
+      rawCallback({ messages: [] });
+      return;
+    }
     // 真 server 的每条历史消息都带 timestamp（transcript 原样透传，见 app/src/sessions/history.js）。
     // 这里统一在出口补齐，而不是逐个分支手写——17 处 callback 漏一个就是一处静默的契约 drift。
     // 已显式带 timestamp 的（如 mock-session-timeline fixture）保持原值不覆盖。
-    const holdThis = historyAckHoldArmed;
-    historyAckHoldArmed = false;
+    // 截顶的长会话核对不了预取、照常再拉，扣住预取就扣错了那一份
+    const holdThis = historyAckHoldArmed === (payload?.prefetch ? 'prefetch' : 'load');
+    if (holdThis) historyAckHoldArmed = false;
     const callback = res => {
       const reply = () => rawCallback(stampHistoryMessages(res));
       if (holdThis) heldHistoryAcks.push(reply);
@@ -3063,6 +3118,8 @@ io.on('connection', socket => {
           content: i === 1999 ? 'Long history final message marker' : `Long history stress message #${i}`
         });
       }
+      // 不截顶就少开头那一条：末条照旧是 assistant 的标记
+      if (uncappedLongHistory) messages.shift();
       if (longHistoryShapeArmed) {
         // 本地时间的三天：#1000、#1970 各跨一次日，同一天里每条隔 1 秒（不触发同日时间标记）。
         // #1937 的 tool_use 与 #1943 的 tool_result 跨着 #1940（2000 - 60 那条用户消息），切点得退到 #1936
@@ -3073,9 +3130,14 @@ io.on('connection', socket => {
         messages[1937] = { kind: 'tool_use', role: 'assistant', toolUseId: 'toolu_lh_cross', name: 'Read', inputSummary: '{"file_path":"cross.txt"}', timestamp: messages[1937].timestamp };
         messages[1943] = { kind: 'tool_result', role: 'user', toolUseId: 'toolu_lh_cross', ok: true, outputSummary: 'cross-cut result', timestamp: messages[1943].timestamp };
       }
+      if (staleLongHistoryArmed) {
+        if (staleLongHistoryArmed === 'shorter') messages.length -= 10;
+        messages[messages.length - 1] = { ...messages[messages.length - 1], content: 'STALE_PREFETCH_MUST_NOT_APPEAR' };
+        staleLongHistoryArmed = false;
+      }
       // total：真 server 的 session:history 回削顶前的条数（getSessionHistoryWithTotal）。这个会话按「磁盘上有 2100 条、
       // 只回最近 2000 条」摆，前端据此要说清只显示了一部分（P0-LH4）。
-      callback({ messages, total: 2100 });
+      callback({ messages, total: uncappedLongHistory ? 1999 : 2100 });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-gap-pending') {
       callback({
         messages: [
@@ -4082,6 +4144,10 @@ io.on('connection', socket => {
         return;
       }
       ack(0); // Fallback to history or empty
+    } else if (sessionId === 'mock-session-long-history') {
+      // 3b 预取：如实报磁盘条数（真 server 在 replayed=0 时总带），前端凭它判点击时预取的那份能不能直接画。
+      // 与 session:history 读回的条数一致；置换出来的新实例同一个会话，同样报
+      ack(0, { diskLen: uncappedLongHistory ? 1999 : 2000 });
     } else {
       ack(0);
     }

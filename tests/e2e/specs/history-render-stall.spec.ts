@@ -33,11 +33,15 @@ function pageErrorsExcept(page: Page, injected: string) {
 }
 
 // 同时观察 polling 与 websocket，避免首连尚未升级时漏掉请求。
+// 点击时并行发出的预取（payload.prefetch，Stage 3b）不算：长会话截顶，前端核对不了预取、一律照常再拉
+// （history-prefetch.spec.ts 的 PF4），这里数的是页面真正拿来画的那几次
 function captureHistoryLoads(page: Page, eventName = 'session:history') {
-  const loads: Array<{ sessionId: string; instanceId?: string }> = [];
+  const loads: Array<{ sessionId: string; instanceId?: string; prefetch?: boolean }> = [];
   const take = (payload: string) => {
     for (const packet of payload.split('\x1e')) {
-      if (packet.includes(JSON.stringify(eventName))) loads.push(JSON.parse(packet.slice(packet.indexOf('[')))[1]);
+      if (!packet.includes(JSON.stringify(eventName))) continue;
+      const args = JSON.parse(packet.slice(packet.indexOf('[')))[1];
+      if (!args?.prefetch) loads.push(args);
     }
   };
   page.on('websocket', ws => ws.on('framesent', frame => { if (typeof frame.payload === 'string') take(frame.payload); }));
