@@ -30,7 +30,169 @@ function pageErrorsExcept(page: Page, injected: string) {
   return ((page as unknown as { __ccmErrors?: string[] }).__ccmErrors ?? []).filter(e => !e.includes(injected));
 }
 
+// 同时观察 polling 与 websocket，避免首连尚未升级时漏掉请求。
+function captureHistoryLoads(page: Page, eventName = 'session:history') {
+  const loads: Array<{ sessionId: string; instanceId?: string }> = [];
+  const take = (payload: string) => {
+    for (const packet of payload.split('\x1e')) {
+      if (packet.includes(JSON.stringify(eventName))) loads.push(JSON.parse(packet.slice(packet.indexOf('[')))[1]);
+    }
+  };
+  page.on('websocket', ws => ws.on('framesent', frame => { if (typeof frame.payload === 'string') take(frame.payload); }));
+  page.on('request', req => { if (req.method() === 'POST' && req.url().includes('/socket.io/')) take(req.postData() || ''); });
+  return loads;
+}
+
+type HistoryIdleGate = {
+  __heldHistoryChunks: IdleRequestCallback[];
+  __passHistoryChunks: boolean;
+  __pendingHistoryChunks: number;
+};
+
+async function holdHistoryChunks(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as HistoryIdleGate;
+    const original = window.requestIdleCallback.bind(window);
+    w.__heldHistoryChunks = [];
+    w.__passHistoryChunks = false;
+    w.__pendingHistoryChunks = 0;
+    window.requestIdleCallback = ((cb: IdleRequestCallback, opts?: IdleRequestOptions) => {
+      if (!w.__passHistoryChunks) { w.__heldHistoryChunks.push(cb); return 0; }
+      w.__pendingHistoryChunks++;
+      return original(deadline => { w.__pendingHistoryChunks--; cb(deadline); }, opts);
+    }) as typeof window.requestIdleCallback;
+  });
+}
+
+async function releaseHistoryChunks(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as HistoryIdleGate;
+    w.__passHistoryChunks = true;
+    for (const cb of w.__heldHistoryChunks.splice(0)) cb({ didTimeout: false, timeRemaining: () => 0 } as IdleDeadline);
+  });
+  await expect.poll(() => page.evaluate(() => (window as unknown as HistoryIdleGate).__pendingHistoryChunks)).toBe(0);
+}
+
+async function expectCompleteLongHistory(page: Page) {
+  await expect(page.locator('[data-testid="assistant-message"]', { hasText: 'Long history final message marker' })).toBeVisible({ timeout: 15_000 });
+  await expect(bubbles(page)).toHaveCount(2000);
+  await expect(page.locator('#messages').getByText(LONG_NOTICE)).toHaveCount(1);
+  await expect(page.locator('#messages [data-testid="history-reload"]')).toHaveCount(0);
+}
+
 test.describe('#307 历史渲染停在提示条：观测与原地重新加载', () => {
+  test('P0-HIST-STALL-1b 同会话更换实例且没有接替加载：记中断坐标，原地重载恢复且不刷新页面', async ({ page }) => {
+    const loads = captureHistoryLoads(page);
+    const syncs = captureHistoryLoads(page, 'sync:since');
+    await gotoMock(page);
+    await holdHistoryChunks(page);
+    await openLongHistory(page);
+    await expect.poll(() => page.evaluate(() => (window as unknown as HistoryIdleGate).__heldHistoryChunks.length)).toBeGreaterThan(0);
+    await expect(bubbles(page)).toHaveCount(0);
+
+    const response = await page.request.post('/__replace-history-instance');
+    expect(response.ok(), '同会话实例置换夹具没有生效').toBe(true);
+    const replacement = await response.json();
+    expect(replacement.sessionId).toBe('mock-session-long-history');
+    expect(replacement.instanceId).not.toBe(replacement.previousInstanceId);
+    // 先等浏览器收到置换后的实例，再放旧回调；不靠 HTTP 请求与 socket 广播的到达顺序。
+    await expect.poll(() => syncs.some(p => p.instanceId === replacement.instanceId && p.sessionId === replacement.sessionId)).toBe(true);
+    await releaseHistoryChunks(page);
+
+    const reload = page.locator('#messages [data-testid="history-reload"]');
+    await expect(reload).toBeVisible();
+    await expect(bubbles(page)).toHaveCount(0);
+    expect(loads.filter(p => p.sessionId === replacement.sessionId), '置换后应保留提示条缓存，没有新的全量加载接替').toHaveLength(1);
+    const log = await consoleLogText(page);
+    await expect(log).toContainText(`session=${replacement.sessionId} instance=${replacement.previousInstanceId}→${replacement.instanceId} 已渲染 40/2000`);
+    await page.locator('#consoleClose').click();
+
+    const navigations: string[] = [];
+    page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
+    await reload.click();
+    await expectCompleteLongHistory(page);
+    expect(loads.filter(p => p.sessionId === replacement.sessionId)).toHaveLength(2);
+    expect(navigations, '重新加载历史不应刷新整页').toEqual([]);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-HIST-STALL-1c 同会话新实例的重载已完成：旧续块不能再插入或给新提示条挂重试按钮', async ({ page }) => {
+    const syncs = captureHistoryLoads(page, 'sync:since');
+    await gotoMock(page);
+    await holdHistoryChunks(page);
+    await openLongHistory(page);
+    await expect.poll(() => page.evaluate(() => (window as unknown as HistoryIdleGate).__heldHistoryChunks.length)).toBeGreaterThan(0);
+    const response = await page.request.post('/__replace-history-instance');
+    expect(response.ok()).toBe(true);
+    const replacement = await response.json();
+    expect(replacement.sessionId).toBe('mock-session-long-history');
+    expect(replacement.instanceId).not.toBe(replacement.previousInstanceId);
+    await expect.poll(() => syncs.some(p => p.instanceId === replacement.instanceId && p.sessionId === replacement.sessionId)).toBe(true);
+
+    await page.evaluate(() => { (window as unknown as HistoryIdleGate).__passHistoryChunks = true; });
+    await page.locator('#btnMore').click();
+    await page.locator('#moreReloadSession').click();
+    await expectCompleteLongHistory(page);
+    await releaseHistoryChunks(page);
+    await expectCompleteLongHistory(page);
+    const log = await consoleLogText(page);
+    await expect(log).toContainText(`session=${replacement.sessionId} instance=${replacement.previousInstanceId}→${replacement.instanceId} 已渲染 40/2000`);
+    await page.locator('#consoleClose').click();
+    await expectCompleteLongHistory(page);
+    await expectNoBrowserErrors(page);
+  });
+
+  for (const scenario of [
+    { id: '2b', index: 1, persistent: false, title: '第一块同步抛错' },
+    { id: '2c', index: 61, persistent: true, title: '第二块持续抛错' },
+  ]) {
+    test(`P0-HIST-STALL-${scenario.id} ${scenario.title}：保留异常和精确进度，重试入口可再次使用`, async ({ page }) => {
+      const failures: Array<{ message: string; stack?: string }> = [];
+      page.on('pageerror', error => failures.push({ message: error.message, stack: error.stack }));
+      await gotoMock(page);
+      await page.evaluate(({ index, persistent }) => {
+        const w = window as unknown as { marked: { parse: (s: string, ...rest: unknown[]) => string }; __restoreHistoryParse: () => void };
+        const m = w.marked;
+        const parse = m.parse;
+        w.__restoreHistoryParse = () => { m.parse = parse; };
+        let thrown = false;
+        m.parse = function (this: unknown, src: string, ...rest: unknown[]) {
+          if (src === `Long history stress message #${index}` && (persistent || !thrown)) {
+            thrown = true;
+            throw new Error('injected history assertion failure');
+          }
+          return parse.call(this, src, ...rest);
+        };
+      }, scenario);
+      await openLongHistory(page);
+      const reload = page.locator('#messages [data-testid="history-reload"]');
+      await expect(reload).toBeVisible();
+      await expect(bubbles(page)).toHaveCount(0);
+      const log = await consoleLogText(page);
+      await expect(log).toContainText(`渲染第 ${scenario.index + 1}/2000 条历史时抛错`);
+      await expect(log).toContainText(`session=mock-session-long-history instance=inst_long_history 当前=inst_long_history 已渲染 ${scenario.index}/2000`);
+      await expect(log).toContainText(/\[JS_ERROR\] (?:Uncaught Error: )?injected history assertion failure/);
+      await expect.poll(() => failures.filter(e => e.message === 'injected history assertion failure').length).toBe(1);
+      expect(failures[0].stack, '原异常的渲染堆栈不能被吞掉').toContain('processChunk');
+      await page.locator('#consoleClose').click();
+
+      await reload.click();
+      if (scenario.persistent) {
+        await expect.poll(() => failures.filter(e => e.message === 'injected history assertion failure').length).toBe(2);
+        await expect(reload).toBeVisible();
+        await expect(bubbles(page)).toHaveCount(0);
+        await expect(page.locator('#messages').getByText(LONG_NOTICE)).toHaveCount(1);
+        // 连续失败后先移除注入，再点原地重试：入口没有卡死，也没有用缺失正文冒充成功。
+        await page.evaluate(() => {
+          (window as unknown as { __restoreHistoryParse: () => void }).__restoreHistoryParse();
+        });
+        await reload.click();
+      }
+      await expectCompleteLongHistory(page);
+      expect(pageErrorsExcept(page, 'injected history assertion failure')).toEqual([]);
+    });
+  }
+
   test('P0-HIST-STALL-1 渲染第 2 块时切到别的会话：日志记下中途放弃，带会话号、两个实例号、已渲染条数', async ({ page }) => {
     await gotoMock(page);
     // 冻结分块调度：第一块同步画完后，第二块的回调攥在手里，切走之后再放（同 P0-LH3）
