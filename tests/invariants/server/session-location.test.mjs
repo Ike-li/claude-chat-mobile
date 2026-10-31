@@ -71,9 +71,16 @@ test('打开后外部迁移，旧 cwd 的历史及再次点击都恢复到同一
   assert.equal(opened.ok, true); assert.equal(opened.sessionId, sid);
   renameSync(initial, latest);
   appendFileSync(latest, messages(next).map(e => JSON.stringify(e)).join('\n') + '\n');
+  appendFileSync(latest, JSON.stringify({ type: 'user', uuid: 'u-only-next-473', parentUuid: 'tool-result-473', sessionId: sid,
+    cwd: next, entrypoint: 'claude-desktop', message: { role: 'user', content: 'ONLY_NEW_CWD_HISTORY' } }) + '\n');
+  assert.equal(existsSync(initial), false, '旧位置必须已消失，不能意外读到旧副本');
   const history = await emit('session:history', { sessionId: sid, cwd: old });
   assert.equal(history.error, undefined);
   assert.ok(history.messages.some(m => m.content?.includes('DESKTOP_TARGET_HISTORY')));
+  assert.ok(history.messages.some(m => m.content === 'ONLY_NEW_CWD_HISTORY'), '必须读到搬家后仅在新目录写入的消息');
+  const direct = await emit('session:history', { sessionId: sid, cwd: next });
+  assert.equal(direct.error, undefined);
+  assert.ok(direct.messages.some(m => m.content === 'ONLY_NEW_CWD_HISTORY'), '新目录精确读取也必须保持可用');
   const clicked = await emit('session:switch', { sessionId: sid, cwd: old });
   assert.equal(clicked.ok, true); assert.equal(clicked.instanceId, opened.instanceId); assert.equal(clicked.sessionId, sid);
   const instance = latestPayload?.instances.find(a => a.instanceId === opened.instanceId);
@@ -154,12 +161,79 @@ test('自动恢复遇到多份有效记录时拒绝创建实例，明确位置�
     mkdirSync(dir, { recursive: true }); projectDirs.push(dir);
     writeFileSync(join(dir, `${ambiguousId}.jsonl`), JSON.stringify({ type: 'user', cwd, message: { role: 'user', content: 'MULTIPLE_COPIES' } }) + '\n');
   }
+  const history = await emit('session:history', { sessionId: ambiguousId, cwd: old });
+  assert.match(history.error, /多份记录/);
+  assert.deepEqual(history.messages, [], '多候选不能挑一份历史返回');
   const opened = await emit('session:switch', { sessionId: ambiguousId, cwd: old });
   assert.equal(opened.ok, false); assert.match(opened.error, /多份记录/);
   assert.ok(!latestPayload.instances.some(a => a.sessionId === ambiguousId));
   const selected = await emit('session:history', { sessionId: ambiguousId, cwd: next });
   assert.equal(selected.error, undefined);
   assert.ok(selected.messages.some(m => m.content === 'MULTIPLE_COPIES'));
+});
+
+test('活实例的旧位置消失后，同 ID 多份历史不能被自动认领', async () => {
+  const id = randomUUID();
+  const files = [old, repo, next].map(cwd => {
+    const dir = join(homedir(), '.claude/projects', encodeProjectDir(cwd));
+    mkdirSync(dir, { recursive: true }); projectDirs.push(dir);
+    return join(dir, `${id}.jsonl`);
+  });
+  const row = cwd => JSON.stringify({ type: 'user', uuid: randomUUID(), parentUuid: null, sessionId: id, cwd,
+    entrypoint: 'claude-desktop', message: { role: 'user', content: 'AMBIGUOUS_LIVE_HISTORY' } }) + '\n';
+  writeFileSync(files[0], row(old));
+  const opened = await emit('session:switch', { sessionId: id, cwd: old });
+  assert.equal(opened.ok, true);
+  const originalLocation = latestPayload.instances.find(a => a.instanceId === opened.instanceId).transcriptCwd;
+  // 旧位置存在时先备齐两个候选，最后移除旧位置，避免镜像 tick 在布置中途认领唯一候选。
+  writeFileSync(files[2], row(next));
+  writeFileSync(files[1], row(repo));
+  rmSync(files[0]);
+  const history = await emit('session:history', { sessionId: id, cwd: old });
+  assert.match(history.error, /多份记录/);
+  assert.deepEqual(history.messages, []);
+  const instance = latestPayload.instances.find(a => a.instanceId === opened.instanceId);
+  assert.equal(instance.cwd, old);
+  assert.equal(instance.transcriptCwd, originalLocation, '拒绝歧义时不能改写活实例位置');
+});
+
+test('真实编码撞名不能冒认历史；正确归属的同桶文件仍可恢复', async () => {
+  const cwd = join(repo, '.claude/worktrees/collision-name');
+  git('worktree', 'add', '-b', 'collision-branch', cwd);
+  // 非托管目录与真 worktree 编码相同，但不在服务端的授权成员中。
+  const foreignOwner = cwd.replace('/.claude/', '/_claude/');
+  assert.notEqual(cwd, foreignOwner);
+  assert.equal(encodeProjectDir(cwd), encodeProjectDir(foreignOwner));
+  const id = randomUUID(), dir = join(homedir(), '.claude/projects', encodeProjectDir(cwd));
+  mkdirSync(dir, { recursive: true }); projectDirs.push(dir);
+  const row = owner => JSON.stringify({ type: 'user', uuid: randomUUID(), parentUuid: null, sessionId: id, cwd: owner,
+    entrypoint: 'claude-desktop', message: { role: 'user', content: 'COLLISION_OWNER_HISTORY' } }) + '\n';
+  const file = join(dir, `${id}.jsonl`);
+  writeFileSync(file, row(foreignOwner));
+  for (const requestCwd of [cwd, old]) {
+    const denied = await emit('session:history', { sessionId: id, cwd: requestCwd });
+    assert.ok(denied.error, '编码目录存在不等于 transcript 属于该 cwd');
+    assert.deepEqual(denied.messages, [], '精确读取和迁移兜底都不能泄出撞名内容');
+  }
+  // 正对照：同一路径追加有效归属，保证上面的拒绝不是夹具根本读不通。
+  appendFileSync(file, row(cwd));
+  const found = await emit('session:history', { sessionId: id, cwd: old });
+  assert.equal(found.error, undefined);
+  assert.ok(found.messages.some(m => m.content === 'COLLISION_OWNER_HISTORY'));
+});
+
+test('唯一同 ID 文件在未连接目录时，旧 cwd 请求也不能全局搜到它', async () => {
+  const outside = join(root, 'unconnected'), id = randomUUID();
+  mkdirSync(outside);
+  const dir = join(homedir(), '.claude/projects', encodeProjectDir(outside));
+  mkdirSync(dir, { recursive: true }); projectDirs.push(dir);
+  writeFileSync(join(dir, `${id}.jsonl`), JSON.stringify({ type: 'user', uuid: randomUUID(), parentUuid: null, sessionId: id,
+    cwd: outside, message: { role: 'user', content: 'OUTSIDE_HISTORY_MUST_NOT_LEAK' } }) + '\n');
+  for (const cwd of [old, outside]) {
+    const denied = await emit('session:history', { sessionId: id, cwd });
+    assert.ok(denied.error);
+    assert.deepEqual(denied.messages, []);
+  }
 });
 
 test('非法和越界请求不能借迁移兜底读历史', async () => {
