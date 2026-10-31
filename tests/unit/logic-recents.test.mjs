@@ -4,7 +4,7 @@
 // worktree 不再自动分组：每个路径须是显式 workdir，recents 只合并各 workdir 的 session:list。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeRecentSessionsAcrossWorkspaces, recentWorkspaceChips, summarizeRecentsLoad } from '../../app/public/js/logic.js';
+import { mergeRecentSessionsAcrossWorkspaces, recentsSnapshot, recentWorkspaceChips, summarizeRecentsLoad } from '../../app/public/js/logic.js';
 
 // 空首页「最近活跃」：跨全部 workdir 的 session:list 结果合并后按 lastUsedAt 降序取 topN，
 // 每条带 cwd + workspaceName，方便一键 session:switch 到任意工作区会话（不必先展开侧栏目录树）。
@@ -197,5 +197,35 @@ test.describe('summarizeRecentsLoad：拿不到 ≠ 没有', () => {
   test('脏输入不炸：非数组 / 缺 cwd 一律忽略', () => {
     assert.deepEqual(summarizeRecentsLoad(null), { complete: true, failedCount: 0, failedDirs: [] });
     assert.equal(summarizeRecentsLoad([{ timedOut: true }]).complete, true, '无 cwd 无从提示，不计入');
+  });
+});
+
+// ---- recentsSnapshot：先到先画，结论等全部落定 ----
+// 2026-10-31 性能计划 2d：首页不再等齐所有工作区的 session:list，先回的先画。但「还没有最近会话」
+// 是对整张表的结论——慢的那个没回之前先说出来，下一刻又冒出行，等于先宣布了一件没被证实的事。
+test.describe('recentsSnapshot：先回的先画，没回齐不下结论', () => {
+  const pending = cwd => ({ cwd, sessions: [], pending: true });
+
+  test('先回的那个是空的、别的还没回 → 先不画（不能先出「还没有最近会话」）', () => {
+    const r = recentsSnapshot([{ cwd: '/a', sessions: [] }, pending('/b')]);
+    assert.deepEqual(r, { recent: null, settled: false });
+  });
+
+  test('先回的那个有行 → 先画这些行，但还没落定', () => {
+    const r = recentsSnapshot([pending('/a'), { cwd: '/b', sessions: [{ id: 'x', title: 't', lastUsedAt: 5 }] }]);
+    assert.equal(r.settled, false);
+    assert.deepEqual(r.recent.map(s => s.id), ['x']);
+  });
+
+  test('全部落定且都没有会话 → 画空列表（这时才轮到空提示）', () => {
+    assert.deepEqual(recentsSnapshot([{ cwd: '/a', sessions: [] }, { cwd: '/b', sessions: [], timedOut: true }]), { recent: [], settled: true });
+  });
+
+  test('全部落定 → 与一次性合并的结果相同', () => {
+    const lists = [
+      { cwd: '/a', sessions: [{ id: 'old', title: 't', lastUsedAt: 1 }] },
+      { cwd: '/b', sessions: [{ id: 'new', title: 't', lastUsedAt: 9 }] },
+    ];
+    assert.deepEqual(recentsSnapshot(lists, { limit: 8 }), { recent: mergeRecentSessionsAcrossWorkspaces(lists, { limit: 8 }), settled: true });
   });
 });

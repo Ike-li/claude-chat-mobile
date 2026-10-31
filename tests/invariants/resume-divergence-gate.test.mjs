@@ -4,6 +4,7 @@
 //   ② 前端两条 ack 决策路径对 resume_divergent 都不变成自动重发（在线不进 outbox、离线落 blocked），
 //      不认 reason 的旧前端靠 permanent 停手
 //   ③ 额度墙自动继续：实例带分叉结论时不代发、转 stale(diverged)；用户在这条横幅上点「继续」才照常发
+//   ④ 判定挪到后台之后：到点时判定还在读盘就先等它落定；等到上限仍不落定按读不动放行（fail-open），迟到的结论作废
 // 不测什么 + 为什么：① CLI 会接上哪条链的预测在 tests/unit/resume-anchor.test.mjs——它建模的是上游行为，
 //   夹具出自零 token 真 CLI 实测，不是本仓红线 ② 真 server 组装根的接线（openResumeInstance 算结论、
 //   user:message 过闸、拒收 ack 的键集）属 S2，见 tests/invariants/server/resume-divergence.test.mjs ③ 面板与分叉后
@@ -12,7 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { gateResumeDivergence, RESUME_DIVERGENT } from '../../app/src/sessions/resume-anchor.js';
+import { gateResumeDivergence, RESUME_DIVERGENT, startResumeDivergence, awaitResumeDivergence } from '../../app/src/sessions/resume-anchor.js';
 import { presentOnlineSendAck, presentOfflineResendAck } from '../../app/public/js/logic/outbox-send.js';
 import { createAutoContinue } from '../../app/src/server/auto-continue.js';
 import { AUTO_CONTINUE_JITTER_MIN_MS } from '../../app/src/agent/quota-auto-continue.js';
@@ -77,7 +78,7 @@ const QUOTA = { status: 'rejected', resetsAt: RESET_S, rateLimitType: 'five_hour
 const wallEntry = { type: 'assistant', uuid: 'wall-1', isApiErrorMessage: true, error: 'rate_limit', apiErrorStatus: 429, quotaLimits: QUOTA, entrypoint: 'sdk-ts', isSidechain: false, message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: "You've hit your session limit · resets 3pm" }] } };
 const human = { type: 'user', uuid: 'u-1', entrypoint: 'sdk-ts', isSidechain: false, message: { role: 'user', content: '跑个长任务' } };
 
-function makeScheduler({ live = true, divergence = DIVERGENCE, states = async () => new Map() } = {}) {
+function makeScheduler({ live = true, divergence = DIVERGENCE, verdict = null, states = async () => new Map() } = {}) {
   let now = T0;
   const sent = [];
   const inst = {
@@ -85,6 +86,7 @@ function makeScheduler({ live = true, divergence = DIVERGENCE, states = async ()
     async send(text, model, opts) { sent.push({ text, opts }); return true; },
     emitNotice() {},
   };
+  if (verdict) startResumeDivergence(inst, verdict); // 后台判定还在读盘（openResumeInstance 的回执已经回了）
   const ac = createAutoContinue({
     now: () => now,
     random: () => 0,
@@ -120,6 +122,27 @@ test('自动继续：resume 出来的实例带分叉结论 → 不代发，转 s
     assert.equal(row?.phase, 'stale');
     assert.equal(row?.reason, 'diverged');
   }
+});
+
+test('自动继续：到点时判定还在后台读盘 → 先等它落定；落定是分叉就不代发、转 stale(diverged)', async () => {
+  for (const live of [true, false]) {
+    const verdict = new Promise(resolve => setTimeout(resolve, 30, DIVERGENCE));
+    const { ac, sent, fireNow } = makeScheduler({ live, divergence: null, verdict });
+    await fireNow();
+    assert.equal(sent.length, 0, `${live ? '活实例' : '到点现 resume 的实例'}：抢在判定落定前代发，等于没有这道闸`);
+    assert.equal(ac.snapshot()[0]?.reason, 'diverged');
+  }
+});
+
+test('判定等到上限仍不落定 → 按读不动放行（fail-open），迟到的结论不再落到实例上', async () => {
+  const inst = { resumeDivergence: null };
+  let land;
+  startResumeDivergence(inst, new Promise(resolve => { land = resolve; }));
+  assert.equal(await awaitResumeDivergence(inst, { timeoutMs: 20 }), false, '等不到');
+  assert.equal(await awaitResumeDivergence(inst, { timeoutMs: 1_000 }), true, '作废之后不再等：下一条发送不该再干等一个上限');
+  land(DIVERGENCE);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(inst.resumeDivergence, null, '放行的那条已经接在 CLI 选的那支上，再拦下一条只会对着过去的分叉问人');
 });
 
 test('自动继续：用户在 diverged 横幅上点「继续」= 知情选了「仍然发送」→ 发，并清掉结论', async () => {

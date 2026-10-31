@@ -5,11 +5,11 @@
 // 「CLI 实测结果」是这里唯一的真相源：夹具改形态之前先回去用真 CLI 重跑一遍，别让夹具和实现一起漂。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, renameSync, writeFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { predictResumeAnchor, resumeDivergence, readResumeEntries } from '../../app/src/sessions/resume-anchor.js';
+import { predictResumeAnchor, resumeDivergence, readResumeEntries, snapshotResumeTranscript } from '../../app/src/sessions/resume-anchor.js';
 import { getProjectDir } from '../../app/src/sessions/history.js';
 
 let clock = 0;
@@ -218,6 +218,61 @@ test('readResumeEntries：命令回显在精简后仍认得出（只留正文开
   const { base } = writeTranscript(full.map(e => JSON.stringify(e)));
   const slim = await readResumeEntries(CWD, SID, { baseDir: base });
   assert.equal(resumeDivergence(slim)?.newestUuid, 'a-2');
+});
+
+// JSON.stringify 原样写 U+2028 / U+2029，readline 却当换行，按它读这一条会整条丢掉（同 history-messages 那条）
+test('readResumeEntries：正文含 U+2028 / U+2029 的条目照常读回，判定与全量解析相同', async () => {
+  const full = [
+    ...terminalTurn(),
+    U('u-2', 's-2', 'sdk-ts', 'phone question'),
+    S('s-3', 's-2', 'cli', 'away_summary'),
+    AT('at-2', 'u-2', 'sdk-ts'),
+    A('a-2', 'at-2', 'sdk-ts', '甲 乙 丙'),
+    S('s-4', 's-3', 'cli', 'informational', { level: 'warning' }),
+  ];
+  const { base } = writeTranscript(full.map(e => JSON.stringify(e)));
+  const slim = await readResumeEntries(CWD, SID, { baseDir: base });
+  assert.ok(slim.some(e => e.uuid === 'a-2'), '手机那条回答没读回来');
+  assert.deepEqual(resumeDivergence(slim), resumeDivergence(full));
+});
+
+// ── 判定在后台读（2026-10-31）：只认 spawn 前那一刻的字节 ──
+test('readResumeEntries upTo：只读快照那一刻的字节，之后追加的行（新 CLI resume 后自己重贴的 last-prompt）不算', async () => {
+  const before = [...awayShape(), LP('a-2'), LP('s-4')];
+  const { base, file } = writeTranscript(before.map(e => JSON.stringify(e)));
+  const snap = await snapshotResumeTranscript(CWD, SID, { baseDir: base });
+  appendFileSync(file, `\n${JSON.stringify(LP('a-2'))}`);
+  assert.ok(resumeDivergence(before), '前提：快照那一刻要报');
+  assert.equal(resumeDivergence(await readResumeEntries(CWD, SID, { baseDir: base })), null,
+    '对照：追加的那行读进去，分叉就看不见了——所以必须截在快照处');
+  assert.deepEqual(resumeDivergence(await readResumeEntries(CWD, SID, { baseDir: base, upTo: snap })), resumeDivergence(before));
+});
+
+test('readResumeEntries upTo：快照之后文件变小，或被换成另一个文件（inode 变了）→ 空数组，按读不动处理', async () => {
+  const lines = [...awayShape(), LP('a-2'), LP('s-4')].map(e => JSON.stringify(e));
+  const shrunk = writeTranscript(lines);
+  const snapShrunk = await snapshotResumeTranscript(CWD, SID, { baseDir: shrunk.base });
+  writeFileSync(shrunk.file, lines.slice(0, -1).join('\n'));
+  assert.deepEqual(await readResumeEntries(CWD, SID, { baseDir: shrunk.base, upTo: snapShrunk }), []);
+
+  const replaced = writeTranscript(lines);
+  const snapReplaced = await snapshotResumeTranscript(CWD, SID, { baseDir: replaced.base });
+  // 先写新文件再改名盖过去：新旧两个文件同时存在过，inode 必然不同（删了再建，文件系统可能复用同一个 inode）
+  writeFileSync(`${replaced.file}.new`, [...lines, JSON.stringify(LP('s-4'))].join('\n'));
+  renameSync(`${replaced.file}.new`, replaced.file);
+  assert.deepEqual(await readResumeEntries(CWD, SID, { baseDir: replaced.base, upTo: snapReplaced }), []);
+  assert.ok(resumeDivergence(await readResumeEntries(CWD, SID, { baseDir: replaced.base })), '对照：不带快照照常读得出');
+});
+
+test('snapshotResumeTranscript：普通文件给 { size, ino }；不存在 / 非法 id / FIFO → null', async () => {
+  const { base, file } = writeTranscript(['{"type":"user"}']);
+  const snap = await snapshotResumeTranscript(CWD, SID, { baseDir: base });
+  assert.deepEqual(Object.keys(snap ?? {}).sort(), ['ino', 'size']);
+  assert.equal(snap.size, Buffer.byteLength('{"type":"user"}'));
+  assert.equal(await snapshotResumeTranscript(CWD, 'no-such-session', { baseDir: base }), null);
+  assert.equal(await snapshotResumeTranscript(CWD, '../escape', { baseDir: base }), null);
+  rmSync(file);
+  if (spawnSync('mkfifo', [file]).status === 0) assert.equal(await snapshotResumeTranscript(CWD, SID, { baseDir: base }), null);
 });
 
 test('readResumeEntries：文件不存在 / 非法 id / FIFO → 空数组（调用方据此不报），不抛、不挂死', async () => {

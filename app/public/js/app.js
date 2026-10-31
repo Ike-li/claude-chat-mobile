@@ -113,6 +113,7 @@ import {
   clientErrorGateStep,
   guessImageMime,
   nextHistoryRenderChunk,
+  historyRenderSplit,
   findHistoryClaimForPending,
   resolveUnreadAnchorIndex,
   shouldAckUnreadOnScroll,
@@ -5848,7 +5849,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         foregroundTasks.render();
         flushHeldHistoryAppends(gateHandle);
         onDone?.();
-      }, { fullReload: true, turnRunningAtRequest, noticeBar, superseded: () => historyLoadGate.superseded(gateHandle), perfOpen });
+      }, { fullReload: true, splitRecent: true, turnRunningAtRequest, noticeBar, superseded: () => historyLoadGate.superseded(gateHandle), perfOpen });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
       seenDiskLenBySession.set(sessionId, msgs.length);
@@ -5858,6 +5859,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // 长会话切入分块渲染：块大小/让出间隔是经验起点，真机 DevTools Performance 面板校准。
   const HISTORY_RENDER_CHUNK_SIZE = 40; // 真机 DevTools Performance 校准起点；2000 条 ≈ 50 块
   const HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS = 200; // 明显短于下方高亮用的 2000ms——渲染气泡在关键路径上，高亮是锦上添花
+  const HISTORY_RENDER_RECENT_MIN = 60; // 先画、先插的最近一段至少这么多条，约两屏；切点要落在回合边界上，见 historyRenderSplit
   function scheduleIdle(fn, opts) {
     if (typeof requestIdleCallback !== 'undefined') requestIdleCallback(fn, opts);
     else setTimeout(fn, 0);
@@ -5997,11 +5999,16 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // noticeBar：loadHistory 刚插的那条「加载了 N 条」提示条。渲染半路停下时，在它上面给「重新加载」（offerHistoryReload）。
   // superseded：loadHistory 传入，这一轮之后同实例又发起了加载时为真（见 processChunk 开头）。
   // perfOpen：loadHistory 传入，这一轮加载所属那次打开会话的埋点凭据，插入和高亮凭它记。
-  function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false, turnRunningAtRequest = false, noticeBar = null, superseded = null, perfOpen = null } = {}) {
+  // splitRecent：loadHistory 传入。长会话先画最近一段、插入并落底，更早的在空闲里画完再插到它前面（historyRenderSplit）。
+  //   只在这条路上切：历史闸扣着 history_append，两段都落地（onDone）才放行，中间不会有追平插进来、也不会被整窗替换清屏。
+  function renderHistoryBubbles(msgs, onDone, { fullReload = false, splitRecent = false, cardsOnly = false, turnRunningAtRequest = false, noticeBar = null, superseded = null, perfOpen = null } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
-    // 提示条下面的历史落地（frag 插入）时才摘掉；bindView 看到它就不把这份半成品存进 sessionDomCache（#307）
+    // 提示条下面的历史全部落地时才摘掉；bindView 看到它就不把这份半成品存进 sessionDomCache（#307）。
+    // 切成两段时，最近一段插进去之后它还挂着，更早的那段也插进去才摘
     noticeBar?.setAttribute('data-history-pending', '1');
-    const frag = document.createDocumentFragment();
+    // cut > 0：先画 msgs[cut..]，再画 msgs[0..cut)；cut = 0 照旧一次画完
+    const { cut, seedPrevTs } = splitRecent ? historyRenderSplit(msgs, HISTORY_RENDER_RECENT_MIN) : { cut: 0, seedPrevTs: null };
+    let frag = document.createDocumentFragment();
     // 历史里的图片按需取，坐标在【渲染时】快照（同子代理卡的 flowSid）：格子会留在 DOM 里跨越会话切换，
     // 进入可视区时再读会按别的会话去取。cwd 走驾驶轴，与 loadHistory 的 session:history 同一个值。
     const imageScope = { sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId), instanceId: displayedInstanceId };
@@ -6010,8 +6017,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // fragment 是线性构建的：基准 seed 一次之后顺着往下带，不必每条反向扫。
     //  · 全量加载：null —— 这批就是整个会话的开头。
     //  · 增量追平：#messages 尾巴的戳 —— 接上前一批。
-    const stampIntoFrag = messageTimeline.beginFragment(frag, {
-      seedPrevTs: fullReload ? null : messageTimeline.lastTimestampIn(messagesEl),
+    //  · 先画的最近一段：切点前最后一条气泡的戳，日期行和一次画完时一样；更早那段换 frag 时另起，基准 null。
+    let stampIntoFrag = messageTimeline.beginFragment(frag, {
+      seedPrevTs: cut ? seedPrevTs : fullReload ? null : messageTimeline.lastTimestampIn(messagesEl),
     });
     const codeBlocks = [];
     // histToolCards/histSubCards 是模块级持久 Map（跨 tick 配对，见其声明处注释），本函数只读写不新建。
@@ -6283,7 +6291,30 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // loadHistory（同样因为半成品不进缓存），旧 frag 若仍落地会与新一轮历史叠加成重复气泡。跨 instance 一律中断，由新 bindView 负责。
     const targetInstanceId = displayedInstanceId;
     const targetSessionId = displayedSessionId;
-    let i = 0;
+    // 切成两段时先画 [cut, n)、再画 [0, cut)：i 是下一条的下标，stop 是这一段的上界
+    let i = cut;
+    let stop = msgs.length;
+    let recentFirst = null; // 最近一段插进去之后它的第一个节点；非 null = 正在画更早那段，插在它前面、拿它量补偿
+    const renderedCount = () => (recentFirst ? msgs.length - cut + i : i - cut);
+    // 全量重载完还没配上 tool_result 的工具卡：会话此刻没在跑（没有在途轮、也不是终端在驾驶），结果就不会再来了。
+    // 重启后过期的审批留下的正是这种 tool_use——画成「进行中」会让那一行永远转着（验收 O30）。标中性终态「已中止」。
+    // 两段时每段插入后各标一次（配对不跨切点，最近一段里没配上的，更早那段也配不上），在不在跑按第一次插入时的算
+    let abortUnpaired = null;
+    const markUnpairedAborted = () => {
+      if (abortUnpaired === null) abortUnpaired = fullReload && !cardsOnly && !_turnRunning && !turnRunningAtRequest && !mirrorReadonlySid;
+      if (!abortUnpaired) return;
+      for (const card of histToolCards.values()) setStatusIcon(card.querySelector('.t-status'), 'aborted');
+    };
+    // 更早那段插到最近一段前面，上方多出一大截会把视口顶走：按 recentFirst 插入前后的位置差把 scrollTop 补回去。
+    // 量的是实际位移：浏览器自己做了滚动锚定（Chrome 的 overflow-anchor）时差值是 0，不会补两遍；Safari 不锚定，全靠这一下。
+    // 插入和补偿在同一个任务里，中间不出帧，看不到跳动。引起的 scroll 事件算程序滚动，不当成用户看到了未读（见 scrollBottom）
+    const insertEarlier = () => {
+      const before = recentFirst.getBoundingClientRect().top;
+      programmaticScrollUntil = Date.now() + PROGRAMMATIC_SCROLL_WINDOW_MS;
+      messagesEl.insertBefore(frag, recentFirst);
+      const shift = recentFirst.getBoundingClientRect().top - before;
+      if (shift) messagesEl.scrollTop += shift;
+    };
     function processChunk() {
       // ★ 中断也必须通知收尾。onDone 是 flushHeldHistoryAppends 的唯一调用点，早年这里直接 return
       // 把它一并跳过了：闸门既不 release 也不 abort，永久开着，此后该实例每条 history_append 都被
@@ -6291,7 +6322,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // onHistoryAppend 的 viewingInstanceId 守卫正常丢弃，所以只关闸、不会污染新视图。
       if (displayedInstanceId !== targetInstanceId) {
         // #307 观测：这一趟画的东西整段作废，由新视图重新加载（见上方注释）
-        logClientEvent('recv', `[HISTORY_RENDER] 渲染途中实例变了，放弃本次历史渲染 session=${targetSessionId} instance=${targetInstanceId}→${displayedInstanceId} 已渲染 ${i}/${msgs.length}`);
+        logClientEvent('recv', `[HISTORY_RENDER] 渲染途中实例变了，放弃本次历史渲染 session=${targetSessionId} instance=${targetInstanceId}→${displayedInstanceId} 已渲染 ${renderedCount()}/${msgs.length}`);
         if (displayedSessionId === targetSessionId) offerHistoryReload(noticeBar);
         onDone?.();
         return;
@@ -6300,14 +6331,14 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 不再 renderOne（它会写进新一轮刚清空的配对表）、不插 frag。也不调 onDone：闸门已归新一轮，
       // 旧 handle 的 release 本来就拿不到东西，crashNotices.restore 反而会在新一轮半路多补一份（#354 review）
       if (superseded?.()) return;
-      const { end, done } = nextHistoryRenderChunk({ processed: i, total: msgs.length, chunkSize: HISTORY_RENDER_CHUNK_SIZE });
+      const { end, done } = nextHistoryRenderChunk({ processed: i, total: stop, chunkSize: HISTORY_RENDER_CHUNK_SIZE });
       for (; i < end; i++) {
         try {
           renderOne(msgs[i]);
         } catch (error) {
           // #307 观测：分块链在这里断了，后面的块不再调度、frag 不插入、onDone 不调（历史闸要等看门狗）。
           // 根因未修：照旧抛出去（全局错误上报照常记「前端错误」），只多记一条带坐标的日志、给原地重新加载。
-          logClientEvent('error', `[HISTORY_RENDER] 渲染第 ${i + 1}/${msgs.length} 条历史时抛错，后面的都没画出来 session=${targetSessionId} instance=${targetInstanceId} 当前=${displayedInstanceId} 已渲染 ${i}/${msgs.length}：${error?.message || error}`);
+          logClientEvent('error', `[HISTORY_RENDER] 渲染第 ${i + 1}/${msgs.length} 条历史时抛错，后面的都没画出来 session=${targetSessionId} instance=${targetInstanceId} 当前=${displayedInstanceId} 已渲染 ${renderedCount()}/${msgs.length}：${error?.message || error}`);
           if (displayedSessionId === targetSessionId) offerHistoryReload(noticeBar);
           throw error;
         }
@@ -6316,23 +6347,37 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         scheduleIdle(processChunk, { timeout: HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS });
         return;
       }
-      if (!cardsOnly) leaveStartScreen();
-      messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow（分块只让解析让出主线程，插入仍是一次性）
-      noticeBar?.removeAttribute('data-history-pending');
-      // cardsOnly 下 frag 恒空：调用方已过滤成「只有 parentToolUseId 的条目」，appendNode 全部路由进卡
-      // 历史已落地：把 clearView 保住的未确认气泡与刚回来的历史收敛成一条（见函数注释）。
-      // 必须排在 scrollBottom 之前——它可能移动/删除气泡，位置定下来再落底才不会滚错。
-      if (fullReload) settleCarriedPendingBubbles(msgs);
-      // 全量重载完还没配上 tool_result 的工具卡：会话此刻没在跑（没有在途轮、也不是终端在驾驶），结果就不会再来了。
-      // 重启后过期的审批留下的正是这种 tool_use——画成「进行中」会让那一行永远转着（验收 O30）。标中性终态「已中止」。
-      if (fullReload && !cardsOnly && !_turnRunning && !turnRunningAtRequest && !mirrorReadonlySid) {
-        for (const card of histToolCards.values()) setStatusIcon(card.querySelector('.t-status'), 'aborted');
-      }
-      if (!cardsOnly) scrollBottom(true);
       // 打开会话埋点：只有 loadHistory 的整段加载带凭据（增量追平、镜像整窗替换都不算）；
       // 凭据不是当前这次打开的（排在空闲里的高亮跑到时，同一个会话可能已经又开了一次），perfTrace 自己不记
-      // 落底读了 scrollHeight，插入引起的排版已经算进这一段
-      if (perfOpen) perfTrace.openStep(perfOpen, 'insert');
+      if (recentFirst) {
+        insertEarlier();
+        markUnpairedAborted();
+        // 补偿读了位置，插入引起的排版已经算进这一段
+        if (perfOpen) perfTrace.openStep(perfOpen, 'backfill', { count: cut });
+      } else {
+        if (!cardsOnly) leaveStartScreen();
+        const first = frag.firstChild;
+        messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow（分块只让解析让出主线程，插入仍是一次性）
+        // cardsOnly 下 frag 恒空：调用方已过滤成「只有 parentToolUseId 的条目」，appendNode 全部路由进卡
+        // 历史已落地：把 clearView 保住的未确认气泡与刚回来的历史收敛成一条（见函数注释）。
+        // 必须排在 scrollBottom 之前——它可能移动/删除气泡，位置定下来再落底才不会滚错。
+        // 切成两段时在最近一段插入后就做：刚发出的那条只会在最近一段里
+        if (fullReload) settleCarriedPendingBubbles(msgs);
+        markUnpairedAborted();
+        if (!cardsOnly) scrollBottom(true);
+        // 落底读了 scrollHeight，插入引起的排版已经算进这一段
+        if (perfOpen) perfTrace.openStep(perfOpen, 'insert', cut ? { count: msgs.length - cut } : undefined);
+        if (cut) {
+          recentFirst = first;
+          frag = document.createDocumentFragment();
+          stampIntoFrag = messageTimeline.beginFragment(frag, { seedPrevTs: null });
+          i = 0;
+          stop = cut;
+          scheduleIdle(processChunk, { timeout: HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS });
+          return;
+        }
+      }
+      noticeBar?.removeAttribute('data-history-pending');
       if (codeBlocks.length) {
         const doHighlight = () => {
           const t0 = performance.now();

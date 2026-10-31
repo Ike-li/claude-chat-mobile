@@ -70,3 +70,59 @@ test('同一条用例内的延迟事件照常送达（闸只认代数变化，�
   await new Promise(r => setTimeout(r, 100));
   assert.deepEqual(received.sort(), ['broadcast', 'unicast']);
 });
+
+// E2E 的性能对照（tests/e2e 与桌面 harness）跑在 mock 上：mock 的版本戳范围或缓存头与真 server 不同，
+// 量出来的热启动就不是生产会发生的那条路径（2a 之前 mock 的 vendor 一直在 304 重验，而真 server 早就是
+// immutable）。这里拿真实 app/public 对一遍：版本戳逐字相同，缓存头判据相同。
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import express from 'express';
+import { configureHttpShell } from '../../app/src/server/http.js';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+test('mock 的版本戳与缓存头判据和真 server 一致', async t => {
+  const real = configureHttpShell({
+    app: express(), projectRoot: REPO_ROOT, strategy: { isEnabled: () => false }, hotReloadJs: false,
+  });
+  const { httpServer, assetVersion } = createMockTransport({ buildNonce: 'cache-parity' });
+  assert.equal(assetVersion, real.assetVersion, 'mock 与真 server 的版本戳范围不同');
+
+  await new Promise(resolve => httpServer.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { httpServer.closeAllConnections(); httpServer.close(resolve); }));
+  const base = `http://127.0.0.1:${httpServer.address().port}`;
+  const html = await (await fetch(`${base}/`)).text();
+  const vendorRef = html.match(/\/vendor\/[\w./-]+\.js\?v=([0-9a-f]{8})/);
+  assert.ok(vendorRef, 'mock 的 index 没给 /vendor/ 引用戳版本');
+  assert.equal(vendorRef[1], assetVersion);
+
+  const IMMUTABLE = 'public, max-age=31536000, immutable';
+  for (const path of ['/js/app.js', '/css/tw.css', vendorRef[0].split('?')[0]]) {
+    assert.equal((await fetch(`${base}${path}?v=${assetVersion}`)).headers.get('cache-control'), IMMUTABLE, path);
+    assert.equal((await fetch(`${base}${path}`)).headers.get('cache-control'), 'no-cache', path);
+  }
+  const css = await (await fetch(`${base}/css/app.css?v=${assetVersion}`)).text();
+  const fontRefs = css.match(/url\(['"]?\/vendor\/[^)]*\)/g) || [];
+  assert.ok(fontRefs.length, 'app.css 里没找到 url(/vendor/…)，这条断言失去对象');
+  for (const ref of fontRefs) assert.ok(ref.includes(`?v=${assetVersion}`), `mock 发的 app.css 里 ${ref} 没戳当前版本`);
+  const missing = await fetch(`${base}/js/never-existed.js?v=${assetVersion}`);
+  assert.equal(missing.status, 404);
+  assert.notEqual(missing.headers.get('cache-control'), IMMUTABLE);
+});
+
+// 冷启动的对照同样跑在 mock 上：mock 不发 modulepreload，量出来的就还是一波接一波的旧瀑布。
+test('mock 的 index 预载的模块与真 server 逐字相同', async t => {
+  const realApp = express();
+  configureHttpShell({ app: realApp, projectRoot: REPO_ROOT, strategy: { isEnabled: () => false }, hotReloadJs: false });
+  const realServer = await new Promise(resolve => { const s = realApp.listen(0, '127.0.0.1', () => resolve(s)); });
+  const { httpServer } = createMockTransport({ buildNonce: 'preload-parity' });
+  await new Promise(resolve => httpServer.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { realServer.closeAllConnections(); realServer.close(); httpServer.closeAllConnections(); httpServer.close(resolve); }));
+  const preloads = async server => {
+    const html = await (await fetch(`http://127.0.0.1:${server.address().port}/`)).text();
+    return [...html.matchAll(/<link rel="modulepreload" href="([^"]+)">/g)].map(m => m[1]);
+  };
+  const real = await preloads(realServer);
+  assert.ok(real.length > 50, `真 server 只预载了 ${real.length} 个模块，app/public 的模块图不该这么小`);
+  assert.deepEqual(await preloads(httpServer), real);
+});

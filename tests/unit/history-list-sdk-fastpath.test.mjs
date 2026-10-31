@@ -15,7 +15,7 @@
 //
 // 换成假 HOME 之后，就算 getProjectDir 再塌成 ''，删的也只是本文件自己 mkdtemp 出来的空壳目录。
 // 下面那个 rmProjectDir 护栏仍然保留：假 HOME 是"炸不到人"，护栏是"根本不许炸"，两层不冲突。
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, utimesSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, utimesSync, appendFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 
@@ -454,6 +454,141 @@ test('SDK 快路径: 编码撞名时只留 transcript 记的是本 cwd 的会话
     const { sessions, total } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
     assert.deepEqual(sessions.map(s => s.id), ['mine'], '别的文件夹的会话混进了列表，点开就在这里 resume');
     assert.equal(total, 1);
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+// ── 列表缓存：按目录内容判失效，不按年龄（2026-10-31 性能计划 2d）──────────────────────────
+// 抽屉每 12s 对每个工作区重验一次 session:list。缓存原先按 4s 年龄失效，于是每次重验都整目录重扫
+// （实测本机 13 个工作区一轮约 350ms），而这期间绝大多数目录一个字节都没变。反过来，4s 内又挡住了
+// 刚落盘的新消息、新会话。下面四条：没变就不重扫；jsonl 名单、大小、mtime 一变，或只有旁路标题变，
+// 下一次列表就是新的。后三条用真 SDK listSessions（不 stub），让「SDK 读了哪些文件」由 SDK 自己作答。
+
+// 真 CLI transcript 行的最小形态：真 SDK 要 uuid / sessionId / 主链字段才认它是一条会话
+const cliLine = (sessionId, type, text, timestamp) => ({
+  type, uuid: `${sessionId}-${type}-${timestamp}`, parentUuid: null, isSidechain: false, sessionId, timestamp,
+  message: type === 'user' ? { role: 'user', content: text } : { role: 'assistant', content: [{ type: 'text', text }] },
+});
+
+test('列表缓存: 目录没变时，过了 12s 的重验也不重扫', async (t) => {
+  const cwd = '/cache/idle';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  writeJSONL(dir, 'idle-1', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
+  let scans = 0;
+  __setSdkListSessionsForTest(async () => { scans++; return [{ sessionId: 'idle-1', summary: '闲置', lastModified: 1000 }]; });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  try {
+    const first = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    t.mock.timers.tick(13_000);
+    const again = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(scans, 1, '目录一个字节没变，12s 后的重验又整目录重扫了一遍');
+    assert.deepEqual(again, first);
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+test('列表缓存: 会话里刚写进一条消息，下一次列表就是新的活动时间', async () => {
+  const cwd = '/cache/append';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const sid = '0a0a0a0a-1111-4222-8333-444444444444';
+  const t0 = '2026-10-31T01:00:00.000Z';
+  const t1 = '2026-10-31T01:05:00.000Z';
+  writeJSONL(dir, sid, [cliLine(sid, 'user', '首条', t0)]);
+  try {
+    const before = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(before.sessions[0]?.lastUsedAt, Date.parse(t0), '夹具前提：真 SDK 列出了这条会话');
+    appendFileSync(join(dir, `${sid}.jsonl`), `${JSON.stringify(cliLine(sid, 'assistant', '回复', t1))}\n`);
+    const after = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(after.sessions[0]?.lastUsedAt, Date.parse(t1), '文件已经追加了新消息，列表还是缓存里的旧活动时间');
+  } finally {
+    rmProjectDir(dir);
+  }
+});
+
+test('列表缓存: 终端里新开的会话，下一次列表就出现', async () => {
+  const cwd = '/cache/new-session';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const a = '0b0b0b0b-1111-4222-8333-444444444444';
+  const b = '0c0c0c0c-1111-4222-8333-444444444444';
+  writeJSONL(dir, a, [cliLine(a, 'user', '旧会话', '2026-10-31T01:00:00.000Z')]);
+  try {
+    const before = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.deepEqual(before.sessions.map(s => s.id), [a]);
+    writeJSONL(dir, b, [cliLine(b, 'user', '新会话', '2026-10-31T01:05:00.000Z')]);
+    const after = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.deepEqual(after.sessions.map(s => s.id), [b, a], '盘上已经有了新会话，列表还是缓存里的旧名单');
+  } finally {
+    rmProjectDir(dir);
+  }
+});
+
+// 桌面端改名只写 `<项目目录>/<会话 id>/custom-title.json`，jsonl 一个字节不动；SDK 在 jsonl 尾部没有
+// custom-title 时读它当标题（本机有 91 个这样的旁路文件）。只看 jsonl 的缓存会把旧标题一直留到别的会话写盘。
+test('列表缓存: 桌面端只改了旁路标题，下一次列表就是新标题', async () => {
+  const cwd = '/cache/sidecar-title';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const sid = '0d0d0d0d-1111-4222-8333-444444444444';
+  writeJSONL(dir, sid, [cliLine(sid, 'user', '首条提问', '2026-10-31T01:00:00.000Z')]);
+  try {
+    const before = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(before.sessions[0]?.title, '首条提问', '夹具前提：真 SDK 列出了这条会话');
+    mkdirSync(join(dir, sid), { recursive: true });
+    writeFileSync(join(dir, sid, 'custom-title.json'), JSON.stringify({ customTitle: '桌面端改的名' }));
+    const after = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(after.sessions[0]?.title, '桌面端改的名', '旁路标题已经改了，列表还是缓存里的旧标题');
+  } finally {
+    rmProjectDir(dir);
+  }
+});
+
+// SDK 抛错时回落的是降级结果：自造扫盘不读旁路标题，搜索也没有 SDK summary 当匹配键。这种结果不能
+// 按目录指纹一直存着——SDK 恢复了而目录没变，就会一直给降级结果（PR #490 Codex review）。
+test('列表缓存: SDK 失败一次回落扫盘，过几秒 SDK 恢复了，目录没变也拿到 SDK 的结果', async (t) => {
+  const cwd = '/cache/degraded-browse';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const sid = '0e0e0e0e-1111-4222-8333-444444444444';
+  writeJSONL(dir, sid, [cliLine(sid, 'user', '首条提问', '2026-10-31T01:00:00.000Z')]);
+  let sdkDown = true;
+  __setSdkListSessionsForTest(async () => {
+    if (sdkDown) throw new Error('SDK boom');
+    return [{ sessionId: sid, summary: '桌面端改的名', lastModified: 1000 }];
+  });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  try {
+    const degraded = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(degraded.sessions[0]?.title, '首条提问', '夹具前提：SDK 抛错时走了回落扫盘');
+    sdkDown = false;
+    t.mock.timers.tick(5_000);
+    const recovered = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(recovered.sessions[0]?.title, '桌面端改的名', 'SDK 已经恢复，列表还是 SDK 失败那次的降级结果');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+test('列表缓存: 搜索时 SDK 失败一次，过几秒 SDK 恢复了，同一个词能按 SDK 标题搜到', async (t) => {
+  const cwd = '/cache/degraded-search';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const sid = '0f0f0f0f-1111-4222-8333-444444444444';
+  writeJSONL(dir, sid, [cliLine(sid, 'user', '首条提问', '2026-10-31T01:00:00.000Z')]);
+  let sdkDown = true;
+  __setSdkListSessionsForTest(async () => {
+    if (sdkDown) throw new Error('SDK boom');
+    return [{ sessionId: sid, summary: '桌面端改的名', lastModified: 1000 }];
+  });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  try {
+    const degraded = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5, query: '桌面端' });
+    assert.deepEqual(degraded.sessions.map(s => s.id), [], '夹具前提：没有 SDK summary 时这个词搜不到');
+    sdkDown = false;
+    t.mock.timers.tick(5_000);
+    const recovered = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5, query: '桌面端' });
+    assert.deepEqual(recovered.sessions.map(s => s.id), [sid], 'SDK 已经恢复，同一个词还是 SDK 失败那次的空结果');
   } finally {
     __setSdkListSessionsForTest(undefined);
     rmProjectDir(dir);

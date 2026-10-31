@@ -58,6 +58,9 @@ export const EXTRA_RUNTIME_FILES = Object.freeze([
  * 示例代码——实测 app/src/shared/log-time.js 的头注释写着「入口在 app/server.js 的动态 import('app.js') 之前安装」，
  * 裸匹配把 'app.js' 当成了一个未声明的 npm 包。判据收窄成「跳过 trim 后以 // 、* 、/* 开头的行」：
  * 真实的 import 语句不会以这三者开头，而这三者覆盖了行注释与块注释的续行。
+ *
+ * 【静态那条为什么也排除反引号】`[^'"]*?` 会跨行：`export function` 之后一路没有引号，就会一直吃到函数体里
+ * 模板字符串中的 `from '…'`（app/src/server/http.js 的 import 改写），把替换模板当成包名。import 子句里不会有反引号。
  */
 function extractSpecs(src) {
   const code = src
@@ -68,7 +71,7 @@ function extractSpecs(src) {
     })
     .join('\n');
   return [
-    ...code.matchAll(/^\s*(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]/gm),
+    ...code.matchAll(/^\s*(?:import|export)[^'"`]*?from\s*['"]([^'"]+)['"]/gm),
     ...code.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g),
   ].map((m) => m[1]);
 }

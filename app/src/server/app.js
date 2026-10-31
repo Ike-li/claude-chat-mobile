@@ -82,7 +82,10 @@ import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, 
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, listTerminalSessionStatesOrNull, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, hasTerminalSessionOverlapping, findBlockingLiveAgent, readSessionRegistry } from '../sessions/session-registry.js';
-import { resumeDivergence, readResumeEntries, gateResumeDivergence } from '../sessions/resume-anchor.js';
+import {
+  resumeDivergence, readResumeEntries, gateResumeDivergence,
+  snapshotResumeTranscript, startResumeDivergence, awaitResumeDivergence,
+} from '../sessions/resume-anchor.js';
 import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
@@ -2567,7 +2570,7 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
   const t0 = Date.now();
   // 各段耗时（2026-10-31 性能改造 Stage 0）：挂到实例上，由 session:switch 回执带给前端写进打开会话那行 [PERF]
   const timing = {};
-  let transcriptMode = null, transcriptModel = null, divergence = null;
+  let transcriptMode = null, transcriptModel = null, snap = null;
   if (resumeId) {
     await instanceManager.waitForSessionExits(resumeId, RESUME_PRIOR_EXIT_WAIT_MS);
     timing.priorExitMs = Date.now() - t0;
@@ -2579,19 +2582,18 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
     timing.resolveMs = tParallel - t0 - timing.priorExitMs;
     // 并发的几路各记各的完成时刻（距并发起点），按完成先后落进 timing：最后一个就是这一段在等的那路
     const lap = key => () => { timing[key] = Date.now() - tParallel; };
-    // 读末条权限档 / 读末条模型 / L3 CLI settings 兜底 / 分叉判定四路互无数据依赖，从入口就并发。
-    const [[mode, model], , div] = await Promise.all([
+    // 读末条权限档 / 读末条模型 / L3 CLI settings 兜底三路互无数据依赖，从入口就并发。
+    const [[mode, model]] = await Promise.all([
       Promise.all([readLastPermissionMode(resumeId, cwd), readLastAssistantModel(resumeId, cwd)]).finally(lap('readsMs')),
       Promise.race([
         ensureCliDefaults(cwd),
         new Promise(resolve => setTimeout(resolve, CLI_DEFAULTS_RESUME_BUDGET_MS)),
       ]).finally(lap('defaultsMs')),
-      // 这次续接会不会丢掉最新那段对话（SESSION-04，判据见 sessions/resume-anchor.js）。读不动就当没有。
-      readResumeEntries(cwd, resumeId).then(resumeDivergence).catch(() => null).finally(lap('divergenceMs')),
     ]);
     transcriptMode = mode;
     transcriptModel = model;
-    divergence = div;
+    // 新 CLI 读的就是 spawn 前这些字节；它 resume 后会自己重贴 last-prompt，分叉判定只认这一段（见下）
+    snap = await snapshotResumeTranscript(cwd, resumeId);
   } else {
     // FRESH 也要等 L3 落定：worktreeGatewayEnv 只在 AgentSession 构造时读一次，冷缓存下不等的话
     // 该会话整个生命周期都拿不到 worktree 网关隔离（正是 503 的原场景：重启后首次切到 worktree 就发消息）。
@@ -2602,10 +2604,16 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
     ]);
   }
   const instance = openInstance({ cwd, resumeId, transcriptMode, transcriptModel, ...extra });
-  if (divergence) {
-    instance.resumeDivergence = divergence; // 发送闸（user:message）与自动继续据它拒发
-    interactionLog.addSessionLog(resumeId, 'sys_info',
-      `[SYS] 续接分叉：最新对话 ${divergence.newestUuid}（${divergence.newestEntrypoint}）不在 CLI 会接上的链上，${divergence.droppedCount} 条不进上下文；发送前先问用户`);
+  // 这次续接会不会丢掉最新那段对话（SESSION-04，判据见 sessions/resume-anchor.js）。要读整份 transcript，不挡回执：
+  // 后台判定，发送闸（user:message）与自动继续用结论前先等它落定。快照拿不到 = 读不动，不判。
+  if (snap) {
+    const tDiv = Date.now();
+    startResumeDivergence(instance, readResumeEntries(cwd, resumeId, { upTo: snap }).then(resumeDivergence).finally(() => {
+      diagLog.record(resumeId, 'resume', 'divergence', { ms: Date.now() - tDiv, bytes: snap.size });
+    }), divergence => {
+      interactionLog.addSessionLog(resumeId, 'sys_info',
+        `[SYS] 续接分叉：最新对话 ${divergence.newestUuid}（${divergence.newestEntrypoint}）不在 CLI 会接上的链上，${divergence.droppedCount} 条不进上下文；发送前先问用户`);
+    });
   }
   const ms = Date.now() - t0;
   diagLog.record(resumeId, 'resume', 'settled', { ms }); // Part C：resume 总耗时
@@ -3226,6 +3234,9 @@ registerSocketConnection(io, socket => {
       //（开着的旧终端在旧叶子下写过行、又比手机侧晚重贴 last-prompt）。静默发出去，模型就从那一支接上、忘了
       // 最新那段，回显却照样把它画出来。先拒收，由用户在面板上选「从最新那条分叉」或「仍然发送」。
       // 不 commit 去重 ID：同一 clientMessageId 带上确认重发要能成功。
+      if (!(await awaitResumeDivergence(a))) {
+        interactionLog.addSessionLog(a.logKey(), 'sys_info', '[SYS] 续接分叉：判定超时未落定，按读不动放行');
+      }
       const divergenceGate = gateResumeDivergence(a.resumeDivergence, payload?.ackDivergence);
       if (divergenceGate.action === 'reject') {
         interactionLog.addSessionLog(a.logKey(), 'sys_info', '[SYS] 续接分叉：发送前拒收，等用户选择分叉或仍然发送');
@@ -4461,6 +4472,12 @@ registerSocketConnection(io, socket => {
     const moreCount = showMoreCount({ hasMore, total, shown: list.length, nextLimit, pinnedCount: pinned.length });
     // readState 折进这个文件夹的「全部标为已读」水位（stateForRows）：没加载出来的旧会话靠这一步才算读过。
     const readStateRows = readState.stateForRows([...pageRows, ...pinnedRows, ...openRows].map(s => s.id), cwd);
+    // 列出来的会话下一步多半是点开，而 resume 要等这个 cwd 的 L3 settings（ensureCliDefaults：只读、按 cwd 缓存）。
+    // 冷缓存时它在 switch 的关键路径上现读，这里列表一回就后台预热，不等。scratch 根本身开不了实例、已删的 worktree
+    // 目录不在了（读不出 settings、也不缓存失败，每次刷列表都会再试一遍），都不预热。
+    const warmCwds = new Set([...pageRows, ...pinnedRows, ...openRows].filter(s => s.cwd && !s.worktreeGone).map(s => s.cwd));
+    if (!isNoFolderKey(obj.cwd)) warmCwds.add(cwd);
+    for (const c of warmCwds) ensureCliDefaults(c);
     ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, open: openRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, moreCount, total, readState: readStateRows });
   });
 
@@ -4555,7 +4572,8 @@ registerSocketConnection(io, socket => {
     pendingDeleteIds.delete(sessionId);
     // 必须【再失效一次】：上面那次 invalidate 发生在 sdkDeleteSession 之前，而真删要跑 git worktree list
     // 子进程、耗时可观。这段窗口里任何一次 session:list（另一台设备的 SWR revalidate、首页跨工作区聚合）
-    // 都可能把「仍含该会话」的扫盘结果重新写进 4s TTL 的 _listCache；pending 清掉后就会变成幽灵行。
+    // 都可能把「仍含该会话」的扫盘结果重新写进 _listCache；pending 清掉后就会变成幽灵行。（缓存按目录内容
+    // 指纹失效，文件删掉后下一次本来就会重扫；这一下是不依赖那条推理的兜底。）
     invalidateListCache(cwd);
     projectIndex.refresh(); // 子文件夹的最后一个会话被删了，这个项目就该从抽屉里消失
     autoContinue.onSessionGone(sessionId); // 会话都没了，到点不该再 resume 一个空壳去发

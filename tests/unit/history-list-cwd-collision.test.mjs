@@ -19,7 +19,7 @@ import { getProjectDir, listSessionsPage, listSessionsByIds, sessionFileExists }
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-hist-collide-')));
 test.after(() => rmSync(ROOT, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
 
-// 每个用例一套独立的 projects 根，避免列表的 TTL 缓存串场
+// 每个用例一套独立的 projects 根，避免列表缓存串场
 let seq = 0;
 function fixture(left, right) {
   const base = join(ROOT, `c${seq++}`);
