@@ -154,6 +154,8 @@ const CLAIMS = [
       const filters = /taskBackgrounded\.get\(doneTaskId\) === false/.test(src);
       return hasMap && filters ? '按 is_backgrounded 过滤' : '过滤已失效';
     }, expect: '按 is_backgrounded 过滤' },
+  { diagram: '12', shown: '17 道零 token 门禁',
+    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 17 },
 ];
 
 // ── 图还没说、但代码已经成立的事实。──────────────────────────────────
@@ -170,13 +172,11 @@ const CLAIMS = [
 // 四行（凭据 gitignore / 一次性环境守卫 / 容器配置隔离 自成一行），仍与 check 链逐项对应。
 // PINNED_REVISION 未动：那个字段只跟三张 architecture 图的重出走，手工改图 12 的文字不构成推进理由
 // （判据见上面 PINNED_REVISION 处的注释）。
-// 2026-10-31：16 → 17 道（新增 check-tailwind-css，守预编译的 tw.css 与源码同步）。
-// 按本文件上面那条约定从 CLAIMS 挪下来：图 12 的四处文字仍写着 16，代码侧先被守住。
-// 重出图之后把这条挪回 CLAIMS，`shown` 改成图上的新文字。
-const PENDING_CLAIMS = [
-  { diagram: '12', todo: 'check 链 16 → 17 道（新增 check-tailwind-css，排在 playwright 禁用写法之后）',
-    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 17 },
-];
+// 2026-10-31：16 → 17 道（新增 check-tailwind-css，守预编译的 tw.css 与源码同步）。先挂在这里，
+// 当天补进图（gh-pages 29e8ff4e）后挪回 CLAIMS，这一组重新空着。图 12 的节点 sublabel、卡片标题、
+// meta description 三处改成 17，卡片清单第四行在 Playwright 禁止模式之后插入「Tailwind 产物同步」，
+// 仍与 check 链逐项对应；diagrams/index.html 的摘要现在不写道数，不用改。PINNED_REVISION 同样未动。
+const PENDING_CLAIMS = [];
 
 function git(args) {
   // stderr 收进返回值而不是转发到终端：`cat-file -e` 对缺失对象打的那行 `fatal: Not a valid
