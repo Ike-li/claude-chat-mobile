@@ -4,6 +4,7 @@
 //       ack 键集 { ok, reason, permanent, error, divergence }、divergence 键集即 resumeDivergence 的七个字段，且这条【没有】
 //       送进 agent（无 user_message 气泡）→ 同一 clientMessageId 带上确认重发 → 放行且只发一次。
 //       正对照：去掉终端最后那两行（手机侧最后写）→ 首发直接放行，证明仪器看得见「没拦」。
+//       判定不挡回执：回执一到就发，闸等后台判定落定再拒；spawn 之后追加到文件尾的行不算进判定。
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR；CLAUDE_BIN 走 stub，无真 turn）
 //
 // 【为什么要这一层】前端 ↔ 真 server 的这条边，E2E 守不住：E2E 打的 mock 是平行实现，负 ack 是 mock 手抄的
@@ -21,7 +22,7 @@ import '../../setup/require-disposable-env.mjs';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -35,12 +36,14 @@ const DIVERGENCE_KEYS = ['anchorAt', 'anchorEntrypoint', 'anchorOnlyCount', 'dro
 
 // 真机 c78e8b47 的形态（结构字段，2026-10-16 机主授权只读）：终端一轮停在 T；手机经 SDK 在 T 下接着聊；
 // 闲置终端把 away_summary / informational 挂在它记得的旧叶子 T 下；手机进程先重贴、终端后重贴 last-prompt。
-function transcript(cwd, { terminalWroteLast }) {
+// padLines：开头垫多少行 progress（不是消息，不影响判定），只为让判定的整份读盘明显慢于切换的其余部分。
+function transcript(cwd, { terminalWroteLast, padLines = 0 }) {
   let clock = 0;
   const id = () => randomUUID();
   const at = () => new Date(Date.UTC(2026, 8, 3, 12, 26, clock++)).toISOString();
   const row = (fields) => ({ sessionId: SESSION_ID, cwd, isSidechain: false, timestamp: at(), ...fields });
   const [u1, a1, s1, t, u2, s3, a2, s4] = [id(), id(), id(), id(), id(), id(), id(), id()];
+  const pad = `${JSON.stringify({ type: 'progress', sessionId: SESSION_ID, data: { items: Array.from({ length: 20 }, (_, k) => ({ k, v: 'abcdefgh', f: [1, 2, 3] })) } })}\n`;
   const lines = [
     row({ type: 'user', uuid: u1, parentUuid: null, entrypoint: 'cli', message: { role: 'user', content: '终端里先问的' } }),
     row({ type: 'assistant', uuid: a1, parentUuid: u1, entrypoint: 'cli', message: { role: 'assistant', content: [{ type: 'text', text: '终端里的回答' }] } }),
@@ -55,11 +58,11 @@ function transcript(cwd, { terminalWroteLast }) {
       { type: 'last-prompt', lastPrompt: '终端里先问的', leafUuid: s4, sessionId: SESSION_ID },
     ] : []),
   ];
-  return { text: lines.map(l => `${JSON.stringify(l)}\n`).join(''), phoneLast: a2 };
+  return { text: pad.repeat(padLines) + lines.map(l => `${JSON.stringify(l)}\n`).join(''), phoneLast: a2 };
 }
 
 // 一台隔离 server + 一条已连上的 socket + 一份种好的 transcript，跑完必定收尸。
-async function withSeededSession({ terminalWroteLast }, fn) {
+async function withSeededSession({ terminalWroteLast, padLines }, fn) {
   const root = mkdtempSync(join(tmpdir(), 'ccm-inv-resume-div-'));
   const ws = join(root, 'ws');
   mkdirSync(ws);
@@ -68,8 +71,9 @@ async function withSeededSession({ terminalWroteLast }, fn) {
   // 那里的 HOME 本身就是一次性目录。
   const projectDir = join(homedir(), '.claude', 'projects', encodeProjectDir(cwd));
   mkdirSync(projectDir, { recursive: true });
-  const seeded = transcript(cwd, { terminalWroteLast });
-  writeFileSync(join(projectDir, `${SESSION_ID}.jsonl`), seeded.text);
+  const seeded = transcript(cwd, { terminalWroteLast, padLines });
+  const file = join(projectDir, `${SESSION_ID}.jsonl`);
+  writeFileSync(file, seeded.text);
 
   const server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: cwd, CCM_DATA_DIR: root });
   const events = [];
@@ -94,9 +98,12 @@ async function withSeededSession({ terminalWroteLast }, fn) {
       await new Promise(r => setTimeout(r, 250));
       return events.filter(e => e.type === 'user_message');
     };
+    const t0 = Date.now();
     const opened = await emitAck('session:switch', { cwd, sessionId: SESSION_ID });
+    const switchMs = Date.now() - t0;
     assert.equal(opened?.ok, true, `前提：会话要能打开：${JSON.stringify(opened)}`);
-    return await fn({ cwd, instanceId: opened.instanceId, phoneLast: seeded.phoneLast, emitAck, bubbles });
+    const appendLine = obj => appendFileSync(file, `${JSON.stringify(obj)}\n`);
+    return await fn({ cwd, instanceId: opened.instanceId, phoneLast: seeded.phoneLast, emitAck, bubbles, switchMs, appendLine });
   } finally {
     try { sock.close(); } catch { /* 已关闭 */ }
     await killServer(server.proc);
@@ -127,6 +134,27 @@ test('SESSION-04：终端最后重贴、手机那段不在会接上的链上 →
     const sent = await bubbles();
     assert.equal(sent.length, 1, `放行后只发一次，实际 ${sent.length} 条`);
     assert.equal(sent[0].payload?.clientMessageId, 'rd-1');
+  });
+});
+
+// 判定要读整份 transcript（长会话数十 MB），2026-10-31 起不挡切换回执：回执先回，判定在后台只读 spawn 前那一刻的
+// 字节，发送闸等它落定再判。这条守的是「挪出关键路径」没把闸挪漏——回执一到就发，照样要拦。
+const PAD_LINES = 60_000; // 约 45MB，判定的整份读盘约 0.3s（宿主机实测）；切换的其余部分只读尾窗
+
+test('SESSION-04：判定不挡切换回执；回执一到就发、文件尾又被新 CLI 写过，照样拒收', async () => {
+  await withSeededSession({ terminalWroteLast: true, padLines: PAD_LINES }, async ({ cwd, instanceId, phoneLast, emitAck, bubbles, switchMs, appendLine }) => {
+    // 新 CLI 起来后自己会往文件尾写（resume 后重贴 last-prompt）。它读盘时这行还不在，判定也不能把它算进去：
+    // 这行指向手机那条，读进去分叉就「消失」了，正是这道闸要拦的那种静默丢上下文。
+    appendLine({ type: 'last-prompt', lastPrompt: '手机上接着问的', leafUuid: phoneLast, sessionId: SESSION_ID });
+    const t = Date.now();
+    const ack = await emitAck('user:message', { text: '手机上再问一句', instanceId, cwd, clientMessageId: 'rd-early' });
+    const gateMs = Date.now() - t;
+    assert.equal(ack?.reason, 'resume_divergent', `判定还没落定就放行了，或把 spawn 之后写的行算了进去：${JSON.stringify(ack)}`);
+    assert.equal(ack.divergence.newestUuid, phoneLast);
+    assert.equal((await bubbles()).length, 0, '拒收就是没发');
+    // 比先后，不设阈值：判定比切换的其余部分慢得多（填充行），回执若等判定，发送时结论早已就绪、闸几乎不用等；
+    // 回执先回，这次发送就要等判定读完。
+    assert.ok(gateMs > switchMs, `切换回执等了分叉判定：回执 ${switchMs}ms，随后的发送只等了 ${gateMs}ms`);
   });
 });
 

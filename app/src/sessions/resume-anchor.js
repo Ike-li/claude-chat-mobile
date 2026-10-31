@@ -17,6 +17,7 @@
 //
 // 判定部分是纯函数；末尾的 readResumeEntries 是喂给它的那一勺 IO（同 rewind-plan.js 的做法）。
 
+import { stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
@@ -187,6 +188,38 @@ export function gateResumeDivergence(divergence, ackDivergence) {
   };
 }
 
+// ── 判定不挡切换回执 ──
+// 判定要读整份 transcript（数十 MB 时几百 ms），不放在 resume 的关键路径上：openResumeInstance 只在 spawn 前记下
+// 快照、回执先回，后台按快照读盘判定。用结论的两处（发送闸、额度墙自动继续）先等它落定，上限 10s；
+// 等不到按读不动处理（fail-open），迟到的结论作废——那时消息已经发出去、接在 CLI 选的那一支上，
+// 再拿旧结论拦下一条，只会让人对着一段已经过去的分叉做选择。
+export const RESUME_DIVERGENCE_WAIT_MS = 10_000;
+
+export function startResumeDivergence(instance, verdict, onDiverged) {
+  const pending = Promise.resolve(verdict).catch(() => null).then(div => {
+    if (instance.resumeDivergencePending !== pending) return;
+    instance.resumeDivergencePending = null;
+    if (!div) return;
+    instance.resumeDivergence = div;
+    onDiverged?.(div);
+  });
+  instance.resumeDivergencePending = pending;
+}
+
+/** @returns {Promise<boolean>} false = 等到上限仍没落定，已按读不动作废 */
+export async function awaitResumeDivergence(instance, { timeoutMs = RESUME_DIVERGENCE_WAIT_MS } = {}) {
+  const pending = instance.resumeDivergencePending;
+  if (!pending) return true;
+  let timer;
+  const settled = await Promise.race([
+    pending.then(() => true),
+    new Promise(resolve => { timer = setTimeout(resolve, timeoutMs, false); }),
+  ]);
+  clearTimeout(timer);
+  if (!settled && instance.resumeDivergencePending === pending) instance.resumeDivergencePending = null;
+  return settled;
+}
+
 // ── 以下是本模块唯一的 IO ──
 
 // 判定只用到这几个字段。用户消息正文只留开头——够认命令回显（COMMAND_ECHO_RE 锚在开头），
@@ -212,17 +245,41 @@ function slimEntry(e) {
   return out;
 }
 
+const transcriptFile = (baseDir, cwd, sessionId) => join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
+
+/**
+ * spawn 前那一刻 transcript 的 { size, ino }：新 CLI 启动时读的就是这些字节，判定也只该读这些（readResumeEntries 的 upTo）。
+ * 不是普通文件或读不动 → null，调用方据此不判（fail-open，同 readResumeEntries）。stat 不 open，FIFO 也不会挂住。
+ */
+export async function snapshotResumeTranscript(cwd, sessionId, { baseDir = CLAUDE_PROJECTS_DIR } = {}) {
+  if (!isSafeSessionId(sessionId)) return null;
+  try {
+    const st = await stat(transcriptFile(baseDir, cwd, sessionId));
+    return st.isFile() ? { size: st.size, ino: st.ino } : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 读某个会话 transcript 里判定要用的条目（按落盘顺序、精简过）。逐行流式读，不一次性 buffer。
  * 失败一律返回空数组（不抛）：调用方拿空数组判出「没有可报的」，等于改动前的行为（fail-open）——
  * 这道闸挡的是静默丢上下文，读不动时多拦一次反而会把用户堵在一个说不清的面板前。
  * 不是普通文件（FIFO 等）同属读失败，见 shared/regular-file.js。
+ * upTo（snapshotResumeTranscript 的返回）：只读 [0, upTo.size) 这段——新 CLI resume 后会自己重贴 last-prompt，读进来会把
+ * 分叉抹掉。快照之后文件变小或换了 inode（被重写、被换掉），那段字节已经不是当时那份，同属读不动。
+ * 同尺寸原地改写（size、ino 都不变）认不出来：CLI 只追加写，不这么改。
  */
-export async function readResumeEntries(cwd, sessionId, { baseDir = CLAUDE_PROJECTS_DIR } = {}) {
+export async function readResumeEntries(cwd, sessionId, { baseDir = CLAUDE_PROJECTS_DIR, upTo = null } = {}) {
   if (!isSafeSessionId(sessionId)) return []; // SS-003：非法 id 不拼进 join
   let input = null;
   try {
-    input = (await openRegularFile(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`))).fh.createReadStream({ encoding: 'utf-8' });
+    const { fh, st } = await openRegularFile(transcriptFile(baseDir, cwd, sessionId));
+    if (upTo && (st.ino !== upTo.ino || st.size < upTo.size || !upTo.size)) {
+      await fh.close();
+      return [];
+    }
+    input = fh.createReadStream({ encoding: 'utf-8', ...(upTo ? { start: 0, end: upTo.size - 1 } : {}) });
     const rl = createInterface({ input, crlfDelay: Infinity });
     const out = [];
     for await (const line of rl) {
