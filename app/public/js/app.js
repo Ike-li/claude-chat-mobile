@@ -35,6 +35,7 @@ import {
   describeHandshakeError,
   syncAckAction,
   shouldReloadOnEnter,
+  prefetchedHistoryFits,
   shouldForceScrollAfterReplay,
   shouldStickScrollToBottom,
   resolveReplayBufferAction,
@@ -153,6 +154,7 @@ import { createAutoContinueBannerController, tagAutoContinueBubble } from './app
 import { createMessageRenderer } from './app/message-renderer.js';
 import { createMessageTimeline } from './app/message-timeline.js';
 import { createHistoryLoadGate } from './app/history-load-gate.js';
+import { createHistoryPrefetch } from './app/history-prefetch.js';
 import { createAgentEventDispatcher, createReplayBuffer } from './app/event-dispatch.js';
 import { createFileBrowser } from './app/file-browser.js';
 import { createUnreadTracker } from './app/unread-tracker.js';
@@ -1537,6 +1539,15 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // 它的职责不是"快速失败"而是"保证回调一定会被调用一次"——裸 ack 在断线时会被静默丢弃，
   // 那正是 historyLoadGate 永久卡死的两个成因之一（见 history-load-gate.js 的看门狗注释）。
   const HISTORY_ACK_TIMEOUT_MS = 15000;
+  // 点开非活会话时和 session:switch 并行拉历史（见 history-prefetch.js），侧栏与首页最近列表共用。
+  // 已经开着的不拉：走 user:setViewing、服务端多半有回放（replayed>0 时不报 diskLen，预取必然作废）。
+  // 有 DOM 缓存的不拉：切回来多半走 keep，白下 1MB 级的历史，还和 sync:since 的回执挤同一条 WebSocket。
+  const historyPrefetch = createHistoryPrefetch({ socket, timeoutMs: HISTORY_ACK_TIMEOUT_MS });
+  function prefetchHistory(open, sessionId, cwd) {
+    if (instancesList.some(x => x?.sessionId === sessionId)) return;
+    if (sessionDomCachePlan({ cached: sessionDomCache.get(sessionId) }).restore) return;
+    historyPrefetch.start({ open, sessionId, cwd });
+  }
   // sync:since 的 ack 超时（bindView 入场 + connect 重连补传两处共用，F3/2026-08-06）。职责同上：
   // 不是快速失败，是保证回调必被调用一次——裸 ack 断线时被 _clearAcks() 静默丢弃，而加载卡收场、
   // 历史加载、pending 快照对账全挂在回调里。server ack 前要先逐条重放环形缓冲，给同样宽松的窗。
@@ -4946,6 +4957,10 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         replayBuffer.resolve(replayHandle, 'discard');
         return;
       }
+      // 点击时并行发出的那份历史（见 history-prefetch.js）：凭这次打开认领，不管下面走哪条分支都先取走。
+      // 只有 'load' 分支用得上：它不清屏，sync:since 读盘之后、这个 ack 之前推来的增量已经画在视图里，
+      // 预取那份虽然不含它，也不会丢。'reload' 分支要先 clearView，那条增量被清掉，预取里又没有，只能重新拉。
+      const prefetched = historyPrefetch.take({ open: perfOpen, sessionId: sid, cwd: entry.transcriptCwd || entry.cwd });
       if (err) {
         // 超时/断线：这个 ack 不会来了。有 sid → 与下面 'load' 分支同款转拉磁盘历史（loadHistory
         // 自带 15s 超时与 err 清理，连接还活着即自愈；resolve('reload') 把续传基线推进到缓冲尾，
@@ -4988,7 +5003,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // 缓冲通常本就空（'load' 只在 server replayed===0 时出现）；仍统一走 resolve('reload') 收尾，
         // 防万一有穿插的实时事件——续传基线前移到缓冲尾，不遗漏、不重复。
         replayBuffer.resolve(replayHandle, 'reload');
-        loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(unreadOnEntry), perfOpen);
+        // forceHistoryReload 是 transcript 搬了位置：点击时按行的 cwd 读的那份不作数
+        loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(unreadOnEntry), perfOpen,
+          opts.forceHistoryReload ? {} : { prefetched, diskLen: res?.diskLen });
       } else if (bufferAction === 'reload') {
         // 覆盖两种来源：action 本就是 'reload'（gap/外部写入），或 'keep' 但缓冲攒太多被这层升级——
         // 统一走清屏 + session:history 批量重载（loadHistory/renderHistoryBubbles 本就是一次性 fragment
@@ -5542,7 +5559,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     dismissBlockedSurfaceIfTarget: (...args) => dismissBlockedSurfaceIfTarget(...args), drawer, el,
     ensureEmptySurface: (...args) => ensureEmptySurface(...args),
     enterComposeReady: (...args) => enterComposeReady(...args), envConfigPanel, folderPicker, haptic,
-    inputEl, leftSidebar, newSessionWorktree, noticeDismissals, openDeleteSession, perfTrace, projectsState,
+    inputEl, leftSidebar, newSessionWorktree, noticeDismissals, openDeleteSession, perfTrace, prefetchHistory, projectsState,
     renderHooksBridgeSection, renderStatuslineBridgeSection, SESSION_PANEL_REVALIDATE_MS, sessionPanel,
     sessionRename, sessionRowMenu, sessionsCache, sessionsDot, sessionSearchQueryByDir, sessionWorkspaceState,
     setStatusIcon, showSessionBlockedSurface: (...args) => showSessionBlockedSurface(...args), socket,
@@ -5680,7 +5697,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   const emptySurfaces = createEmptySurfaces(appContext, {
     $, approvals, baseName, btnHome, btnNew, btnSessions, dashUnreadMark, el, elicitationSheet, folderPicker, haptic,
     hideStatuslineWrap, inputEl, messagesEl, modelInput, newSessionWorktree, openLeftSidebar, panelCwd,
-    perfTrace, pillEffortText, pillPermText, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,
+    perfTrace, pillEffortText, pillPermText, prefetchHistory, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,
     topContextPill, topProjectText, topTitleText, unread, updateWorkspaceChangeBadge,
     wireConfigRefreshButton, getAvailableDirs: () => availableDirs, getComposeReady: () => _composeReady,
     getCurrentCwd: () => currentCwd, getCurrentGatewaySuffix: () => currentGatewaySuffix,
@@ -5799,7 +5816,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // reloadCurrentFromHistory（用缺省值）就必failed——所以症状是「会出现，但不是百分百」。
   // perfOpen：打开会话埋点的凭据，在发起时定——回执到时同一个会话可能已经又开了一次（换了实例、A→B→A），
   // 旧回执不能记进新那次。bindView 传它自己那次的；别的路径缺省取这个会话此刻正在走的那次。
-  function loadHistory(sessionId, cwd = drivingCwdOf(displayedInstanceId), onDone, perfOpen = perfTrace.openFor(sessionId)) {
+  // prefetched：点击时并行发出、bindView 凭这次打开认领到的那份（见 history-prefetch.js），diskLen 是 sync:since
+  // 刚报的磁盘条数。等它落地，对得上（prefetchedHistoryFits）就直接画，对不上照常重新拉。
+  function loadHistory(sessionId, cwd = drivingCwdOf(displayedInstanceId), onDone, perfOpen = perfTrace.openFor(sessionId), { prefetched = null, diskLen = null } = {}) {
     if (!sessionId) return;
     const reqInstanceId = displayedInstanceId; // WS-001：捕获发起时的视图目标（代次）
     // 发起时那一轮在不在跑：在跑的话，读盘那一刻没配上结果的工具可能随后跑完，渲染收尾时不能判它中止（PR #233 review）
@@ -5808,10 +5827,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // 渲染，2000 条约 50 块）。期间镜像追平的 history_append 完全可能插进来——它是 out-of-band，
     // 不进 replay buffer，挡不住。扣住它们，等历史落地后按原顺序放行（见 history-load-gate.js）。
     const gateHandle = historyLoadGate.begin(reqInstanceId);
-    // 必须用 socket.timeout()：裸 ack 在断线时会被 socket.io-client 的 _clearAcks() 直接 delete 掉
-    // 且【不调用】（只有 withError 的才回调），于是这个回调永不执行——闸门不 abort 也不 release，
-    // 手机锁屏/切后台就能触发。带 timeout 后断线会以 err 形式回调，下面 err 分支负责收尾。
-    socket.timeout(HISTORY_ACK_TIMEOUT_MS).emit('session:history', { sessionId, cwd }, (err, res) => {
+    // via：历史是怎么来的，记进 [PERF] 那行的历史回执一段
+    const onAck = (err, res, via) => {
       // 之后同一实例又发起了一次加载（手动「重新加载」、gap 重载）：这一轮整段作废，收尾归新一轮。
       // 排在 err 分支之前——超时的旧 ACK 不能 hideLoadingCard 把新一轮的加载卡收掉（#354 review）
       if (historyLoadGate.superseded(gateHandle)) {
@@ -5832,7 +5849,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       if (drivingCwdOf(reqInstanceId) !== cwd) { historyLoadGate.abort(gateHandle); return; }
       hideLoadingCard();
       const msgs = res?.messages || [];
-      perfTrace.openStep(perfOpen, 'history', { count: msgs.length, server: res?.timing });
+      perfTrace.openStep(perfOpen, 'history', { note: via, count: msgs.length, server: res?.timing });
       if (!msgs.length) {
         perfTrace.openEnd(perfOpen, res?.error ? 'error' : 'empty');
         if (res?.error) addBar(t('历史消息加载失败'), 'text-ink-faint');
@@ -5853,6 +5870,19 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
       seenDiskLenBySession.set(sessionId, msgs.length);
+    };
+    // 必须用 socket.timeout()：裸 ack 在断线时会被 socket.io-client 的 _clearAcks() 直接 delete 掉
+    // 且【不调用】（只有 withError 的才回调），于是这个回调永不执行——闸门不 abort 也不 release，
+    // 手机锁屏/切后台就能触发。带 timeout 后断线会以 err 形式回调，onAck 的 err 分支负责收尾。
+    // 预取用的是同一个超时（history-prefetch.js），同样保证回调一定来一次。
+    const fetchFresh = via => socket.timeout(HISTORY_ACK_TIMEOUT_MS).emit('session:history', { sessionId, cwd }, (err, res) => onAck(err, res, via));
+    if (!prefetched) { fetchFresh(); return; }
+    prefetched.then(({ err, res }) => {
+      // 这一轮已被顶替：交给 onAck 记「迟到作废」收掉，不再为它重新拉
+      if (historyLoadGate.superseded(gateHandle) || prefetchedHistoryFits({ diskLen, err, res })) onAck(err, res, '预取');
+      // 预取超时也重新拉：服务端冷读一份大 transcript 可能超过 15s，第二次读走缓存。最坏两次都超时，
+      // 闸门 20s 的看门狗会先放行扣住的增量（顺序可能差，不丢）
+      else fetchFresh('预取对不上，重新拉');
     });
   }
 

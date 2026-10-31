@@ -15,7 +15,7 @@ export function createSessionSidebar(context, {
   appConfirm, applyDeepLink, applySessionDraftSwap, attachments, attentionChipEl, baseName, closeLeftSidebar,
   composePage, connBanner, connDot, connDotWrap, dismissBlockedSurfaceIfTarget, drawer, el,
   ensureEmptySurface, enterComposeReady, envConfigPanel, folderPicker, haptic, inputEl, leftSidebar,
-  newSessionWorktree, noticeDismissals, openDeleteSession, perfTrace, projectsState, renderHooksBridgeSection,
+  newSessionWorktree, noticeDismissals, openDeleteSession, perfTrace, prefetchHistory, projectsState, renderHooksBridgeSection,
   renderStatuslineBridgeSection, SESSION_PANEL_REVALIDATE_MS, sessionPanel, sessionRename, sessionRowMenu, sessionsCache,
   sessionsDot, sessionSearchQueryByDir, sessionWorkspaceState, setStatusIcon, showSessionBlockedSurface,
   socket, syncDashNoFolders, unread, getAvailableDirs, getCurrentCwd, getDirSectionNodes,
@@ -503,6 +503,7 @@ export function createSessionSidebar(context, {
             dismissBlockedSurfaceIfTarget(s.id, rowCwd); // 迟到的成功 ack：撤掉 4s 兜底弹出的落地页
           }
         });
+        prefetchHistory(perfOpen, s.id, rowCwd); // 历史不等切换回执，同时拉
         setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
       }
     };

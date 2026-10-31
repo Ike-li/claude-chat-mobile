@@ -9,7 +9,7 @@ import { t } from '../i18n.js';
 export function createEmptySurfaces(context, {
   $, approvals, baseName, btnHome, btnNew, btnSessions, dashUnreadMark, el, elicitationSheet, folderPicker, haptic,
   hideStatuslineWrap, inputEl, messagesEl, modelInput, newSessionWorktree, openLeftSidebar, panelCwd,
-  perfTrace, pillEffortText, pillPermText, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,
+  perfTrace, pillEffortText, pillPermText, prefetchHistory, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,
   topContextPill, topProjectText, topTitleText, unread, updateWorkspaceChangeBadge, wireConfigRefreshButton,
   getAvailableDirs, getComposeReady, getCurrentCwd, getCurrentGatewaySuffix, getCurrentModel,
   getCurrentSessionId, getCwdDefaultModel, getDisplayedSessionId, getFreshInterruptedInstanceId,
@@ -577,6 +577,7 @@ export function createEmptySurfaces(context, {
           dismissBlockedSurfaceIfTarget(s.id, s.cwd); // 同上：迟到的成功 ack 要撤页
         }
       });
+      prefetchHistory(perfOpen, s.id, s.cwd); // 同侧栏：历史不等切换回执，同时拉
       setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     };
 

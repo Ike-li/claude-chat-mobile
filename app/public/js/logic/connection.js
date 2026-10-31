@@ -287,6 +287,17 @@ export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, disk
   return 'keep';
 }
 
+// 点开非活会话时，session:history 和 session:switch 在点击那一刻并行发出（预取）；bindView 的 sync:since
+// ack 回来后由这里判预取那份还能不能直接画。判据是上面 'keep' 的 diskLen ≤ seenDiskLen 收紧成相等：
+// 两次读盘之间终端可能写过（变长），rewind 也可能截过（变短），这份还没画过，短了同样不能当最新。
+// diskExternalLen 不用另查：它和 diskLen 出自 server 同一次读盘，条数相等时它不可能越过预取的末尾。
+// diskLen 为空（replayed>0 时 server 不读盘）就看不出磁盘变没变，照常重新拉。
+// 已知盲区（同 seenDiskLen 的 keep）：两边都截顶 2000 条，超过之后磁盘变长、条数仍相等，看不出来。
+export function prefetchedHistoryFits({ diskLen, err, res } = {}) {
+  if (err || res?.error || !Array.isArray(res?.messages)) return false;
+  return Number.isInteger(diskLen) && res.messages.length === diskLen;
+}
+
 // 修「切回会话停在旧位置 + 内容一条条冒出来像重播」：shouldReloadOnEnter 的 'keep' / syncAckAction 的
 // 'none' 分支恢复的是【离开时缓存的旧内容】，之后离开期间产生的新内容才作为 sync:since 补发事件逐条
 // 到达，各自走非强制 scrollBottom（未必够到"距底部<120px"的阈值）——视觉上就是先停在旧底部、再被动
