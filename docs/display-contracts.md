@@ -246,7 +246,7 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 | 面 | 策略摘要 | 主要代码 |
 |----|----------|----------|
 | 权限档 pill | bypass 对 SDK 映射 default，UI 仍显 bypass；不进 status_line | `agent.sdkPermissionMode` `setPermMode` |
-| 工具卡 | 截断 600/Bash 2000（live 与历史回放同一份 `toolResultCap`）、脱敏 base64、标题抽 path；截断的卡给「展开全文」（`tool:full`：live 先查实例内存，带会话坐标时回落读 transcript，历史卡只走后者，门同 `image:get`）；输出只有 JSON 才高亮 | `toolResultCap` · `formatTool*` · `toolOutputHighlightClass` |
+| 工具卡 | 截断 600/Bash 2000（live 与历史回放同一份 `toolResultCap`）、脱敏 base64、标题抽 path；截断的卡给「展开全文」（`tool:full`：live 先查实例内存，带会话坐标时回落读 transcript，历史卡只走后者，门同 `image:get`）；输出只有 JSON 才高亮；输入以 `{`/`[` 开头就按 JSON 高亮（截断的也算），其余不高亮，都不走自动识别 | `toolResultCap` · `formatTool*` · `toolOutputHighlightClass` · `toolInputHighlightClass` |
 | 审批 sheet | ExitPlanMode → markdown plan；input 不截断 | `formatPermInputDisplay` |
 | 历史回显 | 滤 CLI 系统行；非 jsonl 全量 | `history.js` |
 | 会话列表 | **生产走 SDK `listSessions` 快路径**（判据 `baseDir === CLAUDE_DIR`）+ 按 jsonl 存在做归属过滤 + readdir 补 SDK 漏报；隔离测试注入别的 baseDir 时回落自造扫盘。`hasMore` / `total` / 标题 `query` 搜索（搜索强制全量 readdir 绕开 SDK ~51 窗；匹配键 OR SDK `summary` 与 `ai-title` / 未截断 firstUser / 命令名，展示标题优先 summary）/ TTL 缓存由 `listSessionsPage` 维护；`excludeIds` 供删文件窗口临时过滤。readdir 成功时 `hasMore = total > limit`，不得 OR SDK 触顶 | `listSessionsPage` · `scanSessionsViaSdk` |

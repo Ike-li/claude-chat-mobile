@@ -2844,10 +2844,11 @@ io.on('connection', socket => {
       if (historyLongToolArmed) {
         historyLongToolArmed = false;
         // 真 server 的历史摘要按工具名截断：Bash 2000 字（display-contracts §5）后接「…（已截断）」。
-        // 构建日志形态：hljs 自动识别会把它认成 yaml 上一片色（验收 O55 附带的那点）
+        // 构建日志形态：hljs 自动识别会把它认成 yaml 上一片色（验收 O55 附带的那点）。
+        // 输入是多行命令，自动识别会认成 swift（真实 transcript 里约一半输入块被认错，性能改造 1a）
         const full = MOCK_BUILD_LOG;
         timelineMessages.push(
-          { kind: 'tool_use', role: 'assistant', toolUseId: 'tl-bash-long', name: 'Bash', inputSummary: '{"command":"cat build.log"}', timestamp: iso(0, 8, 31) },
+          { kind: 'tool_use', role: 'assistant', toolUseId: 'tl-bash-long', name: 'Bash', inputSummary: JSON.stringify({ command: 'npm run build 2>&1 | tee build.log\necho "exit=$?"', description: 'Build, keep the log' }), timestamp: iso(0, 8, 31) },
           { kind: 'tool_result', role: 'user', toolUseId: 'tl-bash-long', ok: true, outputSummary: `${full.slice(0, 2000)} …（已截断）`, timestamp: iso(0, 8, 31) },
         );
       }
