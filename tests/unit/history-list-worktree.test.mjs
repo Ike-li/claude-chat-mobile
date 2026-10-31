@@ -19,7 +19,7 @@ import { resolveAuthorizedCwd } from '../../app/src/sessions/folder-access.js';
 const ROOT = mkdtempSync(join(tmpdir(), 'ccm-hist-wt-'));
 test.after(() => rmSync(ROOT, { recursive: true, force: true }));
 
-// 每个用例一套独立的 (projects 根, 工作区根)，避免 listSessionsPage 的 4s TTL 缓存串场
+// 每个用例一套独立的 (projects 根, 工作区根)，避免 listSessionsPage 的列表缓存串场
 let seq = 0;
 function fixture() {
   const id = `c${seq++}`;

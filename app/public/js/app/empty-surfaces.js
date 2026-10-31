@@ -3,7 +3,7 @@
 // （showInstanceDestroyedSurface）；以及 empty-start 切换时底栏 composer、顶栏 pill 的显隐与文案、新会话默认档摘要。
 // #359 Step 3 从 app.js 原样迁出；app.js 里跨模块的可变态经 getter / setter 注入。
 
-import { dashboardDirs, displaySessionTitle, esc, folderReasonText, formatComposeDefaultsSummary, formatSessionRowTime, formatTopContextPillAriaLabel, isBlockedSurfaceTarget, mergeRecentSessionsAcrossWorkspaces, recentWorkspaceChips, resolveEmptySurface, resolveModelPillText, shouldShowComposer, shouldShowTopContextPill, summarizeRecentsLoad } from '../logic.js';
+import { dashboardDirs, displaySessionTitle, esc, folderReasonText, formatComposeDefaultsSummary, formatSessionRowTime, formatTopContextPillAriaLabel, isBlockedSurfaceTarget, recentsSnapshot, recentWorkspaceChips, resolveEmptySurface, resolveModelPillText, shouldShowComposer, shouldShowTopContextPill, summarizeRecentsLoad } from '../logic.js';
 import { t } from '../i18n.js';
 
 export function createEmptySurfaces(context, {
@@ -680,20 +680,25 @@ export function createEmptySurfaces(context, {
           if (!settled) { settled = true; resolve({ cwd, sessions, timedOut, workspaceName: baseName(cwd) }); }
         };
         socket.emit('session:list', { cwd }, state => {
-          unread.hydrate(state?.readState); // 首页最近行也画未读 chip；Promise.all 之后才渲染，天然同帧
+          unread.hydrate(state?.readState); // 首页最近行也画未读 chip；先灌位点、同一回调里再重画，天然同帧
           // 刻意不合并 ack 的 pinned（手动标「稍后再看」但排在分页窗外的那些）：这个列表叫「最近」，
           // 语义是时间序的前 8 条，塞进上周的会话既名不副实，又会挤掉真正最近的。待办入口在抽屉。
           done(state?.sessions || []);
         });
         setTimeout(() => done([], true), 4000); // 单目录超时不挡整表，但要说出来
       });
-      Promise.all(dirs.map(listMain)).then((mainLists) => {
+      // 先到先画（2026-10-31 性能计划 2d）：哪个工作区先回就先并进来重画，不等最慢的那个（兜底 4s）。
+      // 按 dirs 的位置存，同一时刻的行仍按 dirs 序排，与回执到达的先后无关。
+      const mainLists = dirs.map(cwd => ({ cwd, sessions: [], pending: true }));
+      dirs.forEach((cwd, i) => listMain(cwd).then((entry) => {
         if (gen !== _dashRecentsGen) return; // 已换页/重渲
-        const recent = mergeRecentSessionsAcrossWorkspaces(mainLists, { limit: 8 });
-        renderDashRecents(recent); // 空列表也渲 → dashEmptyHint
+        mainLists[i] = entry;
+        const { recent, settled } = recentsSnapshot(mainLists, { limit: 8 });
+        if (recent) renderDashRecents(recent); // 落定后空列表也渲 → dashEmptyHint
+        if (!settled) return;
         renderRecentsIncompleteNotice(summarizeRecentsLoad(mainLists));
-        perfTrace.startupReady('首页列表'); // 启动停在首页时，用户等的就是这张列表（只认第一次）
-      });
+        perfTrace.startupReady('首页列表'); // 启动停在首页时，用户等的就是这张列表（只认第一次，等全部落定）
+      }));
     } else {
       emptyHint?.classList.remove('hidden');
       perfTrace.startupReady('首页列表'); // 没有工作区可列：首页此刻就是最终样子

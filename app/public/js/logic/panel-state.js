@@ -647,6 +647,16 @@ export function summarizeRecentsLoad(dirLists) {
   return { complete: failedDirs.length === 0, failedCount: failedDirs.length, failedDirs };
 }
 
+// 首页最近会话先到先画（2026-10-31 性能计划 2d）：dirLists 里还没回的工作区带 pending:true。
+// 回答这一刻画什么：recent=null 是先别动——一行都还没有就画，会先宣布「还没有最近会话」再冒出行来；
+// settled=true 才轮到对整张表下的结论（空提示、缺角提示、启动就绪）。
+export function recentsSnapshot(dirLists, { limit = 8 } = {}) {
+  const lists = Array.isArray(dirLists) ? dirLists : [];
+  const settled = lists.every(entry => !entry?.pending);
+  const recent = mergeRecentSessionsAcrossWorkspaces(lists.filter(entry => !entry?.pending), { limit });
+  return { recent: settled || recent.length ? recent : null, settled };
+}
+
 // 乐观 busy（send() 的 setBusy(true)）会被「服务端换实例 → 广播 instances → setInstances →
 // bindView → clearView 的 setBusy(false)」冲掉，直到首个 delta 才重现。两种场景要补回：
 // 1) 新会话首发懒开：pendingFirstSend + 已绑定新实例 + 尚无 sessionId（FRESH、SDK init 未回；

@@ -89,6 +89,10 @@ let queuedUndeliveredClientMessageIds = [];
 const mockStoppedTaskIds = new Set();
 // 一次性开关：让紧接着的那一次 session:history 走失败支。由 POST /__arm-history-error 置起。
 let historyErrorArmed = false;
+// 造「一个工作区回得慢」（首页先到先画，性能计划 2d）：这个 cwd 的 session:list 回执先扣下，
+// POST /__release-session-list-hold 才一并放行。扣多久由用例自己定，不靠定时器猜。/__reset 清。
+let sessionListHeldCwd = null;
+let sessionListHeldAcks = [];
 // 长会话（mock-session-long-history）带上形状：跨天的时间戳 + 一对跨在「最近一段」切点上的工具配对（P0-LH5 起）。
 // 不是一次性的：同一用例里重新加载也是这份形状。由 POST /__arm-long-history-shape 置起，/__reset 清。
 let longHistoryShapeArmed = false;
@@ -708,6 +712,8 @@ function resetMockState() {
   queuedUndeliveredClientMessageIds = [];
   mockStoppedTaskIds.clear();
   historyErrorArmed = false;
+  sessionListHeldCwd = null;
+  sessionListHeldAcks = [];
   longHistoryShapeArmed = false;
   toolFullTruncatedArmed = false;
   pushTestNtfy = null;
@@ -1138,6 +1144,20 @@ app.post('/__arm-tool-full-truncated', (_req, res) => {
 app.post('/__arm-history-error', (_req, res) => {
   historyErrorArmed = true;
   res.json({ ok: true });
+});
+
+app.post('/__arm-session-list-hold', (req, res) => {
+  sessionListHeldCwd = typeof req.query?.cwd === 'string' && req.query.cwd ? req.query.cwd : null;
+  res.json({ ok: true });
+});
+
+// released：放出去了几条。用例据此确认前端确实问过被扣的那个工作区，不然「慢的那个」从没出场也能绿。
+app.post('/__release-session-list-hold', (_req, res) => {
+  const acks = sessionListHeldAcks;
+  sessionListHeldCwd = null;
+  sessionListHeldAcks = [];
+  for (const ack of acks) ack();
+  res.json({ ok: true, released: acks.length });
 });
 
 app.post('/__arm-long-history-shape', (_req, res) => {
@@ -2122,7 +2142,9 @@ io.on('connection', socket => {
         const rows = res?.sessions || [];
         const pinned = query ? [] : pinnedRowsFor(cwd, rows);
         const open = query ? [] : openRowsFor(cwd, [...rows, ...pinned]);
-        rawCallback({ moreCount: 0, ...res, pinned, open, readState: readStateForRows([...rows, ...pinned, ...open], cwd) });
+        const reply = { moreCount: 0, ...res, pinned, open, readState: readStateForRows([...rows, ...pinned, ...open], cwd) };
+        if (cwd && cwd === sessionListHeldCwd) sessionListHeldAcks.push(() => rawCallback(reply));
+        else rawCallback(reply);
       }
       : rawCallback;
     console.log(`[mock] session:list for cwd: ${cwd}${query ? ` query=${query}` : ''}`);
