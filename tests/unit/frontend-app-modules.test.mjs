@@ -92,8 +92,13 @@ test('the HTML shell links the prebuilt tw.css after app.css instead of compilin
 
 test('the HTML shell defers every head script except theme-boot and loads the minified socket.io client', async () => {
   const html = await readFile(new URL('../../app/public/index.html', import.meta.url), 'utf8');
-  const head = html.slice(0, html.indexOf('</head>')).replace(/<!--[\s\S]*?-->/g, '');
-  const scripts = [...head.matchAll(/<script\b([^>]*)>/g)].map(([, attrs]) => ({
+  // 注释里的 <script> 只是说明文字，先剔掉。用 indexOf 切到没有为止，不用正则替换：替换一遍可能拼出新的 <!--
+  let head = html.slice(0, html.indexOf('</head>'));
+  for (let start = head.indexOf('<!--'); start !== -1; start = head.indexOf('<!--')) {
+    const end = head.indexOf('-->', start + 4);
+    head = head.slice(0, start) + (end === -1 ? '' : head.slice(end + 3));
+  }
+  const scripts = [...head.matchAll(/<script\b([^>]*)>/gi)].map(([, attrs]) => ({
     src: /\ssrc="([^"]+)"/.exec(attrs)?.[1],
     defer: /\sdefer\b/.test(attrs),
     async: /\sasync\b/.test(attrs),

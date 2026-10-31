@@ -70,16 +70,17 @@ export function createFileBrowser(context, {
   let baseHash = null;     // files:write 的冲突基线——来自最近一次 browse:read 或 files:write 成功后的 contentHash
   let editOnDemand = false; // 行多的纯文本：查看留在 <pre>，点「编辑」才挂 CM（验收 O103，见 renderContent）
   let codeMirrorLoad = null; // CM 脚本的按需加载，见 loadCodeMirror
+  let codeMirrorReady = false; // 整包（核心＋全部 mode）都执行完才算；核心先执行，全局在不等于 mode 到齐
 
   function relativePath() { return segments.join('/') || '.'; }
 
   // CM5（核心＋9 个语言 mode，约 250KB）只有文件浏览器用，不进启动链：第一次打开文件时才插 <script>，与 browse:read
   // 并行拉。async = false 让动态插入的脚本按插入顺序执行，mode 才挂得到核心上。vendor 按 immutable 缓存一年，
   // URL 得带版本戳才换得到新文件：服务端给全部相对 import 戳了 ?v=，本模块自己的 URL 上就有。
-  // 已经加载过返回 null，调用方照旧同步渲染。拉不到也照常 resolve：renderContent 本来就会在 CM 不在时回退 <pre>；
-  // 单例随之清空，下次打开文件重拉，别让一次网络抖动记一整个会话。
+  // 整包到齐后返回 null，调用方照旧同步渲染。拉不到也照常 resolve：renderContent 本来就会在 CM 不在时回退 <pre>；
+  // 单例随之清空，下次打开文件整包重拉（缓存命中的几个很快），别让一次网络抖动记一整个会话。
   function loadCodeMirror() {
-    if (typeof CodeMirror !== 'undefined') return null;
+    if (codeMirrorReady) return null;
     if (!codeMirrorLoad) {
       const version = new URL(import.meta.url).searchParams.get('v');
       codeMirrorLoad = Promise.all(CM_SCRIPTS.map(name => new Promise((resolve, reject) => {
@@ -89,7 +90,7 @@ export function createFileBrowser(context, {
         script.onerror = reject;
         script.src = `/vendor/codemirror/${name}${version ? `?v=${version}` : ''}`;
         documentRef.head.appendChild(script);
-      }))).catch(() => { codeMirrorLoad = null; });
+      }))).then(() => { codeMirrorReady = true; }, () => { codeMirrorLoad = null; });
     }
     return codeMirrorLoad;
   }
