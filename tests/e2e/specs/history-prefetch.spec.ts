@@ -6,12 +6,15 @@ import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSideb
 
 // 性能改造 Stage 3b：点开非活会话时，session:history 在点击那一刻和 session:switch 并行发出
 // （app/public/js/app/history-prefetch.js），不再排在切换回执、instances 广播、sync:since 三段往返之后。
-// bindView 拿到 sync:since 的 diskLen 后，条数对得上就直接画预取那份，对不上照常重新拉（prefetchedHistoryFits）。
+// bindView 拿到 sync:since 的 diskLen 后，条数对得上就直接画预取那份，对不上照常重新拉（prefetchedHistoryFits）；
+// 磁盘到了截顶线（2000 条）就核对不了，不等预取落地、当场重新拉（prefetchCheckable）。
+// mock 的长会话默认按截顶摆（2000 条、total 2100），PF1–PF3 用 /__arm-uncapped-long-history 改成 1999 条。
 // 不测什么：判据本身的各个分支（变长、变短、diskLen 为空、失败）在 tests/unit/logic-history-prefetch.test.mjs；
 // 凭打开凭据认领（A→B→A、后点顶掉先点）在 tests/unit/frontend-history-prefetch.test.mjs。
 // mock 只有长会话的 sync:since 报 diskLen，其余会话的预取一律回空、判作废（见 mock 的 session:history）。
 
 const LONG = 'mock-session-long-history';
+const UNCAPPED = 1999;
 const bubbles = (page: Page) => page.locator('#messages [data-testid="user-message"], #messages [data-testid="assistant-message"]');
 const finalMarker = (page: Page) => page.locator('[data-testid="assistant-message"]', { hasText: 'Long history final message marker' });
 
@@ -48,6 +51,7 @@ test.describe('Stage 3b 点开非活会话时并行预取历史', () => {
   test('P0-PREFETCH-1 切换回执还没回来，历史已经在拉；sync:since 报的条数对得上就直接画，不再拉第二次', async ({ page }) => {
     const loads = captureHistoryLoads(page);
     await gotoMock(page);
+    await page.request.post('/__arm-uncapped-long-history');
     await page.request.post('/__hold-next-switch');
     await clickLongHistoryInSidebar(page);
 
@@ -56,11 +60,11 @@ test.describe('Stage 3b 点开非活会话时并行预取历史', () => {
     expect((await (await page.request.post('/__release-switch')).json()).released, '前提：切换一直扣着').toBe(1);
 
     await expect(finalMarker(page)).toBeVisible({ timeout: 15_000 });
-    await expect(bubbles(page)).toHaveCount(2000);
+    await expect(bubbles(page)).toHaveCount(UNCAPPED);
     expect(loads.filter(p => p.sessionId === LONG), '预取对得上还重新拉了一次').toHaveLength(1);
     // 预取的回执记在这次点击的打开上，只记一次（冷启动那次「视图切入」不能沾上它）
     const log = await openConsole(page);
-    const prefetchRows = perfRows(log, /历史回执 \+\d+（预取；2000 条/);
+    const prefetchRows = perfRows(log, /历史回执 \+\d+（预取；1999 条/);
     await expect(prefetchRows, '历史回执一段应标明用的是预取那份，且只有一行').toHaveCount(1, { timeout: 10_000 });
     await expect(prefetchRows, '预取记到了别的那次打开上').toContainText('[PERF] 打开会话');
     await expect(prefetchRows).toContainText('（点击）');
@@ -71,16 +75,17 @@ test.describe('Stage 3b 点开非活会话时并行预取历史', () => {
   test('P0-PREFETCH-2 预取读完终端又写了：sync:since 报的条数对不上，照常重新拉，画的是新的那份', async ({ page }) => {
     const loads = captureHistoryLoads(page);
     await gotoMock(page);
+    await page.request.post('/__arm-uncapped-long-history');
     await page.request.post('/__arm-stale-long-history');
     await clickLongHistoryInSidebar(page);
 
     await expect(finalMarker(page)).toBeVisible({ timeout: 15_000 });
-    await expect(bubbles(page)).toHaveCount(2000);
+    await expect(bubbles(page)).toHaveCount(UNCAPPED);
     await expect(page.locator('#messages').getByText('STALE_PREFETCH_MUST_NOT_APPEAR'), '画了过期的预取').toHaveCount(0);
     const longLoads = loads.filter(p => p.sessionId === LONG);
     expect(longLoads.map(p => Boolean(p.prefetch)), '应是一次预取、一次重新拉').toEqual([true, false]);
     const log = await openConsole(page);
-    await expect(perfRows(log, /历史回执 \+\d+（预取对不上，重新拉；2000 条/), '[PERF] 行应记下预取作废、重新拉的那份').toHaveCount(1, { timeout: 10_000 });
+    await expect(perfRows(log, /历史回执 \+\d+（预取对不上，重新拉；1999 条/), '[PERF] 行应记下预取作废、重新拉的那份').toHaveCount(1, { timeout: 10_000 });
     await page.locator('#consoleClose').click();
     await expectNoBrowserErrors(page);
   });
@@ -88,6 +93,7 @@ test.describe('Stage 3b 点开非活会话时并行预取历史', () => {
   test('P0-PREFETCH-3 从首页最近列表点开：同样并行预取并复用', async ({ page }) => {
     const loads = captureHistoryLoads(page);
     await gotoMock(page);
+    await page.request.post('/__arm-uncapped-long-history');
     await page.locator('#btnHome').click();
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
     const row = page.locator(`#dashRecentsList .dash-recent-item[data-session-id="${LONG}"]`);
@@ -99,8 +105,30 @@ test.describe('Stage 3b 点开非活会话时并行预取历史', () => {
     expect(loads[loads.length - 1].prefetch).toBe(true);
     expect((await (await page.request.post('/__release-switch')).json()).released, '前提：切换一直扣着').toBe(1);
     await expect(finalMarker(page)).toBeVisible({ timeout: 15_000 });
-    await expect(bubbles(page)).toHaveCount(2000);
+    await expect(bubbles(page)).toHaveCount(UNCAPPED);
     expect(loads.filter(p => p.sessionId === LONG), '预取对得上还重新拉了一次').toHaveLength(1);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 截顶时两次都只读回最近 2000 条：终端写过，窗口往后滑了，条数照样相等。画了旧窗口，镜像引擎切入时又以
+  // 当时的磁盘长度定基线、不推，中间那几条要等终端再写一条、满窗滑动整窗替换才补上（PR #491 review）
+  test('P0-PREFETCH-4 截顶的会话：预取核对不了，不等它落地就重新拉，旧窗口不画', async ({ page }) => {
+    const loads = captureHistoryLoads(page);
+    await gotoMock(page);
+    await page.request.post('/__arm-stale-long-history?same_length=1');
+    // 预取的回执一直扣着：重新拉要是排在它落地之后，这里就画不出来
+    await page.request.post('/__hold-next-history-ack?prefetch=1');
+    await clickLongHistoryInSidebar(page);
+
+    await expect(finalMarker(page), '等预取落地才重新拉').toBeVisible({ timeout: 15_000 });
+    await expect(bubbles(page)).toHaveCount(2000);
+    const longLoads = loads.filter(p => p.sessionId === LONG);
+    expect(longLoads.map(p => Boolean(p.prefetch)), '应是一次预取、一次重新拉').toEqual([true, false]);
+    // 不再断言「放行后旧窗口也不画」：放行那一刻负向断言立即成立，迟到的那份还没开始渲染，咬不住
+    expect((await (await page.request.post('/__release-history-ack')).json()).released, '前提：预取的回执一直扣着').toBe(1);
+    const log = await openConsole(page);
+    await expect(perfRows(log, /历史回执 \+\d+（预取无法核对，重新拉；2000 条/), '[PERF] 行应记下预取核对不了、重新拉的那份').toHaveCount(1, { timeout: 10_000 });
+    await page.locator('#consoleClose').click();
     await expectNoBrowserErrors(page);
   });
 });
