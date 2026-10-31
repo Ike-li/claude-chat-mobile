@@ -1,37 +1,24 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
-import { setSecurityHeaders } from '../../../app/src/server/http.js';
+import {
+  computeAssetVersion,
+  rewriteAppModuleImports,
+  rewriteCssAssetUrls,
+  rewriteIndexAssetUrls,
+  setSecurityHeaders,
+  versionedAssetCacheControl,
+} from '../../../app/src/server/http.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = join(HERE, '..', '..', '..', 'app', 'public');
 const DEFAULT_REJECTED_TOKENS = ['bad-token', 'invalid-token', 'expired-token'];
 // 带这个令牌的握手按「来源已被长锁」拒（P0-20g）。
 const RATE_LIMITED_TOKEN = 'rate-limited-token';
-
-function javascriptFiles(directory) {
-  const files = [];
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...javascriptFiles(path));
-    else if (entry.isFile() && entry.name.endsWith('.js')) files.push(path);
-  }
-  return files.sort();
-}
-
-export function computeMockAssetVersion(publicDir = DEFAULT_PUBLIC_DIR) {
-  const hash = createHash('sha256');
-  for (const path of javascriptFiles(join(publicDir, 'js'))) {
-    hash.update(readFileSync(path));
-  }
-  hash.update(readFileSync(join(publicDir, 'css', 'app.css')));
-  return hash.digest('hex').slice(0, 8);
-}
 
 // 出向事件的形状闸。真 server 的 instances 载荷只有 instancesPayload() 一个产地（app/src/server/app.js），
 // service / canRestart 恒在；mock 却是 100 多处手写字面量，漏一处就是一条真 server 发不出来的事件。
@@ -98,7 +85,9 @@ export function createMockTransport({
   const io = new Server(httpServer, { cors: { origin: '*' } });
   const rejectedTokens = new Set(rejectedAuthTokens);
   const jsDir = join(publicDir, 'js');
-  const assetVersion = computeMockAssetVersion(publicDir);
+  // 版本戳、index 与子模块的 ?v= 改写、缓存头判据都直接用真 server 那一份：桌面性能对照跑在 mock 上，
+  // 这几处一分叉，量出来的热启动就不是生产那条路径。
+  const assetVersion = computeAssetVersion(jsDir, publicDir, null, join(publicDir, 'vendor'));
 
   guardAgentEvents(io, caseGeneration);
   // 验收 O83：模拟真 server 的退避短锁。上锁后窗口内的握手一律回 cooldown（令牌不校验），
@@ -140,6 +129,7 @@ export function createMockTransport({
     setSecurityHeaders(res, req.headers?.host);
     next();
   });
+  app.use(versionedAssetCacheControl(() => assetVersion));
 
   app.post('/__auth-cooldown', (req, res) => {
     authCooldownUntil = Date.now() + Math.max(0, Number(req.query?.ms) || 0);
@@ -156,8 +146,7 @@ export function createMockTransport({
 
   app.get(['/', '/index.html'], (_req, res) => {
     try {
-      const html = readFileSync(join(publicDir, 'index.html'), 'utf8')
-        .replace(/(\/(?:js|css)\/[\w./-]+\.(?:js|css))(?!\?)/g, `$1?v=${assetVersion}`);
+      const html = rewriteIndexAssetUrls(readFileSync(join(publicDir, 'index.html'), 'utf8'), assetVersion);
       res.setHeader('Cache-Control', 'no-store');
       res.type('html').send(html);
     } catch (error) {
@@ -182,13 +171,25 @@ export function createMockTransport({
     }
     res.setHeader('Cache-Control', 'no-cache');
     res.type('application/javascript')
-      .send(source.replace(/from\s+(['"])(\.\.?\/[\w./-]+\.js)\1/g, `from '$2?v=${assetVersion}'`));
+      .send(rewriteAppModuleImports(source, assetVersion));
+  });
+
+  // css 里 url() 的字体引用同样戳 ?v=，与真 server 同一份 rewriteCssAssetUrls；漏了字体就一直 304 重验。
+  app.get(/^\/css\/.+\.css$/i, (req, res, next) => {
+    const rel = req.path.slice('/css/'.length);
+    if (rel.includes('..')) return next();
+    let source;
+    try {
+      source = readFileSync(join(publicDir, 'css', rel), 'utf8');
+    } catch {
+      return next();
+    }
+    res.type('text/css').send(rewriteCssAssetUrls(source, assetVersion));
   });
 
   app.use(express.static(publicDir, {
     setHeaders: (res, filePath) => {
       if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
-      else if (filePath.startsWith(jsDir) && filePath.endsWith('.js')) res.setHeader('Cache-Control', 'no-cache');
     },
   }));
 

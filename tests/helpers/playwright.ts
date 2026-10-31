@@ -29,7 +29,8 @@ export function captureBrowserErrors(page: Page, options: BrowserErrorCaptureOpt
     // 那一刻就按本页 CSP 检查 on* 属性并报一条 script-src-attr 违规。那份文档是惰性的、不执行脚本，属性随后被剥掉，
     // 处理器从未有机会运行（P0-03d 的 DOM 断言另外钉着）。只放过位置在 DOMPurify 自身的这一种：处理器真进了
     // 活文档时，解析发生在应用代码里，报告位置是 app.js 之类，照样记错。
-    if (text.startsWith('Executing inline event handler violates') && /\/vendor\/purify\.min\.js$/.test(message.location()?.url || '')) return;
+    // 允许尾随 ?v=：index 给 vendor 也戳版本戳（与真 server 同一份 rewriteIndexAssetUrls）。
+    if (text.startsWith('Executing inline event handler violates') && /\/vendor\/purify\.min\.js(?:\?[^/]*)?$/.test(message.location()?.url || '')) return;
     if (message.type() === 'error') errors.push(text);
   });
 }

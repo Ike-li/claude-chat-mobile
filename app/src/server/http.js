@@ -187,19 +187,19 @@ function listJsFilesRecursive(dir) {
   return out.sort();
 }
 
-// vendor/ 下的 .js/.css 同样进版本链。这批文件（marked/purify/highlight、
-// CodeMirror 核心+9 个语言 mode、github-light/dark、codemirror.min.css）被静态服务那端
-// 打了 immutable, max-age=31536000（见 configureHttpShell 的 setHeaders）——一年内浏览器
-// 绝不会重新请求，唯一能逼它换新的手段就是让 URL 本身变。之前它们不在这个哈希范围内，
-// ?v= 只在 index.html 里的引用点原样打了个不会变的旧值，等于没有失效手段。
-function listVendorAssetFilesRecursive(dir) {
+// vendor/ 与 css/ 下的全部文件同样进版本链。带当前 ?v= 的请求会被回 immutable, max-age=31536000
+// （见 configureHttpShell 里按版本戳定缓存头的中间件）——一年内浏览器绝不会重新请求，唯一能逼它换新
+// 的手段就是让 URL 本身变，所以能拿到 immutable 的文件都得算进来，不只 .js/.css（app.css 引的 woff2 字体
+// 同样带 ?v=）。vendor 之前不在这个哈希范围内，?v= 只在 index.html 里的引用点原样打了个不会变的旧值，
+// 等于没有失效手段；css/ 之前只算 app.css，Tailwind 预编译出的 tw.css 同样漏在外面。
+function listAssetFilesRecursive(dir) {
   const out = [];
   let entries;
   try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   for (const entry of entries) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...listVendorAssetFilesRecursive(path));
-    else if (entry.isFile() && (entry.name.endsWith('.js') || entry.name.endsWith('.css'))) out.push(path);
+    if (entry.isDirectory()) out.push(...listAssetFilesRecursive(path));
+    else if (entry.isFile()) out.push(path);
   }
   return out.sort();
 }
@@ -208,7 +208,7 @@ function listVendorAssetFilesRecursive(dir) {
 // vendor 目录的内容悄悄带进去，那会让"传固定 files 断言固定哈希"的用例失去确定性来源
 // （vendor 内容本身不变，值仍确定，但改动面从"仅测试指定文件"变成"外加一整个真实目录"，
 // 与该参数注释写的"单测用"用途不符）。生产启动路径显式传，其余调用点保持原样不受影响。
-function computeAssetVersion(selfJsDir, publicDir, files, vendorDir) {
+export function computeAssetVersion(selfJsDir, publicDir, files, vendorDir) {
   const hash = createHash('sha256');
   if (files?.length) {
     for (const file of files) {
@@ -220,9 +220,11 @@ function computeAssetVersion(selfJsDir, publicDir, files, vendorDir) {
     }
   }
   // css 进版本链：顶栏胶囊样式改完也能逼浏览器换新
-  try { hash.update(readFileSync(join(publicDir, 'css', 'app.css'))); } catch { /* optional */ }
+  for (const path of listAssetFilesRecursive(join(publicDir, 'css'))) {
+    try { hash.update(readFileSync(path)); } catch { /* optional */ }
+  }
   if (vendorDir) {
-    for (const path of listVendorAssetFilesRecursive(vendorDir)) {
+    for (const path of listAssetFilesRecursive(vendorDir)) {
       try { hash.update(readFileSync(path)); } catch { /* optional */ }
     }
   }
@@ -259,6 +261,36 @@ export function rewriteAppModuleImports(source, assetVersion) {
   );
 }
 
+// css/*.css：url() 里的站内 /css、/vendor 引用打 ?v=（app.css 的 @font-face 字体）。字体不经过 index，
+// 不在这里戳版本就永远拿不到 immutable，每次热启动都要 304，font-display:swap 下还会先闪一下回退字体。
+// 已带 query 的不动：[\w./-]+ 吃不进 `?`，后面又必须紧跟引号或右括号，带 query 的自然匹配不上。
+export function rewriteCssAssetUrls(css, assetVersion) {
+  return css.replace(
+    /url\((['"]?)(\/(?:css|vendor)\/[\w./-]+)\1\)/g,
+    `url($1$2?v=${assetVersion}$1)`,
+  );
+}
+
+// /js、/css、/vendor 的缓存头。?v= 等于当前版本戳的 URL 指向的内容不会再变，回一年 immutable，
+// 浏览器二次打开不再逐个 304 重验；没带、带旧戳或不是成功响应的一律 no-cache。
+// 在 writeHead 那一刻按最终状态码定，而不是在各路由里各自 setHeader：404 / 416 / 500 这类响应
+// 走的是 static 或 finalhandler，路由里摸不到它们，而它们绝不能被浏览器当成一年不变的内容存下。
+// 304 也算成功：它表示浏览器手里那份就是当前版本，回 no-cache 会把已缓存的条目降回每次重验。
+// currentVersion 是函数：热读档每次请求 index 都会重算版本戳。E2E mock 也挂这一个，两边判据不分叉。
+export function versionedAssetCacheControl(currentVersion) {
+  return (req, res, next) => {
+    if (!/^\/(?:js|css|vendor)\//i.test(req.path)) return next();
+    const versioned = req.query?.v === currentVersion();
+    const writeHead = res.writeHead;
+    res.writeHead = function (status, ...rest) {
+      const ok = status === 200 || status === 304;
+      res.setHeader('Cache-Control', versioned && ok ? 'public, max-age=31536000, immutable' : 'no-cache');
+      return writeHead.call(this, status, ...rest);
+    };
+    return next();
+  };
+}
+
 export function configureHttpShell({
   app,
   projectRoot,
@@ -291,7 +323,9 @@ export function configureHttpShell({
   const selfJsDir = join(publicDir, 'js');
   // SW 必须在站点根才能拿到覆盖 / 的 scope（见 public/sw.js 与 app/notifications.js 的注释）
   const swScriptPath = join(publicDir, 'sw.js');
-  const assetVersion = computeAssetVersion(selfJsDir, publicDir, selfJsFiles, vendorDir);
+  let assetVersion = computeAssetVersion(selfJsDir, publicDir, selfJsFiles, vendorDir);
+
+  app.use(versionedAssetCacheControl(() => assetVersion));
 
   // 三个读盘口。热读档（ASSET_HOT_RELOAD=1）逐请求调；生产档启动时调一次、请求期只查表。
   // ★ index.html 与 /js/app.js 必须和子模块【走同一档】：只给子模块接热读时，开发者改了
@@ -306,6 +340,9 @@ export function configureHttpShell({
     }
   };
   const readIndexHtml = () => {
+    // 热读档每次请求 index 都重算版本戳：index 是 no-store、每次打开都重新拿，戳一换，改过的文件
+    // 就换成新 URL。不重算的话，旧 URL 已被 immutable 存下的那份一年不失效，改了也看不到。
+    if (hotReloadJs) assetVersion = computeAssetVersion(selfJsDir, publicDir, selfJsFiles, vendorDir);
     try {
       return injectCfAccessFlag(rewriteIndexAssetUrls(
         readFileSync(join(publicDir, 'index.html'), 'utf8'),
@@ -345,7 +382,7 @@ export function configureHttpShell({
   if (hotReloadJs) {
     // 热读档也要把状态说出来：横幅只在生产档打印时，开着开关的人看不到任何输出，
     // 一旦某处没接上热读就完全无从判断（这正是 /js/app.js 漏接时的处境）。
-    console.log(`[assets] ASSET_HOT_RELOAD=1：index.html / /js/app.js / /js/** 全部逐请求读盘，改完刷新即生效（版本戳 ${assetVersion} 仍是启动时算的）`);
+    console.log(`[assets] ASSET_HOT_RELOAD=1：index.html / /js/app.js / /js/** 全部逐请求读盘，版本戳每次请求 index 时重算，改完刷新即生效`);
   } else {
     for (const path of listJsFilesRecursive(selfJsDir)) {
       const rel = relative(selfJsDir, path).split(sep).join('/');
@@ -359,7 +396,7 @@ export function configureHttpShell({
       else selfJsSources.set(rel.toLowerCase(), source);
     }
     console.log(`[assets] /js/** ${selfJsSources.size} 个子模块已在启动时读入并戳版本 ${assetVersion}；`
-      + '改前端源码需重启本进程才生效（开发期设 ASSET_HOT_RELOAD=1 可改为逐请求读盘）');
+      + '改前端源码（含 css/、vendor/）需重启本进程才生效（开发期设 ASSET_HOT_RELOAD=1 可改为逐请求读盘）');
   }
   // `i`：Express 字符串路径默认大小写不敏感，正则默认敏感。不带 i 时 /JS/foo.js
   // 绕过本路由落到 static；在大小写不敏感的文件系统上会发出未戳 ?v= 的源码。
@@ -373,14 +410,38 @@ export function configureHttpShell({
     res.setHeader('Cache-Control', 'no-cache');
     return res.type('application/javascript').send(source);
   });
+  // css/*.css 与 /js/** 同档：生产档启动时读入并给 url() 戳版本（rewriteCssAssetUrls），热读档逐请求读。
+  const cssDir = join(publicDir, 'css');
+  const readCssSource = (rel) => {
+    try {
+      return rewriteCssAssetUrls(readFileSync(join(cssDir, rel), 'utf8'), assetVersion);
+    } catch {
+      return undefined; // 读不出就落到 static 404
+    }
+  };
+  const cssSources = new Map();
+  if (!hotReloadJs) {
+    for (const path of listAssetFilesRecursive(cssDir)) {
+      if (!path.endsWith('.css')) continue;
+      const rel = relative(cssDir, path).split(sep).join('/');
+      const source = readCssSource(rel);
+      if (source !== undefined) cssSources.set(rel.toLowerCase(), source);
+    }
+  }
+  app.get(/^\/css\/.+\.css$/i, (req, res, next) => {
+    const rel = req.path.replace(/^\/css\//i, '').toLowerCase();
+    if (rel.includes('..')) return res.status(400).end();
+    const source = hotReloadJs ? readCssSource(rel) : cssSources.get(rel);
+    if (source === undefined) return next();
+    return res.type('text/css').send(source);
+  });
   app.use(express.static(publicDir, {
     setHeaders: (res, filePath) => {
       if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
       // SW 脚本恒回源：它是推送链路的根，被任何中间层（CDN/浏览器）缓存住就会让修复送不到设备。
       // 2026-07-27 实测过一次同类事故——Cloudflare 缓存让 Service-Worker-Allowed 头到不了浏览器。
       else if (filePath === swScriptPath) res.setHeader('Cache-Control', 'no-store');
-      else if (filePath.startsWith(selfJsDir) && filePath.endsWith('.js')) res.setHeader('Cache-Control', 'no-cache');
-      else if (filePath.startsWith(vendorDir)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      // /js、/css、/vendor 的缓存头由上面按版本戳判的那个中间件在 writeHead 时定，这里设了也会被覆盖。
     },
   }));
 
