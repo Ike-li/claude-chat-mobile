@@ -5393,11 +5393,11 @@ registerSocketConnection(io, socket => {
       const replayEnvelope = { ...envelope, replay: true };
       socket.emit('agent:event', replayEnvelope);
     }
-    // replayed 仅计“对话内容”事件：models 是 start() 里 fetchModels 推送的元数据（连接时按 cwd 已重放），
-    // 若计入会把“刚 resume/预热、缓冲里只有一条 models”的实例误判为“已有内容”→ 前端 bindView
-    // 跳过 loadHistory → 切入后聊天区空白（jsonl 历史从不加载）。排除后这类实例 replayed=0，前端正确回落
-    // session:history。events 仍全量回放（前端要 models 填模型/effort 下拉），仅计数口径变。
-    const replayed = events.filter(e => e.type !== 'models').length;
+    // replayed 仅计“对话内容”事件：models / slash_commands 是 start() 里 fetchModels / fetchCommands 推送的元数据，
+    // 刚 resume/预热的实例缓冲里只有这两条。计入 models 曾让前端 bindView 跳过 loadHistory → 切入后聊天区空白；
+    // 计入 slash_commands 会让没有 DOM 缓存的切入判成 reload、白拉一遍历史（点击预取的那份作废），diskLen 也留空。
+    // 排除后这类实例 replayed=0，前端正确回落 session:history。events 仍全量回放（前端要它们填模型下拉与斜杠菜单），仅计数口径变。
+    const replayed = events.filter(e => e.type !== 'models' && e.type !== 'slash_commands').length;
     // diskLen 仅 replayed=0（活缓冲无可回放对话内容）时带回——正是「切入可能被外部写过的会话」候选。
     // diskExternalLen 在 replayed>0 时也带（见 done 上方注释），但【有在途轮时不读】：文件正被己方追加，
     // mtime 缓存几乎必然失效，这一读就是全量重建（链真相源 + 流式读整份 transcript），而前台探活的 ack
