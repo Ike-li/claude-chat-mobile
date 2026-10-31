@@ -4810,6 +4810,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // strip ephemeral live 行，避免切回会话时把 busy 状态行当历史气泡
       const nodes = stripEphemeralMessageNodes(Array.from(messagesEl.childNodes));
       if (nodes.length === 0) { /* 仅有 ephemeral 时不缓存空壳 */ }
+      // #307：历史还没落地（加载卡＝回执在途；提示条带 data-history-pending＝分块没画完或半路停了）时不存，该会话的旧缓存也作废。
+      // 存下来的话，切回或同会话换实例时会原样贴回，sync:since 判 'keep' 不再拉历史，屏幕就停在加载卡或只有提示条
+      else if (messagesEl.querySelector('#historyLoadingCard, [data-history-pending]')) sessionDomCache.delete(currentSessionId);
       else sessionDomCache.set(currentSessionId, { nodes, lastSeq, epoch: curEpoch, instanceId: prevInstanceId });
       // 最多 8 棵完整 DOM 树：长会话 tool 卡很重，40 在中低端机易顶 RAM
       if (sessionDomCache.size > 8) {
@@ -5970,6 +5973,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // superseded：loadHistory 传入，这一轮之后同实例又发起了加载时为真（见 processChunk 开头）。
   function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false, turnRunningAtRequest = false, noticeBar = null, superseded = null } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
+    // 提示条下面的历史落地（frag 插入）时才摘掉；bindView 看到它就不把这份半成品存进 sessionDomCache（#307）
+    noticeBar?.setAttribute('data-history-pending', '1');
     const frag = document.createDocumentFragment();
     // 历史里的图片按需取，坐标在【渲染时】快照（同子代理卡的 flowSid）：格子会留在 DOM 里跨越会话切换，
     // 进入可视区时再读会按别的会话去取。cwd 走驾驶轴，与 loadHistory 的 session:history 同一个值。
@@ -6244,10 +6249,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // 中断检查用「渲染发起时 #messages 归属哪个实例」的快照；bindView 是唯一整体改写 #messages 的地方，
     // displayedInstanceId 代表此刻 DOM 安全可写给谁。分块跨越一次切视图时直接丢弃 frag，不再调度、不
     // appendChild——frag/codeBlocks/histSubCards/histToolCards 全是本次调用的局部变量，中止后自然被 GC，
-    // 不需要额外清理；用户若切回同一会话，因没有 sessionDomCache 缓存会自然触发一次完整重渲染。
+    // 不需要额外清理；用户切回同一会话会重新完整加载：提示条还带着 data-history-pending，bindView 不会把
+    // 这份半成品存进 sessionDomCache（#307）。
     //
     // 注意：不得放宽为「同 sessionId 即可续渲」——同会话 instance 置换时 bindView 会 clearView + 重新
-    // loadHistory，旧 frag 若仍落地会与新一轮历史叠加成重复气泡。跨 instance 一律中断，由新 bindView 负责。
+    // loadHistory（同样因为半成品不进缓存），旧 frag 若仍落地会与新一轮历史叠加成重复气泡。跨 instance 一律中断，由新 bindView 负责。
     const targetInstanceId = displayedInstanceId;
     const targetSessionId = displayedSessionId;
     let i = 0;
@@ -6257,7 +6263,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 静默吞掉——终端在跑、手机再也不刷新、无任何报错。此刻视图已切走，flush 出来的事件会被
       // onHistoryAppend 的 viewingInstanceId 守卫正常丢弃，所以只关闸、不会污染新视图。
       if (displayedInstanceId !== targetInstanceId) {
-        // #307 观测：这一趟画的东西整段作废。同一会话换了实例却没有再全量重载的话，屏幕就停在只有提示条
+        // #307 观测：这一趟画的东西整段作废，由新视图重新加载（见上方注释）
         logClientEvent('recv', `[HISTORY_RENDER] 渲染途中实例变了，放弃本次历史渲染 session=${targetSessionId} instance=${targetInstanceId}→${displayedInstanceId} 已渲染 ${i}/${msgs.length}`);
         if (displayedSessionId === targetSessionId) offerHistoryReload(noticeBar);
         onDone?.();
@@ -6285,6 +6291,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       }
       if (!cardsOnly) leaveStartScreen();
       messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow（分块只让解析让出主线程，插入仍是一次性）
+      noticeBar?.removeAttribute('data-history-pending');
       // cardsOnly 下 frag 恒空：调用方已过滤成「只有 parentToolUseId 的条目」，appendNode 全部路由进卡
       // 历史已落地：把 clearView 保住的未确认气泡与刚回来的历史收敛成一条（见函数注释）。
       // 必须排在 scrollBottom 之前——它可能移动/删除气泡，位置定下来再落底才不会滚错。
