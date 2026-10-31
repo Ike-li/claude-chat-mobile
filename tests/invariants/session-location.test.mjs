@@ -46,7 +46,11 @@ test('多个有效候选拒绝猜测；明确选定的有效目录仍可打开',
 test('无归属证据、编码撞名和未授权候选均不自动认领', async () => {
   const f = fixture(); f.write(f.next, f.id, null);
   assert.equal((await location.resolveSessionLocation(f)).status, 'not_found');
-  f.write(f.next, f.id, f.next.replace('/next', '/ne-t'));
+  // 真实撞名：两条不同 cwd 确实编码到同一个 project 目录。
+  const foreignOwner = f.next.replace('/.claude/', '/_claude/');
+  assert.notEqual(foreignOwner, f.next);
+  assert.equal(getProjectDir(foreignOwner), getProjectDir(f.next));
+  f.write(f.next, f.id, foreignOwner);
   assert.equal((await location.resolveSessionLocation(f)).status, 'not_found');
   f.write(f.next);
   assert.equal((await location.resolveSessionLocation({ ...f, authorize: c => c === f.next ? null : f.authorize(c) })).status, 'not_found');
