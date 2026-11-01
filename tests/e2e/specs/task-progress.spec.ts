@@ -58,7 +58,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#taskProgressBanner')).toBeHidden();
     await expect(page.locator('#messages')).not.toContainText('另一个工作区正在运行后台任务');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '运行中');
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 运行中');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他文件夹 · 运行中');
 
     await openSessionsSidebar(page);
     const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);

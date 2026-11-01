@@ -175,7 +175,7 @@ test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () =
   test('配置的文件夹找不到 → 📁 行：个数 + 可能原因 + 怎么恢复', () => {
     assert.deepEqual(
       formatServiceNotices({ service: { missingFolders: 2 }, now: 1000 }),
-      ['📁 2 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理工作区」里删掉']
+      ['📁 2 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理文件夹」里删掉']
     );
   });
   test('missingFolders 为 0 / 缺席（旧 server）/ 脏值 → 不出这一行', () => {

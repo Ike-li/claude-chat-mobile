@@ -146,7 +146,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#sessionsDot')).toBeVisible();
     await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '出错');
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 出错');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他文件夹 · 出错');
 
     await openSessionsSidebar(page);
     const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
@@ -168,7 +168,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '需要你');
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 需要你');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他文件夹 · 需要你');
 
     await openSessionsSidebar(page);
     const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);

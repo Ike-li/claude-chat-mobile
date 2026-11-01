@@ -129,7 +129,7 @@ function behaviorRow({ lang = 'zh', theme = 'system' } = {}) {
     { text: t('审批规则'), el: 'permissionRulesSection' },
     // 旧文案第三项是「会花钱的功能」——那个词在页面里从来不存在。这一项真正对应的是
     // 「全部配置」按钮，它后面才是端口 / 工作区 / 推送那张表。
-    { text: t('端口与工作区'), el: 'btnEnvConfig' },
+    { text: t('端口与文件夹'), el: 'btnEnvConfig' },
   ]);
 }
 

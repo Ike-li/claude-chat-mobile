@@ -74,7 +74,7 @@
   <header class="flex items-center justify-between px-4 py-2.5 bg-surface border-b border-line shrink-0 sticky top-0 z-20">
     <!-- Left Section: Sidebar/Workspaces Toggler -->
     <div class="relative flex items-center gap-1.5 shrink-0">
-      <button id="btnSessions" class="hit-44-tight relative w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看工作区、会话列表和后台状态" aria-label="工作区与会话">
+      <button id="btnSessions" class="hit-44-tight relative w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看文件夹、会话列表和后台状态" aria-label="文件夹与会话">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5 text-ink-soft">
           <path stroke-linecap="round" stroke-linejoin="round" d="M4.75 5.75A1.75 1.75 0 016.5 4h11A1.75 1.75 0 0119.25 5.75v12.5A1.75 1.75 0 0117.5 20h-11a1.75 1.75 0 01-1.75-1.75V5.75z" />
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 4v16M12.5 8h3.75M12.5 12h3.75M12.5 16h2.5" />
@@ -119,7 +119,7 @@
     <!-- Right Section: Home / Log / New Session / More（四钮同材质，＋ 不单独上色） -->
     <div id="headerActions" class="flex items-center justify-end gap-2 min-w-0 shrink-0">
       <!-- 回空首页（最近工作区与会话枢纽；不清会话指针，与 ＋ 新建分工） -->
-      <button id="btnHome" class="hit-44-tight w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="回首页（最近工作区与会话）" aria-label="回首页">
+      <button id="btnHome" class="hit-44-tight w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="回首页（最近文件夹与会话）" aria-label="回首页">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12 12 2.25 21.75 12M4.5 10.5v9.75a.75.75 0 00.75.75h4.5v-6h4.5v6h4.5a.75.75 0 00.75-.75V10.5" />
         </svg>
@@ -171,7 +171,7 @@
   <aside id="leftSidebar" class="fixed inset-y-0 left-0 z-40 w-5/6 max-w-sm h-full bg-surface border-r border-line shadow-pop transform -translate-x-full transition-transform duration-300 flex flex-col">
     <!-- 侧边栏顶部标题区 -->
     <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0">
-      <span class="text-sm font-semibold uppercase tracking-wide text-ink" style="font-family:var(--font-read)">工作区与会话</span>
+      <span class="text-sm font-semibold uppercase tracking-wide text-ink" style="font-family:var(--font-read)">文件夹与会话</span>
       <!-- gap-4：两个 hit-44 各向外扩 8px，间距 16px 时热区刚好相接不重叠，✕ 仍在最右 -->
       <div class="flex items-center gap-4 shrink-0">
         <!-- GitHub 仓库常驻入口：纯静态 <a>，无需 app.js 接线。设置「帮助」页那条（#linkGithub）要点三下才到。
@@ -1267,7 +1267,7 @@
             <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="host">🖥 整机</span>
           </div>
           <div class="space-y-2">
-            <button id="btnEnvConfig" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">⚙ 全部配置 · 端口 / 工作区 / 推送 →</button>
+            <button id="btnEnvConfig" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">⚙ 全部配置 · 端口 / 文件夹 / 推送 →</button>
             <!-- 开发者模式：一键重启 server（仅 DEV_MODE=1 时显示，由 setInstances 控制）-->
             <div id="devModeGroup" class="hidden">
               <button id="btnRestartServer" type="button" class="w-full text-left p-2.5 rounded-xl border border-warning/40 bg-warning/5 active:bg-warning/10 text-xs text-warning">⟳ 重启服务（改代码/配置后生效）</button>

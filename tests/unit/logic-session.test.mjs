@@ -592,8 +592,8 @@ test('formatComposeDefaultsSummary: 拼装工作区新会话默认档文案', ()
     formatComposeDefaultsSummary({ modelLabel: 'opus', modeLabel: '', effortLabel: 'high' }),
     'opus · high',
   );
-  assert.equal(formatComposeDefaultsSummary({}), '使用工作区默认配置');
-  assert.equal(formatComposeDefaultsSummary({ modelLabel: '  ', modeLabel: null }), '使用工作区默认配置');
+  assert.equal(formatComposeDefaultsSummary({}), '使用此文件夹的默认配置');
+  assert.equal(formatComposeDefaultsSummary({ modelLabel: '  ', modeLabel: null }), '使用此文件夹的默认配置');
 });
 
 // 新会话首发的乐观 busy（"正在执行任务"）在服务端懒开实例并广播 instances 后，会被 setInstances→bindView→

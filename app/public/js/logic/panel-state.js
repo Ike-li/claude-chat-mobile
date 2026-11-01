@@ -497,7 +497,7 @@ export function formatComposeDefaultsSummary({ modelLabel, modeLabel, effortLabe
   const parts = [modelLabel, modeLabel, effortLabel]
     .map(s => (typeof s === 'string' ? s.trim() : ''))
     .filter(Boolean);
-  return parts.length ? parts.join(' · ') : t('使用工作区默认配置');
+  return parts.length ? parts.join(' · ') : t('使用此文件夹的默认配置');
 }
 
 // 顶部工作区 pill（点开文件浏览 / git 改动）可见性。
@@ -760,7 +760,7 @@ export function resolveHeaderAttentionChip({ badgeReason = 'ok', needsYouCount =
   const tone = OTHER_WORKSPACE_CHIP_TONE[otherWorkspaceStatus];
   if (tone) {
     const label = DRAWER_STATUS_LABELS[otherWorkspaceStatus];
-    return { visible: true, tone, reason: 'other-workspace', text: `${t('其他工作区')} · ${t(label)}` };
+    return { visible: true, tone, reason: 'other-workspace', text: `${t('其他文件夹')} · ${t(label)}` };
   }
   return { visible: false, tone: null, reason: 'ok', text: '' };
 }

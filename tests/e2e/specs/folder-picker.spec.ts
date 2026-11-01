@@ -105,7 +105,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await openSessionsSidebar(page);
     const add = page.locator('[data-testid="drawer-add-folder"]');
     await expect(add).toBeDisabled();
-    await expect(page.locator('[data-testid="drawer-folders-readonly"]')).toHaveText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
+    await expect(page.locator('[data-testid="drawer-folders-readonly"]')).toHaveText('文件夹列表来自环境变量 WORK_DIRS，手机上改不了');
     // 抽屉的打开判据只看 class，滑入动画还在走：force 点击不等动画，会点在视口外（并行 8 片下 10 次红过多次）
     await expect(add).toBeInViewport();
     await add.click({ force: true });
@@ -121,7 +121,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await openPickerFromCompose(page);
     const add = picker(page).locator('[data-testid="folder-picker-add"] button');
     await expect(add, '走进去才发现改不了的入口').toBeDisabled();
-    await expect(picker(page).locator('[data-testid="folder-picker-add"]')).toContainText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
+    await expect(picker(page).locator('[data-testid="folder-picker-add"]')).toContainText('文件夹列表来自环境变量 WORK_DIRS，手机上改不了');
     // 断言打在行里的主按钮上：data-testid 挂在外层 div，div 永远算 enabled（#340 review）
     await expect(picker(page).locator('[data-testid="folder-picker-project"]').first().locator('button').first(), '已连接的文件夹照常可选').toBeEnabled();
     await expectNoBrowserErrors(page);
@@ -135,7 +135,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.request.post('/__folders-readonly?code=source_readonly');
     await entry(page, 'code').locator('button').first().click();
     await entry(page, 'new-idea').locator('button').first().click();
-    await expect(picker(page).locator('[data-testid="folder-picker-readonly"]')).toHaveText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
+    await expect(picker(page).locator('[data-testid="folder-picker-readonly"]')).toHaveText('文件夹列表来自环境变量 WORK_DIRS，手机上改不了');
     await expect(picker(page).locator('[data-testid="folder-picker-mkdir"]'), '给了一个建完才报「改不了」、还留下空目录的按钮').toHaveCount(0);
     await expect(picker(page).locator('[data-testid="folder-picker-start-here"]'), '未连接的目录加不进清单，点了只会被拒').toBeDisabled();
     await expectNoBrowserErrors(page);
@@ -363,7 +363,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const guide = page.locator('[data-testid="dash-no-folders"]');
     await expect(guide).toBeVisible();
     await expect(guide.locator('[data-testid="dash-pick-folder"]'), '手机上加不了，引导却给了一个走到底才报错的按钮').toBeHidden();
-    await expect(guide.locator('[data-testid="dash-folders-readonly"]')).toHaveText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
+    await expect(guide.locator('[data-testid="dash-folders-readonly"]')).toHaveText('文件夹列表来自环境变量 WORK_DIRS，手机上改不了');
     // 改得了的时候按钮回来、原因收起（同一页上随广播切换）
     await page.request.post('/__set-connected-folders?dirs=&readonly=');
     await expect(guide.locator('[data-testid="dash-pick-folder"]')).toBeVisible();

@@ -80,7 +80,7 @@ export function resolveModelTileDisplay(models) {
 // 指向面板右上角那个恒可见的 ⟳（settings-config-refresh），让用户有一个真能按的出路。
 export function modelGridEmptyHint({ tileCount } = {}) {
   if (Number.isFinite(tileCount) && tileCount > 0) return null;
-  return t('还没拿到这个工作区的模型清单。点上方 ⟳ 重新读取，或发一条消息后自动补齐。');
+  return t('还没拿到这个文件夹的模型清单。点上方 ⟳ 重新读取，或发一条消息后自动补齐。');
 }
 
 /** value=default 条目的 resolvedModel（wire），无则 '' */

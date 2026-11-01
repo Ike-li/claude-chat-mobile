@@ -190,7 +190,7 @@ export function createSessionSidebar(context, {
       return btn;
     };
     if (notice.id === MISSING_FOLDERS_NOTICE_ID) {
-      action(t('管理工作区')).onclick = () => {
+      action(t('管理文件夹')).onclick = () => {
         haptic('tap');
         closeLeftSidebar();
         envConfigPanel.open({ from: 'drawer', focusKey: 'WORKDIRS' });
@@ -220,7 +220,7 @@ export function createSessionSidebar(context, {
           // 一点就改写配置、连各自的 sessionLimit 一起删；告警自己就说了可能只是外置盘没挂上，而家目录外的路径
           // 从手机上加不回来（添加文件夹只浏览家目录）——先确认，并把要删的路径列出来（同「断开连接」）。
           if (!(await appConfirm({
-            title: t('从工作区列表移除这些文件夹？'),
+            title: t('从列表移除这些文件夹？'),
             body: `${t('会改写配置文件，连同各自的会话上限设置一起删掉。只是外置盘没挂上的话，挂回来点「重新检查」即可。')}\n${paths.join('\n')}`,
             okText: t('移除'),
             tone: 'danger',
@@ -337,7 +337,7 @@ export function createSessionSidebar(context, {
       // （bg_locked 刻意是 warn 图标 + ink-faint 色：它是「此路不通」的说明，不该去抢待办的注意力）
       setStatusIcon(sessionsDot, meta.icon, { tone: false });
       sessionsDot.setAttribute('aria-label', meta.label);
-      sessionsDot.title = `${t('其他工作区')} · ${meta.label}`;
+      sessionsDot.title = `${t('其他文件夹')} · ${meta.label}`;
     } else {
       sessionsDot.innerHTML = '';
       sessionsDot.textContent = '';
@@ -657,7 +657,7 @@ export function createSessionSidebar(context, {
     }
 
     // 物理热区扩大版 "＋" 新建按钮
-    const newSessionBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm font-bold shadow-sm transition-all" title="${t('在此工作区新建会话')}">＋</button>`);
+    const newSessionBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm font-bold shadow-sm transition-all" title="${t('在此文件夹新建会话')}">＋</button>`);
     newSessionBtn.onclick = (e) => {
       e.stopPropagation();
       closeLeftSidebar();

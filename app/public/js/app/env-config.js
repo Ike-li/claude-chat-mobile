@@ -246,7 +246,7 @@ export function createEnvConfigPanel({
     const add = document.createElement('button');
     add.type = 'button';
     add.className = 'w-full px-2 py-1.5 rounded-lg border border-dashed border-line text-xs text-ink-soft active:bg-sunk';
-    add.textContent = t('+ 添加工作区');
+    add.textContent = t('+ 添加文件夹');
     add.dataset.listAdd = '1';
     add.addEventListener('click', () => {
       list.append(addRow(null));
@@ -286,14 +286,14 @@ export function createEnvConfigPanel({
         // WORK_DIRS）。**提前 return，不登记进 fields** —— 留一个能点的编辑器只会让人改完看到
         // 「保存成功」，而授权的工作区一个都没变。
         row.append(el('div', 'text-[10px] text-warning leading-relaxed',
-          t('当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。')));
+          t('当前安装用的是 .env，文件夹列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。')));
         return row;
       }
       else if (item.kind === 'list' && item.locked === 'work-dirs-file') {
         // 同一族：配置里还挂着旧版 WORK_DIRS_FILE，生效的是那份外置文件，这里改了不生效（服务端写入侧也会拒）。
         // 同样提前 return、不登记进 fields。出路就在这个面板里：把 WORK_DIRS_FILE 那一项清空。
         row.append(el('div', 'text-[10px] text-warning leading-relaxed',
-          t('工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。')));
+          t('文件夹列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。')));
         return row;
       }
       else if (item.kind === 'list') row.append(buildListEditor(item, field));
