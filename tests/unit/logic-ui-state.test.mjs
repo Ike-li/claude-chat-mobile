@@ -264,10 +264,10 @@ test.describe('resolveHeaderAttentionChip：顶栏文字 chip 按优先级只说
     assert.equal(resolveHeaderAttentionChip({ badgeReason: 'attention', needsYouCount: 0 }).text, '需要你');
   });
 
-  test('本机健康但其他工作区需要你/出错 → 「其他工作区 · 状态」，色调随状态', () => {
+  test('本机健康但其他工作区需要你/出错 → 「其他文件夹 · 状态」，色调随状态', () => {
     const perm = resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'permission' });
-    assert.deepEqual(perm, { visible: true, tone: 'warning', reason: 'other-workspace', text: '其他工作区 · 需要你' });
-    assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'error' }).text, '其他工作区 · 出错');
+    assert.deepEqual(perm, { visible: true, tone: 'warning', reason: 'other-workspace', text: '其他文件夹 · 需要你' });
+    assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'error' }).text, '其他文件夹 · 出错');
     assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'error' }).tone, 'danger');
   });
 

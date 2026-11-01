@@ -639,7 +639,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 返回会话行都没有 terminal 字段，运行态只来自 session:list 的 cwd 级 terminalBusy 汇总。
     await expect(otherDir.locator('.dir-badge')).toHaveText('运行中');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '运行中');
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 运行中');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他文件夹 · 运行中');
     // 2026-09-02：busy 不再占顶栏文字 chip。顶栏那一个位子只说「点开就能处理」的事，而「别的
     // 工作区在跑」点开抽屉也没有可执行动作，且它是能持续几十分钟的状态（不是事件），常驻会训练
     // 用户忽略这个位置、反过来拉低同槽位「需要你/出错」的信号强度。该信息由 #sessionsDot 图标
@@ -653,7 +653,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // #398：关抽屉停轮询，但不得 clear terminalStateByDir——主 UI 仍靠 last-known 点亮 Dot。
     await expect(page.locator('#sessionsDot')).toBeVisible();
     await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '运行中');
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 运行中');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他文件夹 · 运行中');
     await expect(page.locator('[data-testid="header-attention-chip"]')).toBeHidden();
 
     await expectNoBrowserErrors(page);
@@ -695,7 +695,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 于是这里恒隐藏；更糟的是同目录只要另有个在跑的会话反倒会亮「运行中」，更轻的盖过更重的。
     // 单测钉的是 rank 表本身，钉不到「图标真的画出来了」——那还要过 DRAWER_STATUS_META 这道渲染白名单。
     await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '终端需要你');
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 终端需要你');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他文件夹 · 终端需要你');
 
     // 但顶栏文字 chip 必须【仍然】安静。图标与 chip 出自同一个 summarizeOtherWorkspaces，分流全靠
     // 两张表（DRAWER_STATUS_META 渲染白名单 / OTHER_WORKSPACE_CHIP_TONE 准入表）——给 rank 表加状态

@@ -5375,7 +5375,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       const t1 = el('<div class="font-semibold text-ink"></div>');
       t1.textContent = `Skills · ${lastSkillsCount} ${t('个可用')}`;
       const t2 = el('<div class="text-ink-soft mt-0.5"></div>');
-      t2.textContent = t('当前工作区加载的技能');
+      t2.textContent = t('当前文件夹加载的技能');
       skills.append(t1, t2);
       body.appendChild(skills);
     }
@@ -5633,7 +5633,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     const guide = el(`
       <div class="empty-session-guide flex flex-col items-center justify-center py-10 px-4 text-center select-none" data-testid="empty-session-guide">
         <div class="text-base font-medium text-ink mb-1">${t('新会话已就绪')}</div>
-        <div class="text-xs text-ink-soft mb-4">${t('工作区')} <span class="font-semibold text-ink">${esc(baseName(currentCwd) || '…')}</span>${currentModel ? ` · ${t('模型')} <span class="font-semibold">${esc(currentModel)}</span>` : ''}</div>
+        <div class="text-xs text-ink-soft mb-4">${t('文件夹')} <span class="font-semibold text-ink">${esc(baseName(currentCwd) || '…')}</span>${currentModel ? ` · ${t('模型')} <span class="font-semibold">${esc(currentModel)}</span>` : ''}</div>
         <div class="flex flex-col gap-2 w-full max-w-sm">
           <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('总结当前仓库结构并指出入口文件')}">${t('💡 总结当前仓库结构')}</button>
           <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('帮我写一个最小改动的修复计划')}">${t('🛠 写一个最小修复计划')}</button>

@@ -67,7 +67,7 @@ export async function openWorkspaceSession(page: Page, cwd: string, title: strin
 }
 
 export async function startNewSessionInWorkspace(page: Page, cwd: string) {
-  await workspaceRow(page, cwd).locator('button[title="\u5728\u6b64\u5de5\u4f5c\u533a\u65b0\u5efa\u4f1a\u8bdd"]').click();
+  await workspaceRow(page, cwd).locator('button[title="\u5728\u6b64\u6587\u4ef6\u5939\u65b0\u5efa\u4f1a\u8bdd"]').click();
 }
 
 export function sessionRowByInstance(page: Page, instanceId: string) {

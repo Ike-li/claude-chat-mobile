@@ -164,14 +164,14 @@ export function createEmptySurfaces(context, {
     host.innerHTML = '';
 
     if (!newSessionWorktree.isAvailable()) {
-      if (sub) sub.textContent = t('将在此工作区开新 CLI 会话');
+      if (sub) sub.textContent = t('将在此文件夹开新 CLI 会话');
       return;
     }
 
     if (sub) {
       sub.textContent = st.enabled
         ? t('将在 %s 的新 worktree 里开，不动当前工作树').replace('%s', st.sourceBranch || '')
-        : t('将在此工作区开新 CLI 会话');
+        : t('将在此文件夹开新 CLI 会话');
     }
 
     const row = el('<div class="flex items-center justify-center gap-1.5 flex-wrap"></div>');
@@ -273,7 +273,7 @@ export function createEmptySurfaces(context, {
       <div class="compose-surface flex flex-col items-center w-full max-w-xl mx-auto py-8 px-3 select-none" data-testid="compose-surface">
         <div class="text-center mb-5 w-full">
           <h1 class="text-xl md:text-2xl font-bold tracking-tight text-ink mb-2 leading-tight">${t('新会话已就绪')}</h1>
-          <div class="text-[10px] text-ink-faint uppercase tracking-wider mb-1" data-compose-sub>${t('将在此工作区开新 CLI 会话')}</div>
+          <div class="text-[10px] text-ink-faint uppercase tracking-wider mb-1" data-compose-sub>${t('将在此文件夹开新 CLI 会话')}</div>
           <button type="button" class="compose-project-pill inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="compose-project-pill" title="${t('换一个文件夹')}">
             <svg class="w-4 h-4 shrink-0 text-accent opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5h4.25l2 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
@@ -430,8 +430,8 @@ export function createEmptySurfaces(context, {
     const body = byRestart
       ? t('服务已重启，之前的会话进程随之退出。会话记录仍保存在磁盘上，可以继续此会话，也可以回首页或新建一个会话。')
       : reason
-        ? t('后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。')
-        : t('停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。');
+        ? t('后台会话进程已意外退出，无法直接继续。可以回首页，或在此文件夹新建一个会话。')
+        : t('停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此文件夹新建一个会话。');
     const canResume = byRestart && resume?.sessionId && resume?.cwd;
     const container = el(`
       <div class="instance-destroyed-surface flex flex-col items-center w-full max-w-xl mx-auto py-8 px-3 select-none" data-testid="instance-destroyed-surface">
@@ -513,7 +513,7 @@ export function createEmptySurfaces(context, {
         <div id="dashWorkspacesSection" class="w-full hidden mb-5">
           <div class="text-[10.5px] font-bold text-ink-faint uppercase tracking-wider mb-2 px-1 flex items-center gap-1">
             <span>📁</span>
-            <span>${t('最近活跃工作区')}</span>
+            <span>${t('最近活跃的文件夹')}</span>
           </div>
           <div id="dashWorkspacesList" class="flex flex-wrap gap-2 w-full px-0.5"></div>
         </div>
@@ -531,7 +531,7 @@ export function createEmptySurfaces(context, {
         <div id="dashEmptyHint" class="w-full hidden text-center mt-2">
           <p class="text-xs text-ink-faint mb-3">${t('还没有最近会话')}</p>
           <button type="button" class="dash-open-sessions inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="${t('打开会话列表')}">
-            ${t('打开工作区与会话列表')}
+            ${t('打开文件夹与会话列表')}
           </button>
         </div>
 
@@ -665,7 +665,7 @@ export function createEmptySurfaces(context, {
       if (!incompleteEl) return;
       if (complete !== false) { incompleteEl.classList.add('hidden'); incompleteEl.textContent = ''; return; }
       const names = failedDirs.map(baseName).join('、');
-      incompleteEl.textContent = `${t('{n} 个工作区未能加载').replace('{n}', String(failedCount))}：${names}`;
+      incompleteEl.textContent = `${t('{n} 个文件夹未能加载').replace('{n}', String(failedCount))}：${names}`;
       incompleteEl.classList.remove('hidden');
       recentsSection?.classList.remove('hidden');
       emptyHint?.classList.add('hidden');

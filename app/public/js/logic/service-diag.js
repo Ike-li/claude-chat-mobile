@@ -462,7 +462,7 @@ export function formatServiceNoticeRows({ service, now } = {}) {
     notices.push({
       id: MISSING_FOLDERS_NOTICE_ID,
       paths: Array.isArray(service.missingFolderPaths) ? service.missingFolderPaths.filter(p => typeof p === 'string') : [],
-      text: t('📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理工作区」里删掉').replace('{n}', String(missing)),
+      text: t('📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理文件夹」里删掉').replace('{n}', String(missing)),
       tone: 'warning',
     });
   }

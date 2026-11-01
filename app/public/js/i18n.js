@@ -52,18 +52,18 @@ export const EN_DICT = Object.freeze({
   // —— 顶部状态条 ——
   '新聊天': 'New chat',
   '未连接': 'Disconnected',
-  '查看工作区、会话列表和后台状态': 'Workspaces, session list, and background status',
+  '查看文件夹、会话列表和后台状态': 'Folders, session list, and background status',
   '手机到主机的往返延迟': 'Round-trip latency from phone to host',
   '工作区：浏览或查看改动': 'Workspace: browse files or view changes',
   '工作区 {name}': 'Workspace {name}',
   '工作区 {name}，{n} 处改动': 'Workspace {name}, {n} change(s)',
   '可输入 / 斜杠命令或 @ 引用文件': 'Type / for slash commands or @ to mention files',
-  '回首页（最近工作区与会话）': 'Home (recent workspaces and sessions)',
+  '回首页（最近文件夹与会话）': 'Home (recent folders and sessions)',
   '回首页': 'Home',
   '查看当前会话运行日志': "View this session's run log",
   '查看会话日志': 'View session log',
   '创建新会话': 'New session',
-  '工作区与会话': 'Workspaces & sessions',
+  '文件夹与会话': 'Folders & sessions',
   '设置与状态': 'Settings & status',
   '打开设置与状态': 'Open settings & status',
   '通知 · 设备信任 · 语言 · 诊断': 'Notifications · device trust · language · diagnostics',
@@ -90,7 +90,7 @@ export const EN_DICT = Object.freeze({
   'MCP 服务器': 'MCP servers',
   '个': '',
   '个可用': 'available',
-  '当前工作区加载的技能': 'Skills loaded for this workspace',
+  '当前文件夹加载的技能': 'Skills loaded for this folder',
   '状态未知': 'status unknown',
   // —— MCP 服务器（宿主机页，#457）——
   '连接中': 'connecting',
@@ -106,7 +106,7 @@ export const EN_DICT = Object.freeze({
   '停用这个 MCP 服务器？': 'Disable this MCP server?',
   '对本项目持久生效，与终端 /mcp 相同：之后新开的会话也不再加载它。': 'This persists for the project, the same as /mcp in the terminal: new sessions won\'t load it either.',
   '先跑这个': 'Start here',
-  '⚙ 全部配置 · 端口 / 工作区 / 推送 →': '⚙ All settings · port / workspaces / push →',
+  '⚙ 全部配置 · 端口 / 文件夹 / 推送 →': '⚙ All settings · port / folders / push →',
   '在下方「已受信任的设备」里核对时，认准这一串就是你手上这台。': 'When checking the trusted device list below, this string identifies the device in your hand.',
   // L1 目录七行（logic/general-nav.js 算出，非静态文案）
   '通知': 'Notifications',
@@ -206,7 +206,7 @@ export const EN_DICT = Object.freeze({
   '直接拒绝': 'Denied',
   '每次都问': 'Always ask',
   '来自 ~/.claude/settings.json 与本工作区的 .claude/settings.local.json，与你在电脑终端里用的是同一份。这里只读——要改请在电脑上编辑那两个文件。': 'From ~/.claude/settings.json and this workspace\'s .claude/settings.local.json — the same rules your terminal uses. Read-only here; edit those files on the computer to change them.',
-  '端口与工作区': 'Ports & workspaces',
+  '端口与文件夹': 'Ports & folders',
   '安全体检': 'Security check',
   '服务日志': 'Service log',
   'server 进程自己的 stdout / stderr —— 「为什么起不来」的答案在这里': "The server process's own stdout / stderr — where 'why won't it start' is answered",
@@ -307,8 +307,9 @@ export const EN_DICT = Object.freeze({
   '（空目录）': '(empty directory)',
   '加载中…': 'Loading…',
   '工作区': 'Workspace',
+  '文件夹': 'Folder',
   '删除这一项': 'Remove this entry',
-  '+ 添加工作区': '+ Add workspace',
+  '+ 添加文件夹': '+ Add folder',
   '第一项就是手机端默认打开的目录。每项必须是绝对路径；改完即生效，无需重启。': 'The first entry is what your phone opens by default. Each must be an absolute path; changes take effect immediately, no restart needed.',
   // 工作区面板两 tab（原 chooser 的「浏览项目文件 / 工作区改动」两张大卡已随 chooser 层一并删除）
   '📁 文件': '📁 Files',
@@ -393,7 +394,7 @@ export const EN_DICT = Object.freeze({
   '宿主机': 'Host',
   '会话标识': 'Session ID',
   // 模型候选还没到（scout 在途）或取不到：不承诺进度，只给事实与出路
-  '还没拿到这个工作区的模型清单。点上方 ⟳ 重新读取，或发一条消息后自动补齐。': 'No model list for this workspace yet. Tap ⟳ above to re-read it, or send a message and it will fill in.',
+  '还没拿到这个文件夹的模型清单。点上方 ⟳ 重新读取，或发一条消息后自动补齐。': 'No model list for this folder yet. Tap ⟳ above to re-read it, or send a message and it will fill in.',
   // 懒创建期的就地说明。只讲机制、不讲用户做没做——首条已发出而 init 未回的短窗里，
   // 「你还没发消息」是假话（见 logic/panel-state.js sessionIdBlockView）。
   '发出第一条消息后，CLI 才会创建会话并分配 ID。': 'The CLI creates the session and assigns an ID once the first message is sent.',
@@ -595,10 +596,10 @@ export const EN_DICT = Object.freeze({
   '重启后生效：': 'After a restart: ',
   '{key} 被环境变量 {vars} 压着：写进文件也不生效，重启后仍是环境变量的值，先 unset 再重启': '{key} is overridden by the environment variable {vars}: the saved value has no effect and a restart keeps the environment value — unset it first, then restart',
   '（本进程不是常驻托管，请到电脑上重启）': ' (this process is not supervised — restart it from your computer)',
-  '当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。':
-    'This install still uses .env, where the workspace list can neither be read nor edited. Migrate to ccm.config.json first (run `node scripts/config.js migrate` on the computer), then come back.',
-  '工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。':
-    'The workspace list currently comes from the external file WORK_DIRS_FILE points to, so edits here would not take effect. Clear WORK_DIRS_FILE below, save, restart the server, then come back to edit (until the restart, that file still applies).',
+  '当前安装用的是 .env，文件夹列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。':
+    'This install still uses .env, where the folder list can neither be read nor edited. Migrate to ccm.config.json first (run `node scripts/config.js migrate` on the computer), then come back.',
+  '文件夹列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。':
+    'The folder list currently comes from the external file WORK_DIRS_FILE points to, so edits here would not take effect. Clear WORK_DIRS_FILE below, save, restart the server, then come back to edit (until the restart, that file still applies).',
   '已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）': 'Wrote N item(s). A service restart is required, and this process is not supervised — restart it from your computer.',
   '立即重启': 'Restart now',
   '立即重启服务': 'Restart the service now',
@@ -624,14 +625,14 @@ export const EN_DICT = Object.freeze({
   '时间未知': 'time unknown',
   '进入 ➔': 'Open ➔',
   ' · 使用中': ' · in use',
-  '其他工作区': 'Other workspaces',
+  '其他文件夹': 'Other folders',
   '模型': 'Model',
   '需要你': 'Needs you',
   // —— 会话行未读（R65，2026-08-30 需求合稿）+ 长按标为未读/已读 ——
   '未读': 'Unread',
   '{n} 未读': '{n} unread',
   '未读数加载中': 'Loading unread count',
-  '{n} 个工作区未能加载': '{n} workspaces failed to load',
+  '{n} 个文件夹未能加载': '{n} folders failed to load',
   '标为未读': 'Mark as unread',
   '标为已读': 'Mark as read',
   // 会话行「⋯」菜单
@@ -786,7 +787,7 @@ export const EN_DICT = Object.freeze({
   'xhigh + 多 agent workflow · 最彻底': 'xhigh + multi-agent workflow · most thorough',
   '跟随模型默认档': "Uses the model's default",
   'CLI 默认': 'CLI default',
-  '使用工作区默认配置': 'Uses the workspace defaults',
+  '使用此文件夹的默认配置': 'Uses this folder\'s defaults',
   '无项目': 'No project',
   '无文件夹': 'No folder',
   '选择文件夹': 'Choose a folder',
@@ -826,7 +827,7 @@ export const EN_DICT = Object.freeze({
   '文件夹不存在': 'Folder not found',
   '不是文件夹': 'Not a folder',
   '没有 ccm.config.json，手机上添加不了；请在电脑上运行 npm run setup': 'No ccm.config.json, so folders can\'t be added from the phone — run npm run setup on your computer',
-  '工作区列表来自环境变量 WORK_DIRS，手机上改不了': 'The folder list comes from the WORK_DIRS environment variable and can\'t be changed from the phone',
+  '文件夹列表来自环境变量 WORK_DIRS，手机上改不了': 'The folder list comes from the WORK_DIRS environment variable and can\'t be changed from the phone',
   '配置文件读不出来，已拒绝改写': 'The config file couldn\'t be read, so it was left untouched',
   '写入配置文件失败': 'Couldn\'t write the config file',
   '已写入配置，但没有生效': 'Saved to the config, but it didn\'t take effect',
@@ -973,13 +974,13 @@ export const EN_DICT = Object.freeze({
   '连不上 ntfy 服务': 'can\'t reach the ntfy server',
   '🐞 前端错误发生于': '🐞 Front-end error at',
   '，详见日志面板': ' — see the log panel',
-  '📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理工作区」里删掉':
-    '📁 {n} connected folder(s) can\'t be found (deleted, renamed, or the drive isn\'t mounted) — tap "Check again" once they\'re back, or remove the ones you no longer need in "Manage workspaces"',
+  '📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理文件夹」里删掉':
+    '📁 {n} connected folder(s) can\'t be found (deleted, renamed, or the drive isn\'t mounted) — tap "Check again" once they\'re back, or remove the ones you no longer need in "Manage folders"',
   // 告警行内的动作（#301 / #355）
-  '管理工作区': 'Manage workspaces',
+  '管理文件夹': 'Manage folders',
   '重新检查': 'Check again',
   '从列表移除缺失项': 'Remove missing from list',
-  '从工作区列表移除这些文件夹？': 'Remove these folders from the workspace list?',
+  '从列表移除这些文件夹？': 'Remove these folders from the list?',
   '移除': 'Remove',
   '会改写配置文件，连同各自的会话上限设置一起删掉。只是外置盘没挂上的话，挂回来点「重新检查」即可。': 'This rewrites the config file and drops their session-limit settings too. If an external drive just isn\'t mounted, mount it and tap “Check again” instead.',
   '忽略': 'Dismiss',
@@ -1081,7 +1082,7 @@ export const EN_DICT = Object.freeze({
   '切换无响应，请刷新页面后重试': 'No response switching — refresh the page and try again',
   '显示更多 {n} 个': 'Show {n} more',
   '显示更多 {n} 个（还有 {m} 个）': 'Show {n} more ({m} left)',
-  '在此工作区新建会话': 'New session in this workspace',
+  '在此文件夹新建会话': 'New session in this folder',
   '深链目标会话已不可用': 'The linked session is no longer available',
   // —— 会话打不开的落地页（session:switch 被拒时的四合一落地） ——
   '会话打不开': "Can't open session",
@@ -1151,7 +1152,7 @@ export const EN_DICT = Object.freeze({
 
   // —— 空表面：新会话页 / 首页 / 会话中断页 ——
   '新会话已就绪': 'New session ready',
-  '将在此工作区开新 CLI 会话': 'Starts a new CLI session in this workspace',
+  '将在此文件夹开新 CLI 会话': 'Starts a new CLI session in this folder',
   '在新 worktree 里开': 'Open in a new worktree',
   '勾选「在新 worktree 里开」后可换源分支': 'Check "Open in a new worktree" to pick a source branch',
   '将在 %s 的新 worktree 里开，不动当前工作树': 'Opens in a new worktree off %s, leaving your working tree untouched',
@@ -1166,8 +1167,8 @@ export const EN_DICT = Object.freeze({
   '运行相关测试并解读失败': 'Run the relevant tests and explain the failures',
   '🧪 运行测试并解读': '🧪 Run tests and explain',
   '⏹ 会话已中断': '⏹ Session interrupted',
-  '后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。': 'The background session process exited unexpectedly, so it can\'t continue. Go home, or start a new session in this workspace.',
-  '停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。': 'The stop didn\'t finish cleanly and the background session process exited unexpectedly, so it can\'t continue. Go home, or start a new session in this workspace.',
+  '后台会话进程已意外退出，无法直接继续。可以回首页，或在此文件夹新建一个会话。': 'The background session process exited unexpectedly, so it can\'t continue. Go home, or start a new session in this folder.',
+  '停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此文件夹新建一个会话。': 'The stop didn\'t finish cleanly and the background session process exited unexpectedly, so it can\'t continue. Go home, or start a new session in this folder.',
   '🔄 服务已重启': '🔄 Service restarted',
   '服务已重启，之前的会话进程随之退出。会话记录仍保存在磁盘上，可以继续此会话，也可以回首页或新建一个会话。': 'The service was restarted and the previous session process exited with it. The session is still saved on disk — continue this session, go home, or start a new one.',
   '继续此会话': 'Continue this session',
@@ -1177,11 +1178,11 @@ export const EN_DICT = Object.freeze({
   '下午好，今天我能帮您做什么？': 'Good afternoon. What can I help you with today?',
   '晚上好，今天我能帮您做什么？': 'Good evening. What can I help you with today?',
   '从最近会话继续，或点 ＋ 新建': 'Pick up a recent session, or tap ＋ to start a new one',
-  '最近活跃工作区': 'Recently active workspaces',
+  '最近活跃的文件夹': 'Recently active folders',
   '最近活跃会话': 'Recently active sessions',
   '还没有最近会话': 'No recent sessions yet',
   '打开会话列表': 'Open the session list',
-  '打开工作区与会话列表': 'Open workspaces & sessions',
+  '打开文件夹与会话列表': 'Open folders & sessions',
   '❓ 如何连接与使用': '❓ How to connect and use',
 
   // —— 只读镜像 / 续接 CLI 会话 ——

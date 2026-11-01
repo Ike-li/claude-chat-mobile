@@ -57,7 +57,7 @@ const FOLDER_REASON_TEXT = Object.freeze({
   not_found: tk('文件夹不存在'),
   not_directory: tk('不是文件夹'),
   no_config_file: tk('没有 ccm.config.json，手机上添加不了；请在电脑上运行 npm run setup'),
-  source_readonly: tk('工作区列表来自环境变量 WORK_DIRS，手机上改不了'),
+  source_readonly: tk('文件夹列表来自环境变量 WORK_DIRS，手机上改不了'),
   config_unreadable: tk('配置文件读不出来，已拒绝改写'),
   write_failed: tk('写入配置文件失败'),
   not_applied: tk('已写入配置，但没有生效'),

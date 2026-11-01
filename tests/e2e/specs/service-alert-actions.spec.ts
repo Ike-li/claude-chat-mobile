@@ -17,14 +17,14 @@ async function setGone(page: Page, paths: string[], { apply = false } = {}) {
 }
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
-  test('P0-SVC-ALERT-1 「管理工作区」打开工作区编辑器，删掉缺失项并保存后告警消失', async ({ page }) => {
+  test('P0-SVC-ALERT-1 「管理文件夹」打开文件夹列表编辑器，删掉缺失项并保存后告警消失', async ({ page }) => {
     await gotoMock(page);
     await setGone(page, [A, B], { apply: true });
     await openSessionsSidebar(page);
     await expect(alertRow(page)).toContainText('2 个已连接的文件夹找不到了');
     await expect(alertRow(page), '文案不能再叫人重启服务').not.toContainText('重启服务');
 
-    await alertRow(page).getByRole('button', { name: '管理工作区' }).click();
+    await alertRow(page).getByRole('button', { name: '管理文件夹' }).click();
     await expect(page.locator('#envConfigModal')).toBeVisible();
     const paths = page.locator('#envConfigBody input[data-list-path]');
     await expect(paths).toHaveCount(4);
