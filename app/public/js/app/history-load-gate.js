@@ -34,6 +34,7 @@
 // 20s：必须长于 app.js 的 session:history ack 超时（15s）+ 分块渲染最坏耗时，让 release/abort 这两条
 // 显式路径永远有先手，看门狗只在「回调压根没来过」时才兜底。它不是正常路径的一部分，调到这里就说明
 // 有代码路径失职了；阈值宁可保守，也不要把慢加载误判成失职而抢跑。
+// 历史分两次传时（先最近一段、再补更早的）每次回执各有 15s 超时，发第二次时 rearm 从那一刻重新计时，上面这条照样成立。
 const DEFAULT_TIMEOUT_MS = 20000;
 
 export function createHistoryLoadGate({ timers = globalThis, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
@@ -47,6 +48,15 @@ export function createHistoryLoadGate({ timers = globalThis, timeoutMs = DEFAULT
     if (current?.timeoutId != null) timers.clearTimeout(current.timeoutId);
   }
 
+  function arm(handle) {
+    handle.timeoutId = timers.setTimeout(() => {
+      if (current !== handle) return; // 已被更晚一次 begin/release/abort 顶替，本次兜底失效
+      const held = handle.queue;
+      current = null;
+      onTimeoutFlush(held);
+    }, timeoutMs);
+  }
+
   return {
     // 兜底放行的接收方（app.js 注入，走与正常放行同一条 onHistoryAppend 路径）。
     onTimeout(fn) { onTimeoutFlush = typeof fn === 'function' ? fn : () => {}; },
@@ -58,13 +68,14 @@ export function createHistoryLoadGate({ timers = globalThis, timeoutMs = DEFAULT
       const handle = { instanceId: instanceId ?? null, queue: [], timeoutId: null };
       current = handle;
       latest = handle;
-      handle.timeoutId = timers.setTimeout(() => {
-        if (current !== handle) return; // 已被更晚一次 begin/release/abort 顶替，本次兜底失效
-        const held = handle.queue;
-        current = null;
-        onTimeoutFlush(held);
-      }, timeoutMs);
+      arm(handle);
       return handle;
+    },
+    // 同一轮又发出一次要等回执的请求：兜底从现在起重新计时。不是本轮、或已关闸，什么都不做
+    rearm(handle) {
+      if (!current || isStale(handle)) return;
+      disarm();
+      arm(current);
     },
     // 返回 true 表示已扣住，调用方不要再渲染这条。
     // 只扣当前加载目标的事件——与 loadHistory 的迟到 ACK 守卫同口径；别的实例的追平必须照常放行，

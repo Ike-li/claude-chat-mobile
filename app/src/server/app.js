@@ -29,7 +29,7 @@ import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, 
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
 import * as folderOrder from '../sessions/folder-order.js';
-import { getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, readLastCustomTitle, isSafeSessionId } from '../sessions/history.js';
+import { getSessionHistoryWithTotal, historyPage, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, readLastCustomTitle, isSafeSessionId } from '../sessions/history.js';
 import { createSessionRenamer, sanitizeSessionTitle } from '../sessions/session-rename.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
@@ -4745,9 +4745,10 @@ registerSocketConnection(io, socket => {
     cwd = location.cwd;
     try {
       // total = 削顶前的条数：超过 HISTORY_MAX_MESSAGES 时前端据此说「只显示了最近的」（验收 O44）
-      const { messages, total, timing } = await getSessionHistoryWithTotal(sessionId, cwd); // M6：async 避免阻塞事件循环
+      const { timing, ...history } = await getSessionHistoryWithTotal(sessionId, cwd); // M6：async 避免阻塞事件循环
+      // tail / before：分两次传，先最近一段、再补更早的（historyPage）；都不带就是整窗
       // timing：handler 总耗时加历史构建的拆分，前端写进打开会话那行 [PERF]（性能改造 Stage 0）
-      ack({ messages, total, timing: { ms: Date.now() - t0, ...timing } });
+      ack({ ...historyPage(history, payload), timing: { ms: Date.now() - t0, ...timing } });
     } catch (err) {
       ack({ messages: [], error: err.message });
     }

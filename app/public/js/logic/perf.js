@@ -43,7 +43,7 @@ export function summarizeResources(entries) {
 const OPEN_SOURCE_LABELS = { tap: '点击', bind: '视图切入' };
 // keep = 视图里已有的就是最新（DOM 缓存或服务端回放缓冲），没去拉磁盘历史
 const OPEN_OUTCOME_LABELS = { keep: '不拉历史', empty: '空会话', error: '失败', superseded: '被切走' };
-const OPEN_STEP_LABELS = { bind: '绑定视图', switch: '切换回执', sync: '同步回执', history: '历史回执', insert: '插入', backfill: '补齐更早', highlight: '高亮' };
+const OPEN_STEP_LABELS = { bind: '绑定视图', switch: '切换回执', sync: '同步回执', history: '历史回执', insert: '插入', older: '更早回执', backfill: '补齐更早', highlight: '高亮' };
 
 // 服务端回执里带的 timing（扁平对象）：ms 是总耗时，其余键去掉 Ms 后缀原样列出，顺序同服务端。
 function formatServerTiming(server) {

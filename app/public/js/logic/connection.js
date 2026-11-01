@@ -34,13 +34,15 @@ function renderKeysOf(msg) {
 // 长会话切入先画最近一段：返回切点 cut，msgs[cut] 是一条主链用户消息，最近段 msgs[cut..] 至少 minRecent 条。
 // cut = 0 表示不切，整段照旧一次画完。
 // 早段是后画的，所以任何 key 都不能一头在切点前、一头在切点后：配对会找不到卡，子 agent 卡会建在最近段里。
-export function historyRenderSplit(msgs, minRecent) {
+// suffix：msgs 只是历史的最近一段，更早的那段最后才接到最前面。某个 key 在这段里首次出现的不是开它的 tool_use，
+// 开它的那条就在更早那段里，按从段首之前就开着算；段里切点前没有打戳的气泡也不切，seedPrevTs 在更早那段里。
+export function historyRenderSplit(msgs, minRecent, { suffix = false } = {}) {
   const list = Array.isArray(msgs) ? msgs : [];
   const first = new Map();
   const last = new Map();
   list.forEach((msg, i) => {
     for (const key of renderKeysOf(msg)) {
-      if (!first.has(key)) first.set(key, i);
+      if (!first.has(key)) first.set(key, suffix && !(msg.kind === 'tool_use' && msg.toolUseId === key) ? -1 : i);
       last.set(key, i);
     }
   });
@@ -52,7 +54,9 @@ export function historyRenderSplit(msgs, minRecent) {
   }
   for (let i = 1; i < crossing.length; i++) crossing[i] += crossing[i - 1];
   for (let i = list.length - Math.max(1, minRecent | 0); i > 0; i--) {
-    if (isTurnStart(list[i]) && crossing[i] === 0) return { cut: i, seedPrevTs: lastStampedTsBefore(list, i) };
+    if (!isTurnStart(list[i]) || crossing[i] !== 0) continue;
+    const seedPrevTs = lastStampedTsBefore(list, i);
+    if (!suffix || seedPrevTs != null) return { cut: i, seedPrevTs };
   }
   return { cut: 0, seedPrevTs: null };
 }
@@ -298,12 +302,16 @@ export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, disk
 // 就核对不了，照常重新拉。
 // 与 app/src/sessions/history.js 的 HISTORY_MAX_MESSAGES 同值（前后端互不 import，单测对齐两边）。
 export const HISTORY_WINDOW_MAX = 2000;
+// session:history 先传的最近一段有多少条（server 的 historyPage 切），更早的那段另要。2026-10-31 量过最大的 25 份
+// 真实 transcript：300 条压缩后 33–89KB（整窗 316–481KB），其中 21 份能在这段里切出先画的最近段（historyRenderSplit 的 suffix）
+export const HISTORY_TAIL_FIRST = 300;
 export function prefetchCheckable(diskLen, diskTotal) {
   return Number.isInteger(diskLen) && (diskLen < HISTORY_WINDOW_MAX || Number.isInteger(diskTotal));
 }
 export function prefetchedHistoryFits({ diskLen, diskTotal, err, res } = {}) {
   if (err || res?.error || !Array.isArray(res?.messages)) return false;
-  if (!prefetchCheckable(diskLen, diskTotal) || res.messages.length !== diskLen) return false;
+  // 预取带了 tail 的回执只有最近一段，窗口条数在 res.diskLen；旧 server 不认 tail，交的就是整窗
+  if (!prefetchCheckable(diskLen, diskTotal) || (res.diskLen ?? res.messages.length) !== diskLen) return false;
   return diskLen < HISTORY_WINDOW_MAX || res.total === diskTotal;
 }
 

@@ -19,12 +19,15 @@ const UNCAPPED = 1999;
 const bubbles = (page: Page) => page.locator('#messages [data-testid="user-message"], #messages [data-testid="assistant-message"]');
 const finalMarker = (page: Page) => page.locator('[data-testid="assistant-message"]', { hasText: 'Long history final message marker' });
 
-// 同时观察 polling 与 websocket，避免首连尚未升级时漏掉请求（同 history-render-stall.spec.ts）
+// 同时观察 polling 与 websocket，避免首连尚未升级时漏掉请求（同 history-render-stall.spec.ts）。
+// 预取和重新拉都只要最近一段（tail），更早那段（带 before）是认领之后的第二个往返，不算一次拉取
 function captureHistoryLoads(page: Page) {
-  const loads: Array<{ sessionId: string; cwd?: string; prefetch?: boolean }> = [];
+  const loads: Array<{ sessionId: string; cwd?: string; prefetch?: boolean; tail?: number }> = [];
   const take = (payload: string) => {
     for (const packet of payload.split('\x1e')) {
-      if (packet.includes('"session:history"')) loads.push(JSON.parse(packet.slice(packet.indexOf('[')))[1]);
+      if (!packet.includes('"session:history"')) continue;
+      const body = JSON.parse(packet.slice(packet.indexOf('[')))[1];
+      if (body?.before === undefined) loads.push(body);
     }
   };
   page.on('websocket', ws => ws.on('framesent', frame => { if (typeof frame.payload === 'string') take(frame.payload); }));
@@ -58,14 +61,15 @@ test.describe('Stage 3b 点开非活会话时并行预取历史', () => {
 
     await expect.poll(() => loads.filter(p => p.sessionId === LONG).length, '切换回执扣着的时候历史就该发出去了').toBe(1);
     expect(loads[loads.length - 1].prefetch, '点击时发出的那次应带预取标记').toBe(true);
+    expect(loads[loads.length - 1].tail, '预取只要最近一段').toBe(300);
     expect((await (await page.request.post('/__release-switch')).json()).released, '前提：切换一直扣着').toBe(1);
 
     await expect(finalMarker(page)).toBeVisible({ timeout: 15_000 });
     await expect(bubbles(page)).toHaveCount(UNCAPPED);
     expect(loads.filter(p => p.sessionId === LONG), '预取对得上还重新拉了一次').toHaveLength(1);
-    // 预取的回执记在这次点击的打开上，只记一次（冷启动那次「视图切入」不能沾上它）
+    // 预取的回执记在这次点击的打开上，只记一次（冷启动那次「视图切入」不能沾上它）；更早那段接着要、单独一段
     const log = await openConsole(page);
-    const prefetchRows = perfRows(log, /历史回执 \+\d+（预取；1999 条/);
+    const prefetchRows = perfRows(log, /历史回执 \+\d+（预取；300 条.*更早回执 \+\d+（1699 条/);
     await expect(prefetchRows, '历史回执一段应标明用的是预取那份，且只有一行').toHaveCount(1, { timeout: 10_000 });
     await expect(prefetchRows, '预取记到了别的那次打开上').toContainText('[PERF] 打开会话');
     await expect(prefetchRows).toContainText('（点击）');
@@ -86,7 +90,7 @@ test.describe('Stage 3b 点开非活会话时并行预取历史', () => {
     const longLoads = loads.filter(p => p.sessionId === LONG);
     expect(longLoads.map(p => Boolean(p.prefetch)), '应是一次预取、一次重新拉').toEqual([true, false]);
     const log = await openConsole(page);
-    await expect(perfRows(log, /历史回执 \+\d+（预取对不上，重新拉；1999 条/), '[PERF] 行应记下预取作废、重新拉的那份').toHaveCount(1, { timeout: 10_000 });
+    await expect(perfRows(log, /历史回执 \+\d+（预取对不上，重新拉；300 条/), '[PERF] 行应记下预取作废、重新拉的那份').toHaveCount(1, { timeout: 10_000 });
     await page.locator('#consoleClose').click();
     await expectNoBrowserErrors(page);
   });
@@ -125,7 +129,7 @@ test.describe('Stage 3b 点开非活会话时并行预取历史', () => {
     const longLoads = loads.filter(p => p.sessionId === LONG);
     expect(longLoads.map(p => Boolean(p.prefetch)), '应是一次预取、一次重新拉').toEqual([true, false]);
     const log = await openConsole(page);
-    await expect(perfRows(log, /历史回执 \+\d+（预取对不上，重新拉；2000 条/), '[PERF] 行应记下预取作废、重新拉的那份').toHaveCount(1, { timeout: 10_000 });
+    await expect(perfRows(log, /历史回执 \+\d+（预取对不上，重新拉；300 条/), '[PERF] 行应记下预取作废、重新拉的那份').toHaveCount(1, { timeout: 10_000 });
     await page.locator('#consoleClose').click();
     await expectNoBrowserErrors(page);
   });
@@ -140,7 +144,7 @@ test.describe('Stage 3b 点开非活会话时并行预取历史', () => {
     await expect(bubbles(page)).toHaveCount(2000);
     expect(loads.filter(p => p.sessionId === LONG), '截顶的预取对得上还重新拉了一次').toHaveLength(1);
     const log = await openConsole(page);
-    await expect(perfRows(log, /历史回执 \+\d+（预取；2000 条/), '历史回执一段应标明用的是预取那份').toHaveCount(1, { timeout: 10_000 });
+    await expect(perfRows(log, /历史回执 \+\d+（预取；300 条.*更早回执 \+\d+（1700 条/), '历史回执一段应标明用的是预取那份').toHaveCount(1, { timeout: 10_000 });
     await page.locator('#consoleClose').click();
     await expectNoBrowserErrors(page);
   });

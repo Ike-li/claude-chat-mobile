@@ -23,14 +23,15 @@ const openA = { sid: 'A' };
 const openB = { sid: 'B' };
 
 test.describe('createHistoryPrefetch：凭打开凭据认领预取的历史', () => {
-  test('start 立刻发出 session:history，带上预取标记和超时', () => {
+  // tail：和 loadHistory 自己拉时一样只要最近一段，更早的由认领后的 loadHistory 再要
+  test('start 立刻发出 session:history，带上预取标记、最近一段的条数和超时', () => {
     const socket = fakeSocket();
-    const prefetch = createHistoryPrefetch({ socket, timeoutMs: 15000 });
+    const prefetch = createHistoryPrefetch({ socket, timeoutMs: 15000, tail: 300 });
     prefetch.start({ open: openA, sessionId: 'A', cwd: '/w' });
     assert.equal(socket.sent.length, 1);
     assert.deepEqual(
       { ms: socket.sent[0].ms, event: socket.sent[0].event, payload: socket.sent[0].payload },
-      { ms: 15000, event: 'session:history', payload: { sessionId: 'A', cwd: '/w', prefetch: true } },
+      { ms: 15000, event: 'session:history', payload: { sessionId: 'A', cwd: '/w', prefetch: true, tail: 300 } },
     );
   });
 

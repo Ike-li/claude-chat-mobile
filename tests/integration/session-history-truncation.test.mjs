@@ -98,4 +98,16 @@ test.describe('session:history 报削顶前的条数（真 server，零 token）
     assert.equal(res.messages.length, 4);
     assert.equal(res.total, 4);
   });
+
+  // 分两次传（historyPage）：切法的各种情形在 tests/unit/history-page.test.mjs，这里只钉 handler 把参数接上了
+  test('带 tail 先回最近一段，再带回 from 与 anchor 拿到更早那段，拼起来就是整窗', async () => {
+    const full = await emit('session:history', { sessionId: LONG_ID, cwd: workDir });
+    const recent = await emit('session:history', { sessionId: LONG_ID, cwd: workDir, tail: 300 });
+    assert.equal(recent.messages.length, 300);
+    assert.equal(recent.diskLen, HISTORY_MAX_MESSAGES, '缺 diskLen 前端就不知道还有更早的要补');
+    assert.equal(recent.total, LONG_TOTAL);
+    const older = await emit('session:history', { sessionId: LONG_ID, cwd: workDir, before: recent.from, anchor: recent.anchor });
+    assert.equal(older.stale, undefined);
+    assert.deepEqual([...older.messages, ...recent.messages], full.messages);
+  });
 });

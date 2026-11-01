@@ -37,6 +37,7 @@ import {
   shouldReloadOnEnter,
   prefetchedHistoryFits,
   prefetchCheckable,
+  HISTORY_TAIL_FIRST,
   shouldForceScrollAfterReplay,
   shouldStickScrollToBottom,
   resolveReplayBufferAction,
@@ -1543,7 +1544,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // 点开非活会话时和 session:switch 并行拉历史（见 history-prefetch.js），侧栏与首页最近列表共用。
   // 已经开着的不拉：走 user:setViewing、服务端多半有回放（replayed>0 时不报 diskLen，预取必然作废）。
   // 有 DOM 缓存的不拉：切回来多半走 keep，白下 1MB 级的历史，还和 sync:since 的回执挤同一条 WebSocket。
-  const historyPrefetch = createHistoryPrefetch({ socket, timeoutMs: HISTORY_ACK_TIMEOUT_MS });
+  const historyPrefetch = createHistoryPrefetch({ socket, timeoutMs: HISTORY_ACK_TIMEOUT_MS, tail: HISTORY_TAIL_FIRST });
   function prefetchHistory(open, sessionId, cwd) {
     if (instancesList.some(x => x?.sessionId === sessionId)) return;
     if (sessionDomCachePlan({ cached: sessionDomCache.get(sessionId) }).restore) return;
@@ -5860,7 +5861,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         onDone?.();
         return;
       }
-      const noticeBar = addBar(historyLoadedNotice(msgs.length, res?.total), 'text-ink-faint');
+      // 带 tail 拉的回执只是最近一段，窗口条数在 diskLen：更早那段当场再要，和画最近一段同时在路上（historyPage）。
+      // 旧 server 不认 tail、不报 diskLen，交的就是整窗
+      const windowLen = res.diskLen ?? msgs.length;
+      const earlier = windowLen > msgs.length ? fetchEarlier(res) : null;
+      const noticeBar = addBar(historyLoadedNotice(windowLen, res?.total), 'text-ink-faint');
       renderHistoryBubbles(msgs, () => {
         // 渲染途中切走时 renderHistoryBubbles 也会调这里（为了放行历史闸），那时补提示就补进了别的会话（PR #245 review）
         if (displayedSessionId === sessionId && displayedInstanceId === reqInstanceId) crashNotices.restore(sessionId);
@@ -5868,16 +5873,27 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         foregroundTasks.render();
         flushHeldHistoryAppends(gateHandle);
         onDone?.();
-      }, { fullReload: true, splitRecent: true, turnRunningAtRequest, noticeBar, superseded: () => historyLoadGate.superseded(gateHandle), perfOpen });
+      }, { fullReload: true, splitRecent: true, earlier, windowLen, turnRunningAtRequest, noticeBar, superseded: () => historyLoadGate.superseded(gateHandle), perfOpen });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
-      // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
-      seenDiskLenBySession.set(sessionId, msgs.length);
+      // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长（更早那段没补上时提示条留着 pending，DOM 不进缓存，切回来照样重拉）。
+      seenDiskLenBySession.set(sessionId, windowLen);
     };
+    // 窗口里 from 之前那段。落地给数组（可能是空的：最近一段就是整窗的头），超时、出错、对不上（stale：两次之间
+    // 历史被改写、或截顶窗口滑过了这段的头）给 null，renderHistoryBubbles 据此只留最近一段、给「重新加载」
+    // 这次回执另有 15s 超时，闸门的看门狗从发出时重新计时（history-load-gate.js）
+    const fetchEarlier = ({ from, anchor }) => new Promise(resolve => {
+      historyLoadGate.rearm(gateHandle);
+      socket.timeout(HISTORY_ACK_TIMEOUT_MS).emit('session:history', { sessionId, cwd, before: from, anchor }, (err, res) => {
+        const failed = err || res?.error ? '失败' : res?.stale ? '对不上' : null;
+        perfTrace.openStep(perfOpen, 'older', failed ? { note: failed } : { count: res?.messages?.length, server: res?.timing });
+        resolve(failed || !Array.isArray(res?.messages) ? null : res.messages);
+      });
+    });
     // 必须用 socket.timeout()：裸 ack 在断线时会被 socket.io-client 的 _clearAcks() 直接 delete 掉
     // 且【不调用】（只有 withError 的才回调），于是这个回调永不执行——闸门不 abort 也不 release，
     // 手机锁屏/切后台就能触发。带 timeout 后断线会以 err 形式回调，onAck 的 err 分支负责收尾。
     // 预取用的是同一个超时（history-prefetch.js），同样保证回调一定来一次。
-    const fetchFresh = via => socket.timeout(HISTORY_ACK_TIMEOUT_MS).emit('session:history', { sessionId, cwd }, (err, res) => onAck(err, res, via));
+    const fetchFresh = via => socket.timeout(HISTORY_ACK_TIMEOUT_MS).emit('session:history', { sessionId, cwd, tail: HISTORY_TAIL_FIRST }, (err, res) => onAck(err, res, via));
     if (!prefetched) { fetchFresh(); return; }
     // 核对不了的等落地也只会被判掉，白等一份下行
     if (!prefetchCheckable(diskLen, diskTotal)) { fetchFresh('预取无法核对，重新拉'); return; }
@@ -6035,13 +6051,31 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // perfOpen：loadHistory 传入，这一轮加载所属那次打开会话的埋点凭据，插入和高亮凭它记。
   // splitRecent：loadHistory 传入。长会话先画最近一段、插入并落底，更早的在空闲里画完再插到它前面（historyRenderSplit）。
   //   只在这条路上切：历史闸扣着 history_append，两段都落地（onDone）才放行，中间不会有追平插进来、也不会被整窗替换清屏。
-  function renderHistoryBubbles(msgs, onDone, { fullReload = false, splitRecent = false, cardsOnly = false, turnRunningAtRequest = false, noticeBar = null, superseded = null, perfOpen = null } = {}) {
+  // earlier：loadHistory 传入。msgs 只是窗口的最近一段时，更早那段的 Promise（数组；失败或对不上是 null）。
+  //   切点按 suffix 算：切得开就先画 msgs[cut..]，更早那段到了接上 msgs[0..cut) 一起插到前面；切不开就等它到了拼成整窗再画。
+  //   没补上时最近一段留着、给「重新加载」，提示条不摘 pending（partial）。
+  // windowLen：msgs 是哪个窗口的最近一段（默认就是整窗）。日志里的序号和总数按整窗算，与提示条的条数对得上。
+  function renderHistoryBubbles(msgs, onDone, { fullReload = false, splitRecent = false, earlier = null, partial = false, windowLen = msgs?.length, cardsOnly = false, turnRunningAtRequest = false, noticeBar = null, superseded = null, perfOpen = null } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
     // 提示条下面的历史全部落地时才摘掉；bindView 看到它就不把这份半成品存进 sessionDomCache（#307）。
     // 切成两段时，最近一段插进去之后它还挂着，更早的那段也插进去才摘
     noticeBar?.setAttribute('data-history-pending', '1');
-    // cut > 0：先画 msgs[cut..]，再画 msgs[0..cut)；cut = 0 照旧一次画完
-    const { cut, seedPrevTs } = splitRecent ? historyRenderSplit(msgs, HISTORY_RENDER_RECENT_MIN) : { cut: 0, seedPrevTs: null };
+    // cut > 0：先画 msgs[cut..]，再画 msgs[0..cut)（有 earlier 时前面再接上更早那段）；cut = 0 照旧一次画完
+    const { cut, seedPrevTs } = splitRecent ? historyRenderSplit(msgs, HISTORY_RENDER_RECENT_MIN, { suffix: Boolean(earlier) }) : { cut: 0, seedPrevTs: null };
+    if (earlier && !cut) {
+      const waitInstanceId = displayedInstanceId, waitSessionId = displayedSessionId;
+      earlier.then(older => {
+        if (superseded?.()) return; // 同 processChunk：闸门已归新一轮，不调 onDone
+        if (displayedInstanceId !== waitInstanceId) {
+          logClientEvent('recv', `[HISTORY_RENDER] 等更早那段时实例变了，放弃本次历史渲染 session=${waitSessionId} instance=${waitInstanceId}→${displayedInstanceId}`);
+          onDone?.();
+          return;
+        }
+        const rest = { fullReload, splitRecent, turnRunningAtRequest, noticeBar, superseded, perfOpen };
+        renderHistoryBubbles(older ? older.concat(msgs) : msgs, onDone, older ? rest : { ...rest, partial: true, windowLen });
+      });
+      return;
+    }
     let frag = document.createDocumentFragment();
     // 历史里的图片按需取，坐标在【渲染时】快照（同子代理卡的 flowSid）：格子会留在 DOM 里跨越会话切换，
     // 进入可视区时再读会按别的会话去取。cwd 走驾驶轴，与 loadHistory 的 session:history 同一个值。
@@ -6325,7 +6359,10 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // loadHistory（同样因为半成品不进缓存），旧 frag 若仍落地会与新一轮历史叠加成重复气泡。跨 instance 一律中断，由新 bindView 负责。
     const targetInstanceId = displayedInstanceId;
     const targetSessionId = displayedSessionId;
-    // 切成两段时先画 [cut, n)、再画 [0, cut)：i 是下一条的下标，stop 是这一段的上界
+    // 切成两段时先画 [cut, n)、再画 [0, cut)：i 是下一条的下标，stop 是这一段的上界，rows 是这一段从哪个数组里取
+    // （有 earlier 时更早那段是 older 接上 msgs[0..cut)），rows[0] 在窗口里排第 base 条（从 0 数）
+    let rows = msgs;
+    let base = windowLen - msgs.length;
     let i = cut;
     let stop = msgs.length;
     let recentFirst = null; // 最近一段插进去之后它的第一个节点；非 null = 正在画更早那段，插在它前面、拿它量补偿
@@ -6356,7 +6393,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // onHistoryAppend 的 viewingInstanceId 守卫正常丢弃，所以只关闸、不会污染新视图。
       if (displayedInstanceId !== targetInstanceId) {
         // #307 观测：这一趟画的东西整段作废，由新视图重新加载（见上方注释）
-        logClientEvent('recv', `[HISTORY_RENDER] 渲染途中实例变了，放弃本次历史渲染 session=${targetSessionId} instance=${targetInstanceId}→${displayedInstanceId} 已渲染 ${renderedCount()}/${msgs.length}`);
+        logClientEvent('recv', `[HISTORY_RENDER] 渲染途中实例变了，放弃本次历史渲染 session=${targetSessionId} instance=${targetInstanceId}→${displayedInstanceId} 已渲染 ${renderedCount()}/${windowLen}`);
         if (displayedSessionId === targetSessionId) offerHistoryReload(noticeBar);
         onDone?.();
         return;
@@ -6368,11 +6405,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       const { end, done } = nextHistoryRenderChunk({ processed: i, total: stop, chunkSize: HISTORY_RENDER_CHUNK_SIZE });
       for (; i < end; i++) {
         try {
-          renderOne(msgs[i]);
+          renderOne(rows[i]);
         } catch (error) {
           // #307 观测：分块链在这里断了，后面的块不再调度、frag 不插入、onDone 不调（历史闸要等看门狗）。
           // 根因未修：照旧抛出去（全局错误上报照常记「前端错误」），只多记一条带坐标的日志、给原地重新加载。
-          logClientEvent('error', `[HISTORY_RENDER] 渲染第 ${i + 1}/${msgs.length} 条历史时抛错，后面的都没画出来 session=${targetSessionId} instance=${targetInstanceId} 当前=${displayedInstanceId} 已渲染 ${renderedCount()}/${msgs.length}：${error?.message || error}`);
+          logClientEvent('error', `[HISTORY_RENDER] 渲染第 ${base + i + 1}/${windowLen} 条历史时抛错，后面的都没画出来 session=${targetSessionId} instance=${targetInstanceId} 当前=${displayedInstanceId} 已渲染 ${renderedCount()}/${windowLen}：${error?.message || error}`);
           if (displayedSessionId === targetSessionId) offerHistoryReload(noticeBar);
           throw error;
         }
@@ -6384,10 +6421,16 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 打开会话埋点：只有 loadHistory 的整段加载带凭据（增量追平、镜像整窗替换都不算）；
       // 凭据不是当前这次打开的（排在空闲里的高亮跑到时，同一个会话可能已经又开了一次），perfTrace 自己不记
       if (recentFirst) {
+        // 等更早那段要一个往返，期间最近一段可能已被换掉（闸门看门狗放行了整窗替换、会话被关换成空表面）：没有可接的了
+        if (!recentFirst.isConnected) {
+          logClientEvent('recv', `[HISTORY_RENDER] 最近一段已不在页面上，更早那段不插了 session=${targetSessionId} instance=${targetInstanceId}`);
+          onDone?.();
+          return;
+        }
         insertEarlier();
         markUnpairedAborted();
         // 补偿读了位置，插入引起的排版已经算进这一段
-        if (perfOpen) perfTrace.openStep(perfOpen, 'backfill', { count: cut });
+        if (perfOpen) perfTrace.openStep(perfOpen, 'backfill', { count: stop });
       } else {
         if (!cardsOnly) leaveStartScreen();
         const first = frag.firstChild;
@@ -6407,11 +6450,23 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
           stampIntoFrag = messageTimeline.beginFragment(frag, { seedPrevTs: null });
           i = 0;
           stop = cut;
-          scheduleIdle(processChunk, { timeout: HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS });
+          if (!earlier) { scheduleIdle(processChunk, { timeout: HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS }); return; }
+          // 更早那段到了接在 msgs[0..cut) 前面一起画（照旧排在空闲里）；没补上就只画 msgs[0..cut)。
+          // 切走、被顶替由 processChunk 开头那两道照常拦
+          earlier.then(older => {
+            if (older) {
+              rows = older.concat(msgs.slice(0, cut));
+              stop = rows.length;
+              base = 0;
+              windowLen = older.length + msgs.length; // 两次之间截顶窗口滑过时，更早那段比当初报的短
+            } else partial = true;
+            scheduleIdle(processChunk, { timeout: HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS });
+          });
           return;
         }
       }
-      noticeBar?.removeAttribute('data-history-pending');
+      if (partial) offerHistoryReload(noticeBar);
+      else noticeBar?.removeAttribute('data-history-pending');
       if (codeBlocks.length) {
         const doHighlight = () => {
           const t0 = performance.now();
