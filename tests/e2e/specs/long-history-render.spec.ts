@@ -297,4 +297,71 @@ test.describe('P0 长会话切入分块渲染', () => {
     expect(await bubbleIndexes(page)).toEqual(Array.from({ length: 2000 }, (_, k) => k));
     await expectNoBrowserErrors(page);
   });
+
+  // 历史分两次传（app/src/sessions/history.js 的 historyPage）：先只拉最近 300 条，最近一段从里面切出来先画；
+  // 更早那段另一个往返要，到了接在这 300 条的前头一起补进去。手机经隧道下行一两百 KB/s，整窗 2000 条要等两三秒
+  const reloadButton = (page: Page) => page.locator('#messages [data-testid="history-reload"]');
+  const releaseHeldHistory = async (page: Page) => (await (await page.request.post('/__release-history-ack')).json()).released;
+
+  test('P0-LH9 更早那段还在路上时最近一段已经看得到；到了补齐整窗，顺序不乱、仍停在底部', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__hold-next-older-history-ack');
+    await openLongHistory(page);
+
+    await expect(finalMarker(page)).toBeVisible({ timeout: 15_000 });
+    expect(await bubbleIndexes(page), '最近一段应从 #1940 画到末尾').toEqual(Array.from({ length: 60 }, (_, k) => 1940 + k));
+    await expect(page.locator('#messages [data-history-pending]'), '更早那段没到，提示条得还算没画完（#307）').toHaveCount(1);
+    await expect.poll(() => atBottom(page), '最近一段插进来后没落到底').toBe(true);
+
+    await expect.poll(() => releaseHeldHistory(page), '前提：更早那段的回执扣着').toBe(1);
+    await expect(page.locator('#messages [data-history-pending]')).toHaveCount(0, { timeout: 15_000 });
+    expect(await bubbleIndexes(page), '补齐后顺序不对，或丢了、重复了').toEqual(Array.from({ length: 2000 }, (_, k) => k));
+    expect(await atBottom(page), '补进更早那段后离开了底部').toBe(true);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 两次之间 rewind 过、或截顶窗口滑过了这 300 条的头：server 回 stale，不交一段和已画的尾巴拼不起来的消息
+  test('P0-LH10 更早那段对不上：最近 300 条照常画完，提示条给「重新加载」、不算画完，点了恢复整窗', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__arm-older-history-stale');
+    await openLongHistory(page);
+
+    await expect(reloadButton(page)).toBeVisible({ timeout: 15_000 });
+    expect(await bubbleIndexes(page), '拿到的最近 300 条应该都留着').toEqual(Array.from({ length: 300 }, (_, k) => 1700 + k));
+    await expect(page.locator('#messages [data-history-pending]'), '没补齐的不能被当成整份存进缓存（#307）').toHaveCount(1);
+    await page.locator('#btnConsole').click();
+    const log = page.locator('#consoleLogArea');
+    await expect(log.locator(':scope > div', { hasText: /\[PERF\] 打开会话.*更早回执 \+\d+（对不上）/ }), '[PERF] 行应记下更早那段对不上').toHaveCount(1, { timeout: 10_000 });
+    await page.locator('#consoleClose').click();
+
+    // 重新加载先清屏：提示条一摘 pending 就没了，得等新一轮画满
+    await reloadButton(page).click();
+    await expect(bubbles(page)).toHaveCount(2000, { timeout: 15_000 });
+    await expect(page.locator('#messages [data-history-pending]')).toHaveCount(0);
+    expect(await bubbleIndexes(page)).toEqual(Array.from({ length: 2000 }, (_, k) => k));
+    await expect(reloadButton(page), '恢复之后不该还挂着「重新加载」').toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
+  // #1650 起都是 assistant：最近 300 条里没有回合边界。整窗的切点退到 #1648，最近一段 352 条
+  test('P0-LH11 最近 300 条里切不开（一轮跑得很长）：等更早那段到了拼成整窗再画，一条都不先画', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__arm-long-history-long-turn');
+    await page.request.post('/__hold-next-older-history-ack');
+    await holdIdle(page);
+    await openLongHistory(page);
+
+    // 提示条和第一块同在回执那个任务里：提示条出来时，先开画的话第二块已经排上空闲了
+    await expect(page.locator('#messages [data-history-pending]'), '前提：最近那段的回执到了').toHaveCount(1, { timeout: 15_000 });
+    expect(await heldIdle(page), '最近 300 条先开画了').toBe(0);
+    await expect(bubbles(page)).toHaveCount(0);
+    // 整窗下行要两三秒，这段时间屏幕上只有提示条：加载卡得留着
+    await expect(page.locator('#historyLoadingCard'), '等更早那段时加载卡被收掉了').toBeVisible();
+    await expect.poll(() => releaseHeldHistory(page), '前提：更早那段的回执扣着').toBe(1);
+    await runAllIdle(page);
+    await expect(page.locator('#messages [data-history-pending]')).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.locator('#historyLoadingCard')).toHaveCount(0);
+    expect(await bubbleIndexes(page)).toEqual(Array.from({ length: 2000 }, (_, k) => k));
+    await expectNoBrowserErrors(page);
+  });
 });

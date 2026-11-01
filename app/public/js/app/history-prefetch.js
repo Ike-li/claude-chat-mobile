@@ -7,15 +7,16 @@
 // 认领凭的是 perfTrace 的 open 对象而不是 sid：用户在中间又点了别的会话、A→B→A，或者同一个会话换了实例重新绑，
 // 都会换一个 open，这份预取不会被另一次打开拿走，回执也不会记到它头上。
 // 只留最近一次：后点的顶掉先点的。被顶掉的那次 ack 照样会回来，没人取，随槽一起丢掉。
-export function createHistoryPrefetch({ socket, timeoutMs }) {
+// tail：和 loadHistory 自己拉时一样只要最近一段（server 的 historyPage），更早那段由认领后的 loadHistory 再要。
+export function createHistoryPrefetch({ socket, timeoutMs, tail }) {
   let slot = null;
 
   function start({ open, sessionId, cwd }) {
     slot = null;
     if (!open || !sessionId) return;
-    // prefetch 只是标记：真 server 只读 sessionId 和 cwd；mock 靠它区分出预取，不让预取吃掉按页面那次拉取写的一次性夹具
+    // prefetch 只是标记：真 server 不看它；mock 靠它区分出预取，不让预取吃掉按页面那次拉取写的一次性夹具
     const settled = new Promise(resolve => {
-      socket.timeout(timeoutMs).emit('session:history', { sessionId, cwd, prefetch: true }, (err, res) => resolve({ err, res }));
+      socket.timeout(timeoutMs).emit('session:history', { sessionId, cwd, prefetch: true, tail }, (err, res) => resolve({ err, res }));
     });
     slot = { open, sessionId, cwd, settled };
   }

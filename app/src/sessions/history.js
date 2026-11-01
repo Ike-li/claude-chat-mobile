@@ -595,6 +595,28 @@ export function historyTailKey(messages) {
   return messageKey(messages[messages.length - 1]);
 }
 
+// session:history 分两次传（手机经隧道下行只有一两百 KB/s，整窗 2000 条要等 2–3s）：
+// · { tail } → 只交最近 tail 条，另报窗口条数 diskLen、这段首条在整份历史里的序号 from、首条指纹 anchor；
+// · { before: from, anchor } → 交窗口里 from 之前那段。序号按削顶前的总条数算（窗口只从头削、条目进了数组
+//   不再改），两次之间终端写了、截顶窗口滑了，序号照样对得上；那一格的指纹也对上才交，对不上回 stale——
+//   宁可让前端提示重新加载，也不交一段和已画的尾巴拼不起来的消息。指纹只在服务端算，前端原样带回。
+// 两样都不带（旧前端）就原样整窗。
+export function historyPage({ messages, total }, { tail, before, anchor } = {}) {
+  const windowStart = total - messages.length;
+  if (Number.isInteger(tail) && tail > 0) {
+    const page = messages.slice(-tail);
+    return { messages: page, total, diskLen: messages.length, from: total - page.length, anchor: messageKey(page[0]) };
+  }
+  if (Number.isInteger(before)) {
+    const idx = before - windowStart;
+    if (idx < 0 || idx >= messages.length || messageKey(messages[idx]) !== anchor) {
+      return { messages: [], total, diskLen: messages.length, stale: true };
+    }
+    return { messages: messages.slice(0, idx), total, diskLen: messages.length };
+  }
+  return { messages, total };
+}
+
 // 上一次的尾条之后新写的条目是否全是己方（sdk-ts）。找不到那条、或它之后没有新条目时为 false。
 function ownWritesSince(messages, prevTailKey) {
   if (prevTailKey == null) return false;

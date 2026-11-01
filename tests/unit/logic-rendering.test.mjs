@@ -211,6 +211,32 @@ test.describe('historyRenderSplit', () => {
     const noStampBefore = [reply('no-ts'), user('u1'), reply('a2'), user('u3', at('2026-10-03T10:00:00Z')), reply('a4')];
     assert.deepEqual(historyRenderSplit(noStampBefore, 2), { cut: 3, seedPrevTs: null });
   });
+
+  // suffix：msgs 只是历史的最近一段（session:history 先传的那段），更早的还在路上，最后才接到最前面。
+  // 一个 key 在这段里首次出现的不是开它的 tool_use，开它的那条就在更早那段里，等于从 0 之前就开着
+  test('suffix：开卡的 tool_use 不在这段里的 key 视为从段首之前开始，切点要退到它之后', () => {
+    const toolUse = (id, name = 'Bash') => ({ kind: 'tool_use', role: 'assistant', toolUseId: id, name });
+    const toolResult = id => ({ kind: 'tool_result', role: 'user', toolUseId: id, ok: true });
+    // 切点前都有打了戳的气泡：不切只能是因为这个 key，不是下一条那个缘故
+    const stampedA1 = reply('a1', { timestamp: '2026-10-01T08:00:00Z' });
+    const orphanResult = [user('u0'), stampedA1, user('u2'), toolResult('E'), reply('a4'), reply('a5')];
+    assert.equal(historyRenderSplit(orphanResult, 3).cut, 2);
+    assert.equal(historyRenderSplit(orphanResult, 3, { suffix: true }).cut, 0);
+    const orphanGroup = [user('u0'), stampedA1, user('u2'), reply('sub', { parentToolUseId: 'P', isSidechain: true }), reply('a4'), reply('a5')];
+    assert.equal(historyRenderSplit(orphanGroup, 3, { suffix: true }).cut, 0);
+    // 开卡的就在这段里：和整份时一样切（切点前得有一条打了戳的气泡，见下一条）
+    const opened = [user('u0'), stampedA1, user('u2'), toolUse('T'), toolResult('T'), reply('a5')];
+    assert.equal(historyRenderSplit(opened, 3, { suffix: true }).cut, 2);
+  });
+
+  // 整份时 null 表示会话首条；只有一段时 null 只说明这段里没有，更早那段里有没有不知道，日期线会画错
+  test('suffix：切点前这段里没有打了时间戳的气泡就不切在那里', () => {
+    const at = iso => ({ timestamp: iso });
+    const noStampBefore = [reply('no-ts'), user('u1'), reply('a2'), user('u3', at('2026-10-03T10:00:00Z')), reply('a4')];
+    assert.deepEqual(historyRenderSplit(noStampBefore, 2, { suffix: true }), { cut: 0, seedPrevTs: null });
+    const stamped = [reply('a0', at('2026-10-01T08:00:00Z')), user('u1'), reply('a2'), user('u3'), reply('a4')];
+    assert.deepEqual(historyRenderSplit(stamped, 2, { suffix: true }), { cut: 3, seedPrevTs: Date.parse('2026-10-01T08:00:00Z') });
+  });
 });
 
 // ---- resolveUnreadAnchorIndex：未读胶囊"跳到第一条未读"的定位数学（不碰 DOM，纯计算） ----

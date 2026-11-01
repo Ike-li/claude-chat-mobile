@@ -86,6 +86,18 @@ test.describe('formatOpenPerfLine：打开会话一行写清每一段花了多�
     assert.match(line, /插入 \+100（60 条） → 补齐更早 \+1600（1940 条）/);
   });
 
+  // 历史分两次传：先到的只是最近一段，更早那段的回执另记一段，看得出第二次下行花了多久
+  test('更早那段的回执单独一段，带条数与服务端耗时', () => {
+    const line = formatOpenPerfLine({
+      source: 'tap',
+      steps: [{ name: 'bind', t: 0 }, { name: 'history', t: 500, count: 300 }, { name: 'insert', t: 600, count: 120 },
+        { name: 'older', t: 2100, count: 1700, server: { ms: 3, cache: 'hit' } }, { name: 'backfill', t: 2900, count: 1880 }],
+      end: { t: 2900, outcome: 'done' },
+      longTasks: null,
+    });
+    assert.match(line, /插入 \+100（120 条） → 更早回执 \+1500（1700 条；服务端 3ms：cache hit） → 补齐更早 \+800（1880 条）/);
+  });
+
   test('不拉历史时没有历史段；浏览器测不了长任务时写「不可测」而不是假装 0 次', () => {
     const line = formatOpenPerfLine({
       source: 'bind',

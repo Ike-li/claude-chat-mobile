@@ -96,6 +96,9 @@ let sessionListHeldAcks = [];
 // 长会话（mock-session-long-history）带上形状：跨天的时间戳 + 一对跨在「最近一段」切点上的工具配对（P0-LH5 起）。
 // 不是一次性的：同一用例里重新加载也是这份形状。由 POST /__arm-long-history-shape 置起，/__reset 清。
 let longHistoryShapeArmed = false;
+// 长会话的最后 350 条是同一轮里的 assistant（终端一轮跑得很长），最近 300 条里没有回合边界、切不开。
+// 同样持续到 /__reset，由 POST /__arm-long-history-long-turn 置起
+let longHistoryLongTurnArmed = false;
 // PR #250 review：下一次 tool:full 回「超过服务端上限、只给开头」（truncated:true）。一次性，/__reset 清。
 let toolFullTruncatedArmed = false;
 // 测试推送回执里 ntfy 那条通道的结果（'sent' / 'failed'）；null = 没配 ntfy，ack 里不带这个字段（同真 server 的旧形态）。
@@ -373,6 +376,12 @@ let outboxAckHold = null;
 // 长会话 3b 点击时的预取也算：它截顶也核对得上，页面画的就是它；别的会话的预取在 handler 开头就回空了，吃不到这一扣
 let historyAckHoldArmed = false;
 let heldHistoryAcks = [];
+// 历史分两次传：下一次「要更早那段」（payload 带 before）的回执先扣住，同样由 /__release-history-ack 放行——
+// 让用例看得见「最近一段已经画出来，更早那段还在路上」。一次性
+let olderHistoryHoldArmed = false;
+// 历史分两次传：下一次「要更早那段」回 stale（两次之间 rewind 过、序号那一格换了条消息，真 server 的 historyPage
+// 这时不交）。一次性
+let olderHistoryStaleArmed = false;
 // 3b 预取：下一次 session:switch 整个扣住（连同 instances 广播和回执），/__release-switch 才处理——
 // 让用例看得见「切换还没回来，历史已经在拉」。一次性
 let switchHoldArmed = false;
@@ -727,6 +736,7 @@ function resetMockState() {
   sessionListHeldCwd = null;
   sessionListHeldAcks = [];
   longHistoryShapeArmed = false;
+  longHistoryLongTurnArmed = false;
   toolFullTruncatedArmed = false;
   pushTestNtfy = null;
   untitledSessionArmed = false;
@@ -804,6 +814,8 @@ function resetMockState() {
   outboxAckHold = null;
   historyAckHoldArmed = false;
   heldHistoryAcks = [];
+  olderHistoryHoldArmed = false;
+  olderHistoryStaleArmed = false;
   switchHoldArmed = false;
   heldSwitches = [];
   staleLongHistoryArmed = false;
@@ -1180,6 +1192,10 @@ app.post('/__arm-long-history-shape', (_req, res) => {
   longHistoryShapeArmed = true;
   res.json({ ok: true });
 });
+app.post('/__arm-long-history-long-turn', (_req, res) => {
+  longHistoryLongTurnArmed = true;
+  res.json({ ok: true });
+});
 
 // 验收 O30：武装后主工作区多一条「Unpaired Tool Session」。无参，/__reset 清除；要在 page.goto 之前武装。
 app.post('/__arm-unpaired-tool-session', (req, res) => {
@@ -1219,6 +1235,14 @@ app.post('/__release-outbox-acks', (_req, res) => {
 // #354 review：扣住 / 放行 session:history 的回执（见 historyAckHoldArmed）
 app.post('/__hold-next-history-ack', (_req, res) => {
   historyAckHoldArmed = true;
+  res.json({ ok: true });
+});
+app.post('/__hold-next-older-history-ack', (_req, res) => {
+  olderHistoryHoldArmed = true;
+  res.json({ ok: true });
+});
+app.post('/__arm-older-history-stale', (_req, res) => {
+  olderHistoryStaleArmed = true;
   res.json({ ok: true });
 });
 app.post('/__release-history-ack', (_req, res) => {
@@ -2809,6 +2833,28 @@ io.on('connection', socket => {
     };
   }
 
+  // 真 server 的 historyPage（app/src/sessions/history.js）的平行实现：带 tail 先交最近一段，带 before + anchor 交窗口里
+  // 更早那段，都不带原样整窗；失败支（带 error）不分页。指纹对前端是不透明的，这里随便取一种。
+  // 序号按削顶前的总条数算；没报 total 的夹具就是没截顶，total 等于条数
+  const historyAnchor = m => JSON.stringify(m ?? null);
+  function pageHistory(res, { tail, before, anchor } = {}) {
+    if (!Array.isArray(res?.messages) || res.error) return res;
+    const { messages } = res;
+    const total = res.total ?? messages.length;
+    if (Number.isInteger(tail) && tail > 0) {
+      const page = messages.slice(-tail);
+      return { ...res, messages: page, total, diskLen: messages.length, from: total - page.length, anchor: historyAnchor(page[0]) };
+    }
+    if (Number.isInteger(before)) {
+      const idx = before - (total - messages.length);
+      const stale = olderHistoryStaleArmed || idx < 0 || idx >= messages.length || historyAnchor(messages[idx]) !== anchor;
+      olderHistoryStaleArmed = false;
+      if (stale) return { messages: [], total, diskLen: messages.length, stale: true };
+      return { ...res, messages: messages.slice(0, idx), total, diskLen: messages.length };
+    }
+    return res;
+  }
+
   let heldWorktreeSync = null;
   socket.on('session:history', (payload, rawCallback) => {
     const { sessionId, cwd } = payload || {};
@@ -2826,10 +2872,13 @@ io.on('connection', socket => {
     // 真 server 的每条历史消息都带 timestamp（transcript 原样透传，见 app/src/sessions/history.js）。
     // 这里统一在出口补齐，而不是逐个分支手写——17 处 callback 漏一个就是一处静默的契约 drift。
     // 已显式带 timestamp 的（如 mock-session-timeline fixture）保持原值不覆盖。
-    const holdThis = historyAckHoldArmed;
-    if (holdThis) historyAckHoldArmed = false;
+    const holdOlder = olderHistoryHoldArmed && Number.isInteger(payload?.before);
+    if (holdOlder) olderHistoryHoldArmed = false;
+    const holdThis = historyAckHoldArmed || holdOlder;
+    if (historyAckHoldArmed) historyAckHoldArmed = false;
+    // 先按整窗补 timestamp 再分页：两次拿到的同一条消息时间戳一致，指纹才对得上
     const callback = res => {
-      const reply = () => rawCallback(stampHistoryMessages(res));
+      const reply = () => rawCallback(pageHistory(stampHistoryMessages(res), payload));
       if (holdThis) heldHistoryAcks.push(reply);
       else reply();
     };
@@ -3116,6 +3165,7 @@ io.on('connection', socket => {
           content: i === 1999 ? 'Long history final message marker' : `Long history stress message #${i}`
         });
       }
+      if (longHistoryLongTurnArmed) for (let i = 1650; i < 2000; i++) messages[i].role = 'assistant';
       // 不截顶就少开头那一条：末条照旧是 assistant 的标记
       if (uncappedLongHistory) messages.shift();
       if (longHistoryShapeArmed) {

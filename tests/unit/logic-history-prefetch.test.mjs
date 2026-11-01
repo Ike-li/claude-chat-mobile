@@ -49,6 +49,12 @@ test.describe('prefetchedHistoryFits：预取的历史和 sync:since 报的磁�
   test('空会话：两边都是 0 → 复用', () => {
     assert.equal(prefetchedHistoryFits({ diskLen: 0, err: null, res: { messages: [] } }), true);
   });
+  // 预取带 tail，回执只有最近一段，窗口条数在 res.diskLen 里（旧 server 不认 tail、不报 diskLen，照旧比条数）
+  test('只预取了最近一段：比的是回执报的窗口条数，不是这段的条数', () => {
+    assert.equal(prefetchedHistoryFits({ diskLen: 1999, err: null, res: { messages: msgs(300), total: 1999, diskLen: 1999 } }), true);
+    assert.equal(prefetchedHistoryFits({ diskLen: 2000, diskTotal: 2100, err: null, res: { messages: msgs(300), total: 2100, diskLen: 2000 } }), true);
+    assert.equal(prefetchedHistoryFits({ diskLen: 2000, err: null, res: { messages: msgs(300), total: 1999, diskLen: 1999 } }), false);
+  });
 });
 
 test.describe('prefetchCheckable：sync:since 报的 diskLen 能不能拿来核对预取', () => {
