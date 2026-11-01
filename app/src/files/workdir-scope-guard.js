@@ -5,7 +5,7 @@
 // 范围是权限边界，不 resolve 则 cwd 内一个指向范围外的 symlink 即逃逸（与 canonicalize 刻意相反：
 // 那是完整性层"所见即所批"的展示一致性抉择，不 resolve；此处权限层管真实落点，两者分工不同不可混用）。
 import { lstatSync, realpathSync } from 'node:fs';
-import { dirname, sep } from 'node:path';
+import { dirname, isAbsolute, resolve, sep } from 'node:path';
 
 export function isInScope(candidate, scopeDirs) {
   if (typeof candidate !== 'string' || candidate === '') return false;
@@ -42,4 +42,23 @@ export function isMissingInScope(candidate, scopeDirs) {
     ancestor = up;
   }
   return isInScope(ancestor, scopeDirs);
+}
+
+// 「已连接、但整个从磁盘消失的文件夹」：isMissingInScope 的另一半。连接根自己被删掉（常连同父目录）时，
+// 最近一个存在的祖先已在范围外，isMissingInScope 判不出来。这里只认 candidate 词法上（resolve 掉 ../ 之后）
+// 落在某个根之下、且那个根本身 lstat 是 ENOENT——根不在，它底下就什么都不可能在，不需要 realpath。
+// 根被换成 symlink 的（lstat 存在）不算。同样只决定审计记不记 scope_violation，不放行任何访问。
+export function isUnderVanishedRoot(candidate, roots) {
+  if (typeof candidate !== 'string' || !isAbsolute(candidate)) return false;
+  if (!Array.isArray(roots)) return false;
+  const target = resolve(candidate);
+  return roots.some(root => {
+    if (target !== root && !target.startsWith(root + sep)) return false;
+    try {
+      lstatSync(root);
+      return false;
+    } catch (err) {
+      return err?.code === 'ENOENT';
+    }
+  });
 }

@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { isInScope, isMissingInScope } from '../../app/src/files/workdir-scope-guard.js';
+import { isInScope, isMissingInScope, isUnderVanishedRoot } from '../../app/src/files/workdir-scope-guard.js';
 import { validateEnvChanges } from '../../app/src/ops/env-schema.js';
 import { resolveGoneWorktreeParent } from '../../app/src/sessions/workdirs.js';
 
@@ -167,6 +167,53 @@ test.describe('SCOPE-01: isMissingInScope 只把「范围内已经不在的东�
     assert.equal(isMissingInScope(null, dirs), false);
     assert.equal(isMissingInScope(join(scope, 'deleted.txt'), []), false);
     assert.equal(isMissingInScope(join(scope, 'deleted.txt'), null), false);
+  });
+});
+
+// ── 已连接、但整个从磁盘消失的文件夹（2026-11-01）──────────────────────────────
+// isMissingInScope 要求「最近一个存在的祖先」在范围内：连接根本身被删掉（连同父目录）时，
+// 祖先早已在范围外，于是判成越界。抽屉每 12 秒对每个已连接文件夹发一次 session:list，
+// 一个消失的根就是每小时 300 条 scope_violation，几小时把 5000 条环形审计里真正的安全记录挤光。
+// isUnderVanishedRoot 只认「词法上落在某个连接根之下、且那个根自己 lstat 是 ENOENT」：
+// 根还在的（哪怕底下的东西不在）、根被换成了 symlink 的、经 ../ 走出去的，都不是。同样只影响审计分类。
+test.describe('SCOPE-01: isUnderVanishedRoot 只把「已连接的根整个不在了」认作不存在', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-inv-scope-vanished-')));
+  test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
+  const alive = join(base, 'alive');
+  const gone = join(base, 'parent-gone', 'gone');
+  const outside = join(base, 'outside');
+  mkdirSync(alive, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  const dirs = [alive, gone];
+
+  test('消失的根本身、根下的子路径：是', () => {
+    assert.equal(isUnderVanishedRoot(gone, dirs), true);
+    assert.equal(isUnderVanishedRoot(join(gone, 'sub', 'deeper'), dirs), true);
+  });
+
+  test('根还在：不是（根下不存在的东西归 isMissingInScope 管）', () => {
+    assert.equal(isUnderVanishedRoot(alive, dirs), false);
+    assert.equal(isUnderVanishedRoot(join(alive, 'nope'), dirs), false);
+  });
+
+  test('经 ../ 从消失的根走出去、前缀碰撞、范围外：不是', () => {
+    assert.equal(isUnderVanishedRoot(join(gone, '..', '..', 'outside', 'nope'), dirs), false);
+    assert.equal(isUnderVanishedRoot(`${gone}-sibling`, dirs), false);
+    assert.equal(isUnderVanishedRoot(join(outside, 'nope'), dirs), false);
+  });
+
+  test('根的位置被换成指出去的 symlink：根 lstat 存在，不是', { skip: process.platform === 'win32' }, () => {
+    const swapped = join(base, 'swapped');
+    symlinkSync(outside, swapped);
+    assert.equal(isUnderVanishedRoot(join(swapped, 'nope'), [swapped]), false);
+  });
+
+  test('非法入参一律不是：相对路径、空串、空范围', () => {
+    assert.equal(isUnderVanishedRoot('gone/sub', dirs), false);
+    assert.equal(isUnderVanishedRoot('', dirs), false);
+    assert.equal(isUnderVanishedRoot(null, dirs), false);
+    assert.equal(isUnderVanishedRoot(gone, []), false);
+    assert.equal(isUnderVanishedRoot(gone, null), false);
   });
 });
 

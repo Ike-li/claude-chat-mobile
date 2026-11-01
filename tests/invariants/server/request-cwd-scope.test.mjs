@@ -26,7 +26,7 @@ const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwM
 const TOOL_ID = 'toolu_scope_bash';
 const LONG_OUT = Array.from({ length: 400 }, (_, i) => `A 的构建日志第 ${i} 行`).join('\n'); // 超过 Bash 摘要上限 2000
 
-let root, a, b, c, configPath, auditFile, server, sock;
+let root, a, b, c, gone, configPath, auditFile, server, sock;
 const projectDirs = [];
 const events = [];
 
@@ -35,7 +35,8 @@ test.before(async () => {
   a = join(root, 'a');      // 一直连接着
   b = join(root, 'b');      // 先连接，后被热移除（其上留一个在跑的实例）
   c = join(root, 'c');      // 从来没连接过
-  for (const d of [a, b, c]) mkdirSync(d);
+  gone = join(root, 'gone-parent', 'gone'); // 已连接，运行中连同父目录被删掉（2026-11-01）
+  for (const d of [a, b, c, gone]) mkdirSync(d, { recursive: true });
   writeFileSync(join(a, 'a-only.txt'), 'a\n');
   // A 的一条会话：越界请求若回落到 A（此前的行为），就会把它交出去
   const dir = join(homedir(), '.claude', 'projects', encodeProjectDir(a));
@@ -57,7 +58,7 @@ test.before(async () => {
   })}\n`);
 
   configPath = join(root, 'ccm.config.json');
-  writeFileSync(configPath, JSON.stringify({ WORKDIRS: [a, b] }));
+  writeFileSync(configPath, JSON.stringify({ WORKDIRS: [a, b, gone] }));
   auditFile = join(root, 'audit-records.json');
   server = await spawnServer({
     AUTH_TOKEN: TOKEN, CCM_CONFIG_FILE_PATH: configPath, CCM_DATA_DIR: join(root, 'data'), CCM_AUDIT_FILE: auditFile,
@@ -95,6 +96,12 @@ const waitFor = async (pred, what, ms = 8000) => {
   }
   throw new Error(`等不到：${what}`);
 };
+const scopeRows = (target) => {
+  try {
+    const audit = existsSync(auditFile) ? JSON.parse(readFileSync(auditFile, 'utf8')) : {};
+    return (Array.isArray(audit) ? audit : (audit.records ?? [])).filter(r => r.action === 'scope_violation' && r.target === target);
+  } catch { return []; }
+};
 const latestInstances = () => events.filter(e => e.type === 'instances').pop()?.payload;
 
 test('显式越界：列表、历史、文件浏览都拒绝，拿不到另一个目录的数据', async () => {
@@ -114,15 +121,29 @@ test('显式越界：列表、历史、文件浏览都拒绝，拿不到另一�
   assert.equal(browse.entries, undefined, '不能列出 C，也不能偷偷列出 A');
 
   // 审计异步落盘：轮询到位或超时（坏掉时才耗满上限）
-  const rowsForC = () => {
-    try {
-      const audit = existsSync(auditFile) ? JSON.parse(readFileSync(auditFile, 'utf8')) : {};
-      return (Array.isArray(audit) ? audit : (audit.records ?? [])).filter(r => r.action === 'scope_violation' && r.target === c);
-    } catch { return []; }
-  };
-  const rows = await waitFor(() => (rowsForC().length >= 3 ? rowsForC() : null), '三次越界各留一条 scope_violation 审计')
-    .catch(() => rowsForC());
-  assert.ok(rows.length >= 3, `每次越界都要留痕，实际 ${rows.length} 条`);
+  const rowsForC = () => scopeRows(c);
+  // 60 秒内完全相同的两次（列表、历史都经 routeCwd）合并成一条记 repeat：按次数数，不按条数
+  const timesForC = () => rowsForC().reduce((n, r) => n + (r.repeat ?? 1), 0);
+  const times = await waitFor(() => (timesForC() >= 3 ? timesForC() : null), '三次越界都留下 scope_violation 审计')
+    .catch(() => timesForC());
+  assert.ok(times >= 3, `每次越界都要留痕，实际 ${times} 次`);
+});
+
+// 已连接的文件夹在 server 运行中被删掉（连同父目录）：配置只在启动 / 热加载时剔掉不存在的目录，在那之前
+// 广播里一直有它，抽屉每 12 秒对它发一次 session:list。照样拒，但那是「已经不在了」，不是越界尝试——
+// 记成 scope_violation 就是每小时 300 条，几小时把环形审计里真正的安全记录挤光（2026-10-17 生产实况）。
+test('已连接的文件夹被删掉：照样拒绝，但不记越界审计', async () => {
+  assert.deepEqual((await emit('session:list', { cwd: gone })).error, undefined, '前提：删掉之前它是已连接的文件夹');
+  rmSync(join(root, 'gone-parent'), { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录下的子目录
+  const list = await emit('session:list', { cwd: gone });
+  assert.ok(list.error, `消失的目录不能被当作可列的目录，实际 ${JSON.stringify(list)}`);
+  assert.deepEqual(list.sessions, []);
+  // 哨兵：同一条 socket 上的请求按序处理，哨兵那条落盘了，前面那条要记早就记了。用一个没出现过的目标——
+  // 拿 C 当哨兵会和上面那几次合并，条数不涨
+  const sentinel = join(root, 'never-connected');
+  await emit('session:list', { cwd: sentinel });
+  await waitFor(() => scopeRows(sentinel).length > 0, '哨兵那条越界审计落盘');
+  assert.deepEqual(scopeRows(gone), [], '已连接但已删掉的文件夹被记成了越界');
 });
 
 test('取图：越界 cwd 与「会话不属于这个目录」都拿不到图', async () => {
