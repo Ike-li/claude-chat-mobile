@@ -355,9 +355,12 @@ test.describe('P0 长会话切入分块渲染', () => {
     await expect(page.locator('#messages [data-history-pending]'), '前提：最近那段的回执到了').toHaveCount(1, { timeout: 15_000 });
     expect(await heldIdle(page), '最近 300 条先开画了').toBe(0);
     await expect(bubbles(page)).toHaveCount(0);
+    // 整窗下行要两三秒，这段时间屏幕上只有提示条：加载卡得留着
+    await expect(page.locator('#historyLoadingCard'), '等更早那段时加载卡被收掉了').toBeVisible();
     await expect.poll(() => releaseHeldHistory(page), '前提：更早那段的回执扣着').toBe(1);
     await runAllIdle(page);
     await expect(page.locator('#messages [data-history-pending]')).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.locator('#historyLoadingCard')).toHaveCount(0);
     expect(await bubbleIndexes(page)).toEqual(Array.from({ length: 2000 }, (_, k) => k));
     await expectNoBrowserErrors(page);
   });

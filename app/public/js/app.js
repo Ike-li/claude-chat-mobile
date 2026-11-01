@@ -6064,10 +6064,16 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     const { cut, seedPrevTs } = splitRecent ? historyRenderSplit(msgs, HISTORY_RENDER_RECENT_MIN, { suffix: Boolean(earlier) }) : { cut: 0, seedPrevTs: null };
     if (earlier && !cut) {
       const waitInstanceId = displayedInstanceId, waitSessionId = displayedSessionId;
+      // 整窗下行要两三秒，屏幕上只有提示条：加载卡挂回去（onAck 已经收过一次）。回来后只摘自己这张——
+      // 按 id 摘会把新视图的卡也摘掉；被顶替时不碰，新一轮清屏或 hideLoadingCard 会收
+      showLoadingCard();
+      const loadingCard = $('historyLoadingCard');
       earlier.then(older => {
         if (superseded?.()) return; // 同 processChunk：闸门已归新一轮，不调 onDone
+        loadingCard?.remove();
         if (displayedInstanceId !== waitInstanceId) {
           logClientEvent('recv', `[HISTORY_RENDER] 等更早那段时实例变了，放弃本次历史渲染 session=${waitSessionId} instance=${waitInstanceId}→${displayedInstanceId}`);
+          if (displayedSessionId === waitSessionId) offerHistoryReload(noticeBar);
           onDone?.();
           return;
         }
