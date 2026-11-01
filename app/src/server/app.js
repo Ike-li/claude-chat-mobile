@@ -40,6 +40,7 @@ import { createNotifyChannels } from '../ops/notify-channels.js';
 import { aboutInfo } from '../ops/about.js';
 import { checkForUpdate } from '../ops/update-check.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
+import { formatClientPerfLine } from '../ops/client-perf-log.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
 import { deviceApprovalScopeDiagnostic } from '../ops/doctor-checks.js';
@@ -5531,6 +5532,15 @@ registerSocketConnection(io, socket => {
     console.warn('[client-error]', socket.id, line);
     metrics.inc('client_errors'); // 服务状态可见性：手机端对这类错误的告警入口（详情在日志面板）
     metrics.gauge('client_errors_last_ts', Date.now()); // 带时间戳，供 recentIncident 判定
+  });
+
+  // 前端性能上报：启动 / 打开会话 / 切回前台的分段、掉帧、点击响应，前端约 30s 攒一批。同上是不可信输入，
+  // 清洗在 formatClientPerfLine；限流兜前端攒批失控的底。读法见 scripts/perf-report.js
+  const clientPerfLimiter = createSocketErrorLimiter();
+  on(socket, 'logs:clientPerf', payload => {
+    if (!clientPerfLimiter.allow()) return;
+    const line = formatClientPerfLine(payload, { socketId: socket.id, ua: socket.handshake.headers['user-agent'] });
+    if (line) console.log('[client-perf]', line);
   });
 
   on(socket, 'disconnect', () => {

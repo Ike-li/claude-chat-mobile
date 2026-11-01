@@ -3,7 +3,7 @@
 // 长任务按窗口归属、资源按缓存命中分类、日志行把每一段的增量和服务端拆分都写出来。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatLateStartupMark, formatOpenPerfLine, formatStartupPerfLine, summarizeLongTasks, summarizeResources } from '../../app/public/js/logic.js';
+import { formatLateStartupMark, formatOpenPerfLine, formatStartupPerfLine, summarizeInteractions, summarizeLongFrame, summarizeLongTasks, summarizeResources } from '../../app/public/js/logic.js';
 
 test.describe('summarizeLongTasks：只算与窗口重叠的长任务', () => {
   test('窗口外的不算；跨在窗口边界上的按整段时长算（点了没反应的那一下正是它）', () => {
@@ -144,5 +144,59 @@ test.describe('formatStartupPerfLine：启动一行写清各时间点（距导�
 
   test('就绪之后才到的点单独成行（websocket 升级常晚于首页）', () => {
     assert.equal(formatLateStartupMark('upgrade', { t: 2900, transport: 'websocket' }), '[PERF] 启动后 升级 2900（websocket）');
+  });
+});
+
+// Long Animation Frames：浏览器自己记下的每一帧超过 50ms 的情况，带这一帧里跑了哪些脚本。
+// 这是网页上最接近「掉帧 + 卡顿堆栈」的数据；摘要要留住「是谁、在哪、多久」，丢掉查询串之类的噪音
+test.describe('summarizeLongFrame：一帧卡顿是谁造成的', () => {
+  test('留帧的时刻、总长、阻塞时长、渲染与排版占多少，脚本按耗时取前三，同源地址只留路径', () => {
+    const frame = summarizeLongFrame({
+      startTime: 1000.4, duration: 180, blockingDuration: 130, renderStart: 1150, styleAndLayoutStart: 1160, firstUIEventTimestamp: 990,
+      scripts: [
+        { invokerType: 'user-callback', invoker: 'Window.requestIdleCallback', sourceURL: 'https://ccm.test/js/app.js?v=9f', sourceFunctionName: 'processChunk', sourceCharPosition: 2048, duration: 90, forcedStyleAndLayoutDuration: 12 },
+        { invokerType: 'event-listener', invoker: 'DIV#messages.onscroll', sourceURL: 'https://ccm.test/js/app/scroll.js?v=9f', sourceFunctionName: '', sourceCharPosition: -1, duration: 30, forcedStyleAndLayoutDuration: 0 },
+        { invokerType: 'resolve-promise', invoker: 'Response.json.then', sourceURL: 'chrome-extension://abc/content.js?x=1', sourceFunctionName: 'f', sourceCharPosition: 5, duration: 20 },
+        { invokerType: 'user-callback', invoker: 'TimerHandler:setTimeout', sourceURL: 'https://ccm.test/js/app.js?v=9f', sourceFunctionName: 'tick', sourceCharPosition: 10, duration: 2 },
+      ],
+    }, { origin: 'https://ccm.test' });
+    assert.deepEqual(frame, {
+      k: 'frame', t: 1000, dur: 180, block: 130, render: 30, layout: 20, input: true, scriptsN: 4,
+      scripts: [
+        { type: 'user-callback', inv: 'Window.requestIdleCallback', src: '/js/app.js', fn: 'processChunk', pos: 2048, dur: 90, forced: 12 },
+        { type: 'event-listener', inv: 'DIV#messages.onscroll', src: '/js/app/scroll.js', fn: null, pos: null, dur: 30, forced: 0 },
+        { type: 'resolve-promise', inv: 'Response.json.then', src: 'chrome-extension://abc/content.js', fn: 'f', pos: 5, dur: 20, forced: 0 },
+      ],
+    });
+  });
+
+  test('没进渲染阶段、没有用户输入在等、没有脚本：对应几项记 0 / false / 空', () => {
+    assert.deepEqual(summarizeLongFrame({ startTime: 5, duration: 60, blockingDuration: 0, renderStart: 0, styleAndLayoutStart: 0, firstUIEventTimestamp: 0, scripts: [] }, { origin: 'https://ccm.test' }),
+      { k: 'frame', t: 5, dur: 60, block: 0, render: 0, layout: 0, input: false, scriptsN: 0, scripts: [] });
+  });
+});
+
+// Event Timing：点击 / 按键到下一帧画出来用了多久。同一次交互有好几条事件（pointerdown、pointerup、click），
+// 按 interactionId 归成一次、取最长那条；拆成「等主线程 / 处理 / 画出来」三段，才知道该改哪儿
+test.describe('summarizeInteractions：点了多久才有反应', () => {
+  test('按交互归并取最长，不属于交互的事件不算；最慢的几次留拆分和点的是什么', () => {
+    const entries = [
+      { name: 'pointerdown', interactionId: 7, startTime: 100, duration: 48, processingStart: 104, processingEnd: 110, target: 'button#send' },
+      { name: 'click', interactionId: 7, startTime: 120, duration: 320, processingStart: 260, processingEnd: 400, target: 'button#send' },
+      { name: 'pointermove', interactionId: 0, startTime: 130, duration: 500, processingStart: 131, processingEnd: 132, target: 'div' },
+      { name: 'keydown', interactionId: 9, startTime: 900, duration: 24, processingStart: 902, processingEnd: 910, target: 'textarea#input' },
+    ];
+    assert.deepEqual(summarizeInteractions(entries), {
+      k: 'inputs', n: 2, durs: [320, 24],
+      slow: [{ t: 120, dur: 320, type: 'click', target: 'button#send', delay: 140, proc: 140, present: 40 }],
+    });
+  });
+
+  test('一次交互都没有 → null（这一批不带这一项）；有一次就照常汇总', () => {
+    const move = { name: 'pointermove', interactionId: 0, startTime: 1, duration: 300 };
+    assert.equal(summarizeInteractions([move]), null);
+    assert.equal(summarizeInteractions([]), null);
+    assert.deepEqual(summarizeInteractions([move, { name: 'click', interactionId: 3, startTime: 5, duration: 40, processingStart: 6, processingEnd: 9 }]),
+      { k: 'inputs', n: 1, durs: [40], slow: [] });
   });
 });

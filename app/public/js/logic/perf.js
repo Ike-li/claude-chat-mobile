@@ -83,6 +83,21 @@ export function formatOpenPerfLine({ source, steps, end, longTasks } = {}) {
   return `[PERF] 打开会话 ${round(end?.t ?? prevT)}ms（${tags.join(' · ')}）：${segments.join(' → ')}；${formatLongTaskSummary(longTasks)}`;
 }
 
+// 切回前台：页面没重新加载，从 visibilitychange→visible 起算到追平
+const RESUME_OUTCOME_LABELS = { keep: '不拉历史', reload: '重拉历史', home: '停在首页', hidden: '又切走了', timeout: '30s 未追平', superseded: '被打断' };
+const RESUME_STEP_LABELS = { connect: '连上', sync: '同步回执', history: '历史重画' };
+
+export function formatResumePerfLine({ hiddenMs, connected, steps, end, longTasks } = {}) {
+  const tags = [`离开 ${round((hiddenMs ?? 0) / 1000)}s`, connected ? '连接还在' : '断线重连', RESUME_OUTCOME_LABELS[end?.outcome] ?? end?.outcome];
+  let prevT = 0;
+  const segments = (Array.isArray(steps) ? steps : []).map(step => {
+    const delta = round(step.t - prevT);
+    prevT = step.t;
+    return `${RESUME_STEP_LABELS[step.name] ?? step.name} +${delta}${formatOpenStepDetail(step)}`;
+  });
+  return `[PERF] 切回前台 ${round(end?.t ?? prevT)}ms（${tags.join(' · ')}）${segments.length ? `：${segments.join(' → ')}` : ''}；${formatLongTaskSummary(longTasks)}`;
+}
+
 const STARTUP_MARK_LABELS = {
   html: 'HTML 到齐', parsed: '解析完', appjs: 'app.js 开跑', dcl: 'DCL',
   connect: '连上', upgrade: '升级', instances: '首个 instances',
@@ -111,4 +126,97 @@ export function formatStartupPerfLine({ marks, ready, resources, longTasks } = {
 
 export function formatLateStartupMark(name, mark) {
   return `[PERF] 启动后 ${formatStartupPoint(name, mark)}`;
+}
+
+// ---- 结构化记录：同一份数据给统计用（上报服务端，scripts/perf-report.js 按维度出分位值）----
+// 中文行给人读，这里只留数字和枚举，时刻一律取整 ms。
+
+const roundNumbers = detail => Object.fromEntries(Object.entries(detail ?? {}).map(([key, value]) => [key, Number.isFinite(value) ? round(value) : value]));
+
+export function startupPerfRecord({ marks, ready, resources, longTasks, nav = null, discarded = false } = {}) {
+  const times = {};
+  for (const [name, mark] of Object.entries(marks ?? {})) if (Number.isFinite(mark?.t)) times[name] = round(mark.t);
+  return {
+    k: 'startup', total: round(ready.t), label: ready.label, nav, discarded, transport: marks?.connect?.transport ?? null,
+    marks: times, res: resources ?? null, lt: longTasks ?? null,
+  };
+}
+
+export function lateStartupPerfRecord(name, { t: at, ...detail }) {
+  return { k: 'late', name, t: round(at), ...detail };
+}
+
+export function openPerfRecord({ source, steps, end, longTasks } = {}) {
+  return {
+    k: 'open', source, outcome: end?.outcome ?? null, total: round(end?.t ?? 0), lt: longTasks ?? null,
+    steps: (Array.isArray(steps) ? steps : []).map(({ name, t: at, ...detail }) => ({ n: name, t: round(at), ...roundNumbers(detail) })),
+  };
+}
+
+export function resumePerfRecord({ hiddenMs, connected, steps, end, longTasks } = {}) {
+  const { k: _k, source: _source, ...open } = openPerfRecord({ steps, end, longTasks });
+  return { k: 'resume', hiddenMs: round(hiddenMs ?? 0), connected: Boolean(connected), ...open };
+}
+
+// ---- 掉帧与点击响应（Long Animation Frames / Event Timing，Chrome 才有；采集在 app/perf-report.js）----
+
+const LONG_FRAME_TOP_SCRIPTS = 3;
+const SLOW_INTERACTION_MS = 200;
+const SLOW_INTERACTION_TOP = 5;
+
+// 同源只留路径（查询串是版本戳，没用）；扩展注入的脚本留协议和主机，一眼认出不是自己的代码
+function shortenUrl(url, origin) {
+  if (typeof url !== 'string' || !url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.origin === origin ? parsed.pathname : `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch { return url.split('?')[0]; }
+}
+
+// invoker 多是「DIV#messages.onscroll」「Window.requestIdleCallback」，整段脚本求值时是脚本地址
+const shortenInvoker = (invoker, origin) => (typeof invoker !== 'string' || !invoker ? null
+  : /^[a-z-]+:\/\//.test(invoker) ? shortenUrl(invoker, origin) : invoker.slice(0, 80));
+
+// render / layout：这一帧花在渲染阶段（rAF + 样式排版绘制）、样式排版上的 ms；input：有用户输入在等这一帧
+export function summarizeLongFrame(entry, { origin } = {}) {
+  const end = entry.startTime + entry.duration;
+  const untilEnd = at => (at > 0 ? round(end - at) : 0);
+  const scripts = Array.isArray(entry.scripts) ? entry.scripts : [];
+  return {
+    k: 'frame', t: round(entry.startTime), dur: round(entry.duration), block: round(entry.blockingDuration ?? 0),
+    render: untilEnd(entry.renderStart), layout: untilEnd(entry.styleAndLayoutStart), input: entry.firstUIEventTimestamp > 0,
+    scriptsN: scripts.length,
+    scripts: [...scripts].sort((a, b) => (b.duration ?? 0) - (a.duration ?? 0)).slice(0, LONG_FRAME_TOP_SCRIPTS).map(script => ({
+      type: script.invokerType ?? null,
+      inv: shortenInvoker(script.invoker, origin),
+      src: shortenUrl(script.sourceURL, origin),
+      fn: script.sourceFunctionName || null,
+      pos: script.sourceCharPosition >= 0 ? script.sourceCharPosition : null,
+      dur: round(script.duration ?? 0),
+      forced: round(script.forcedStyleAndLayoutDuration ?? 0),
+    })),
+  };
+}
+
+// entries 是采集层摘出的普通对象（target 已换成「button#send」这样的标签，不带元素引用）。
+// delay：等主线程空出来；proc：事件回调本身；present：回调完到画出来
+export function summarizeInteractions(entries) {
+  const byId = new Map();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!(entry?.interactionId > 0) || !Number.isFinite(entry.duration)) continue;
+    const prev = byId.get(entry.interactionId);
+    if (!prev || entry.duration > prev.duration) byId.set(entry.interactionId, entry);
+  }
+  if (!byId.size) return null;
+  const list = [...byId.values()];
+  const slow = list.filter(entry => entry.duration >= SLOW_INTERACTION_MS)
+    .sort((a, b) => b.duration - a.duration)
+    .slice(0, SLOW_INTERACTION_TOP)
+    .map(entry => ({
+      t: round(entry.startTime), dur: round(entry.duration), type: entry.name, target: entry.target ?? null,
+      delay: round(entry.processingStart - entry.startTime),
+      proc: round(entry.processingEnd - entry.processingStart),
+      present: round(entry.startTime + entry.duration - entry.processingEnd),
+    }));
+  return { k: 'inputs', n: list.length, durs: list.map(entry => round(entry.duration)), slow };
 }

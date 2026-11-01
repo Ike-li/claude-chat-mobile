@@ -84,6 +84,7 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'permissions:rules',
   'push:test',
   'logs:clientError',
+  'logs:clientPerf',
   'logs:get',
   'logs:server',
   'mcp:reconnect',

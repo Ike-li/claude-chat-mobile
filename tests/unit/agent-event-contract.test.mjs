@@ -370,7 +370,11 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        不并进 task:stop：一个杀任务、一个只换前后台，载荷与失败原因都不同。入向 72→73）
   //      + elicitation:respond（2026-10-29，#460 MCP 服务器要表单输入 / URL 授权时手机作答。不并进 user:answer：
   //        那条是 AskUserQuestion 的选项下标 / 自由文本，这条是 accept|decline|cancel + 按 schema 校验的表单内容。入向 73→74）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 74);
+  //      + logs:clientPerf（2026-11-01，前端性能记录攒批上报，落成 ccm-server.log 的 [client-perf] 行，scripts/perf-report.js
+  //        按维度出分位值。不并进 logs:clientError：那条一次一个错误、给人读；这条是结构化批次、给统计读，清洗口径也不同。
+  //        fire-and-forget、无回执，所以进 MOCK_INBOUND_EXEMPT。入向 74→75）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 75);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('logs:clientPerf'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:removeMissing'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('about:get'));

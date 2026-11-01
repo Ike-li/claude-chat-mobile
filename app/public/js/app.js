@@ -146,6 +146,7 @@ import { readThemePref, writeThemePref, applyThemeToDocument } from './theme.js'
 import { askQuestionResultView } from './logic/questions.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
+import { createPerfReporter } from './app/perf-report.js';
 import { createPerfTrace } from './app/perf-trace.js';
 import { createAlertController } from './app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from './app/attachments.js';
@@ -782,20 +783,37 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     },
   });
   const logClientEvent = clientLogger.log;
-  // 启动、打开会话各段耗时写成 client_perf 行，机主在手机上导出（性能改造 Stage 0，见 app/perf-trace.js）
-  const perfTrace = createPerfTrace({ log: text => logClientEvent('perf', text) });
+  // 同一份数据连同掉帧、点击响应攒批发给服务端，落成 ccm-server.log 的 [client-perf] 行（见 app/perf-report.js）。
+  // 维度：在会话里还是首页、这个会话是否正在跑
+  const perfReporter = createPerfReporter({
+    emit: payload => socket.emit('logs:clientPerf', payload),
+    isConnected: () => socket.connected,
+    dims: () => ({
+      view: displayedSessionId ? 'session' : 'home',
+      busy: shouldSeedBusyFromInstanceState(instancesList.find(x => x.instanceId === displayedInstanceId)?.state),
+    }),
+    persistStats: clientLogger.persistStats,
+  });
+  // 启动、打开会话、切回前台各段耗时写成 client_perf 行，机主在手机上导出（性能改造 Stage 0，见 app/perf-trace.js）
+  const perfTrace = createPerfTrace({ log: text => logClientEvent('perf', text), report: perfReporter.record });
   perfTrace.mark('appjs');
   // 切后台/被 iOS 杀前把节流窗口内未落盘的日志尾巴强制写入。pagehide 在移动端比 unload 可靠；
   // visibilitychange→hidden 覆盖「切走但未卸载」。flush 幂等（force write）、双挂无害。
   // 同时上报 presence（PWA 后台推送修复）：服务端据此判定 approved 房间里是否还有"前台"连接，解锁
   // result 完成通知——否则 PWA 切后台后 socket 常常还没断（要等 OS 冻结页面才真正断连），会被误判为
   // "有人在看"而永久吞掉完成通知。fire-and-forget，无需 ack。
+  // 性能批同理：切走前把攒着的发出去；切回来开始记这一次「切回前台」
   window.addEventListener('pagehide', () => {
     if (!localReset.isResetting()) clientLogger.flush();
+    perfReporter.flush();
     socket.emit('client:presence', { hidden: true }); // 页面即将冻结前兜底再同步一次，双保险
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden' && !localReset.isResetting()) clientLogger.flush();
+    if (document.visibilityState === 'hidden') {
+      perfTrace.hide();
+      perfReporter.flush();
+    } else perfTrace.resumeBegin({ connected: socket.connected });
     socket.emit('client:presence', { hidden: document.hidden });
   });
   const alerts = createAlertController(appContext);
@@ -1593,8 +1611,12 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       appContext.state.isReplayBatch = false;
     }
   }
+  // 切回前台那一次（perf-trace）在这里收尾：同步回执怎么判、要不要重拉历史
   function requestSync({ probe }) {
-    if (!displayedInstanceId || !displayedSessionId) return;
+    if (!displayedInstanceId || !displayedSessionId) {
+      perfTrace.resumeEnd(displayedInstanceId ? 'keep' : 'home');
+      return;
+    }
     const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId; // WS-002：捕获发起时的视图目标（代次）
     const payload = { instanceId: reqInstanceId, sessionId: reqSessionId, lastSeq };
     // 回放缓冲句柄：probe/非 probe 分支各自 begin()（见下方），ack 到达后 act() 据判定结果 resolve()。
@@ -1606,6 +1628,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // discard——若服务端环窗已挤出这些 seq，它们永远不会再被回放（code review 确认的竞态丢事件）。
       if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) {
         replayBuffer.resolve(replayHandle, 'discard');
+        perfTrace.resumeEnd('superseded');
         return;
       }
       const a = syncAckAction(err, res, {
@@ -1617,6 +1640,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // 整条连接都要重来：缓冲内容从未渲染过，纯丢弃、不推进续传基线——重连后新一轮 sync:since
         // 会用旧基线重新取，否则这批事件会被当成"已处理过"永久丢失（见 createReplayBuffer resolve 注释）。
         replayBuffer.resolve(replayHandle, 'discard');
+        perfTrace.resumeStep('sync', { note: 'reconnect' });
         // 只有还连着（ack 超时、连接可疑）才自己重连。没连着时这个回调多半是 socket.io-client 在 Manager.onclose 里
         // 同步回调在途 ack 触发的——Manager 紧接着就会排自己的重连；此刻再 socket.connect() 会抢先发起一次不带回调
         // 的 open，Manager 定时器那次 open(fn) 随后被吞，_reconnecting 永久停在 true：这次碰巧连上看不出毛病，之后
@@ -1637,7 +1661,12 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // 丢弃缓冲队列 + 续传基线前移到队列尾（reloadCurrentFromHistory 内部的 keepSeq/keepEpoch
         // 快照-恢复由此拿到正确值，理由同 bindView 的 reload 分支）。
         replayBuffer.resolve(replayHandle, 'reload');
-        reloadCurrentFromHistory(() => showUnreadPillIfAny(unreadOnEntry));
+        perfTrace.resumeStep('sync', { note: 'reload' });
+        reloadCurrentFromHistory(() => {
+          showUnreadPillIfAny(unreadOnEntry);
+          perfTrace.resumeStep('history');
+          perfTrace.resumeEnd('reload');
+        });
       } else {
         // flush：缓冲队列（若有）按序正常派发，抑制中间滚动，派发完一次强制落底。
         replayBuffer.resolve(replayHandle, 'flush');
@@ -1646,6 +1675,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // 才作为 replay 事件逐条补发，不强制补一次落底会停留在旧位置附近。flushQueue 已在缓冲非空时
         // 做过一次，这里是冗余但无害的兜底（replayed=0/缓冲为空时仍需要它独立生效）。
         if (shouldForceScrollAfterReplay({ action: a, replayed: res?.replayed })) scrollBottom(true);
+        perfTrace.resumeStep('sync', { note: 'keep' });
+        perfTrace.resumeEnd('keep');
       }
       // 状态对账：重连/probe 补传后用快照重建未决审批卡片（reload 的 clearView 已同步执行完、不被清）；
       // reconnect 已 return——它触发干净重连，届时新一轮 sync 会带新快照。
@@ -1720,9 +1751,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     cliStatusBarEl?.classList.remove('opacity-40'); // E16：重连恢复（折叠条整体：summary + ANSI 行，重放/刷新马上跟上）
     logClientEvent('conn', `连接成功！Socket ID = ${socket.id}。当前使用 token: ${token ? token.slice(0, 4) + '***' : '无（本机/公网）'}`);
     perfTrace.mark('connect', { transport: socket.io.engine?.transport?.name });
+    perfTrace.resumeStep('connect');
     // 台阶3：首连由 instances 事件驱动加载当前查看实例（见 setInstances）；重连（非首连、已有绑定实例）
     // 续传该实例缓冲补齐断线期间漏掉的事件。
     if (!initialLoad && displayedInstanceId && displayedSessionId) requestSync({ probe: false });
+    else if (!displayedSessionId) perfTrace.resumeEnd(displayedInstanceId ? 'keep' : 'home');
     initialLoad = false;
     setupPush();
     initDeepLinkOnce();  // ②2c：深链入口（幂等，仅首次 connect 生效）
