@@ -6,10 +6,11 @@ import { createPerfTrace } from '../../app/public/js/app/perf-trace.js';
 
 function setup({ win = {} } = {}) {
   const lines = [];
+  const records = [];
   const clock = { t: 0 };
-  const trace = createPerfTrace({ log: text => lines.push(text), now: () => clock.t, win });
+  const trace = createPerfTrace({ log: text => lines.push(text), report: record => records.push(record), now: () => clock.t, win });
   const at = (t, fn) => { clock.t = t; return fn(); };
-  return { lines, trace, at, openLines: () => lines.filter(l => l.startsWith('[PERF] 打开会话')) };
+  return { lines, records, trace, at, openLines: () => lines.filter(l => l.startsWith('[PERF] 打开会话')) };
 }
 
 test.describe('createPerfTrace：打开会话', () => {
@@ -176,5 +177,90 @@ test.describe('createPerfTrace：浏览器 API 是外部边界', () => {
     assert.doesNotThrow(() => { ctx = setup({ win }); });
     assert.doesNotThrow(() => ctx?.at(500, () => ctx.trace.startupReady('首页列表')));
     assert.deepEqual(ctx?.lines, ['[PERF] 启动 500ms（首页列表）：首页列表 500；一方资源 不可测；长任务 不可测']);
+  });
+});
+
+// 同一份数据另出一条结构化记录，上报服务端后按维度出分位值（scripts/perf-report.js）。中文行给人看，这条给统计
+test.describe('createPerfTrace：结构化记录', () => {
+  test('启动：各时间点、导航类型、是否被系统回收过、资源与长任务汇总；就绪之后到的 mark 另成一条', () => {
+    const entries = {
+      navigation: [{ type: 'reload', responseEnd: 180, domInteractive: 700, domContentLoadedEventStart: 1150 }],
+      resource: [{ name: 'https://ccm.test/js/app.js?v=1', initiatorType: 'script', transferSize: 0, encodedBodySize: 9000, responseEnd: 900.4 }],
+    };
+    const win = { location: { origin: 'https://ccm.test' }, document: { wasDiscarded: true }, performance: { getEntriesByType: type => entries[type] ?? [] } };
+    const { records, trace, at } = setup({ win });
+    at(1100.6, () => trace.mark('appjs'));
+    at(1500, () => trace.mark('connect', { transport: 'polling' }));
+    at(2350, () => trace.startupReady('首页列表'));
+    at(2900, () => trace.mark('upgrade', { transport: 'websocket' }));
+    assert.deepEqual(records, [
+      {
+        k: 'startup', total: 2350, label: '首页列表', nav: 'reload', discarded: true, transport: 'polling',
+        marks: { html: 180, parsed: 700, dcl: 1150, appjs: 1101, connect: 1500 },
+        res: { count: 1, cached: 1, revalidated: 0, fetched: 0, bytes: 0, lastEndMs: 900 },
+        lt: null,
+      },
+      { k: 'late', name: 'upgrade', t: 2900, transport: 'websocket' },
+    ]);
+  });
+
+  test('打开会话：来源、结局、总耗时，每一步距起点的时刻和原样的细节（条数、服务端耗时）', () => {
+    const { records, trace, at } = setup();
+    const a = at(1000, () => trace.openBegin('A', 'tap'));
+    at(1420, () => trace.openBind('A', { note: '无缓存' }));
+    at(1645.4, () => trace.openStep(a, 'sync', { note: 'load' }));
+    at(2545, () => trace.openStep(a, 'history', { count: 300, server: { ms: 42, readMs: 30 } }));
+    at(4120, () => trace.openStep(a, 'highlight', { blocks: 12, ms: 8.6 }));
+    at(4120, () => trace.openEnd(a, 'done'));
+    assert.deepEqual(records.filter(r => r.k === 'open'), [{
+      k: 'open', source: 'tap', outcome: 'done', total: 3120, lt: null,
+      steps: [
+        { n: 'bind', t: 420, note: '无缓存' },
+        { n: 'sync', t: 645, note: 'load' },
+        { n: 'history', t: 1545, count: 300, server: { ms: 42, readMs: 30 } },
+        { n: 'highlight', t: 3120, blocks: 12, ms: 9 },
+      ],
+    }]);
+  });
+});
+
+// PWA 切回前台：页面没重新加载，启动行不会再出。这一段（重连、追平、必要时重拉历史）单独记
+test.describe('createPerfTrace：切回前台', () => {
+  test('回来到追平一行写清：离开多久（从切走算）、回来时连接还在不在、各步增量；启动就绪之前的不算', () => {
+    const { lines, records, trace, at } = setup();
+    at(100, () => trace.hide());
+    at(500, () => trace.resumeBegin({ connected: true }));                   // 启动还没就绪：这是启动的一部分
+    at(1000, () => trace.startupReady('首页列表'));
+    at(2000, () => trace.hide());
+    at(302_400, () => trace.resumeBegin({ connected: false }));
+    at(303_200, () => trace.resumeStep('connect'));
+    at(303_634, () => trace.resumeStep('sync', { note: 'keep' }));
+    at(303_634, () => trace.resumeEnd('keep'));
+    at(304_000, () => trace.resumeEnd('keep'));                              // 已经结束：不再出行
+    assert.deepEqual(lines.filter(l => l.startsWith('[PERF] 切回前台')), [
+      '[PERF] 切回前台 1234ms（离开 300s · 断线重连 · 不拉历史）：连上 +800 → 同步回执 +434（keep）；长任务 不可测',
+    ]);
+    assert.deepEqual(records.filter(r => r.k === 'resume'), [{
+      k: 'resume', hiddenMs: 300_400, connected: false, outcome: 'keep', total: 1234, lt: null,
+      steps: [{ n: 'connect', t: 800 }, { n: 'sync', t: 1234, note: 'keep' }],
+    }]);
+  });
+
+  test('没走完又切走、或 30s 还没追平：照样写出来，记成各自的结局；上一次的兜底计时器结束不了这一次', () => {
+    const fallbacks = [];   // 0ms 的（下一个任务写行）当场跑，30s 兜底攒着按点触发
+    const { lines, trace, at } = setup({ win: { setTimeout: (fn, ms) => (ms ? fallbacks.push(fn) : fn()) } });
+    at(1000, () => trace.startupReady('首页列表'));
+    at(1500, () => trace.hide());
+    at(6500, () => trace.resumeBegin({ connected: true }));
+    at(6800, () => trace.hide());
+    at(15_800, () => trace.resumeBegin({ connected: true }));
+    at(15_900, () => trace.resumeStep('connect'));
+    at(36_800, () => fallbacks[1]());   // 第一次切回的兜底
+    at(45_800, () => fallbacks[2]());   // 这一次的兜底
+    at(46_000, () => trace.resumeStep('sync', { note: 'keep' }));
+    assert.deepEqual(lines.filter(l => l.startsWith('[PERF] 切回前台')), [
+      '[PERF] 切回前台 300ms（离开 5s · 连接还在 · 又切走了）；长任务 不可测',
+      '[PERF] 切回前台 30000ms（离开 9s · 连接还在 · 30s 未追平）：连上 +100；长任务 不可测',
+    ]);
   });
 });

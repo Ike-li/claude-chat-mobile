@@ -564,6 +564,7 @@ npm run setup -- --help
 | `npm run config:check` | 校验现有配置 |
 | `npm run config:migrate` | 旧版 `.env` → `ccm.config.json` |
 | `node scripts/doctor.js` | 启动自检。`--fix` 把配置文件权限收紧到 0600，`--env=<文件>` 诊断指定的那一份 |
+| `node scripts/perf-report.js` | 汇总手机上报到 server 日志的性能记录（启动、打开会话、切回前台、掉帧、点击响应），按设备 / 网络 / 缓存等维度列 n·p50·p90·max；`--since 7d` 只看最近。只读 |
 
 ### 设备与连接
 

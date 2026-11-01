@@ -455,6 +455,7 @@ function collectInboundEvents(rootDir, dirs, kind) {
 const MOCK_INBOUND_EXEMPT = Object.freeze({
   'mirror:syncNow': '手动催一次 catchUp 追平，依赖真实 transcript 轮询；mock 无磁盘镜像，判定链由 mirror-engine 单测覆盖',
   'logs:clientError': '前端错误上报是 fire-and-forget，无回执可断言；E2E 侧改用 expectNoBrowserErrors 直接断言"没有前端错误"',
+  'logs:clientPerf': '性能上报是 fire-and-forget，无回执可断言；client-perf-report.spec.ts 直接嗅 socket.io 出向 WS 帧断言前端发了这一批（往返未验），服务端清洗由 client-perf-log 单测覆盖',
   'user:ackUnread': '已读确认无回执；unread-pill.spec.ts 直接嗅 socket.io 出向 WS 帧断言前端确实发了这条（往返未验，见该文件注释）',
 });
 

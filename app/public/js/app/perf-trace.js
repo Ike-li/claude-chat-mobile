@@ -1,12 +1,14 @@
 // app/perf-trace.js —— 启动 / 打开会话耗时埋点（2026-10-31 性能改造 Stage 0）
 //
 // 这里只管采集，归类和拼行在 logic/perf.js。结果经 clientLogger 写成 client_perf 行，机主在手机上
-// 「复制全部」导出——性能改造每一步都拿它做改前改后的对照。
-import { formatLateStartupMark, formatOpenPerfLine, formatStartupPerfLine, summarizeLongTasks, summarizeResources } from '../logic/perf.js';
+// 「复制全部」导出——性能改造每一步都拿它做改前改后的对照。同一份数据另经 report 出结构化记录，
+// 由 app/perf-report.js 攒批上报服务端。
+import { formatLateStartupMark, formatOpenPerfLine, formatResumePerfLine, formatStartupPerfLine, lateStartupPerfRecord, openPerfRecord, resumePerfRecord, startupPerfRecord, summarizeLongTasks, summarizeResources } from '../logic/perf.js';
 
 // socket.io 轮询、接口请求不是静态资源，不算进「一方资源」
 const NON_STATIC_INITIATORS = new Set(['xmlhttprequest', 'fetch', 'beacon']);
 const STARTUP_FALLBACK_MS = 30_000;
+const RESUME_FALLBACK_MS = 30_000;
 // 只留最近这么多条：PWA 一开几天，不能无限涨；要汇总的窗口（启动、刚才那次打开）都在最近
 const LONG_TASK_CAP = 200;
 
@@ -33,7 +35,7 @@ function entriesByType(win, type) {
   try { return win.performance?.getEntriesByType?.(type) ?? null; } catch { return null; }
 }
 
-export function createPerfTrace({ log, now = () => performance.now(), win = globalThis } = {}) {
+export function createPerfTrace({ log, report = () => {}, now = () => performance.now(), win = globalThis } = {}) {
   const takeLongTasks = observeLongTasks(win);
   const longTasksIn = (from, to) => takeLongTasks && summarizeLongTasks(takeLongTasks(), from, to);
   // 收尾常落在长任务里（高亮完、首页列表画完），浏览器却要等这个任务跑完才生成它的条目：
@@ -48,12 +50,11 @@ export function createPerfTrace({ log, now = () => performance.now(), win = glob
   function mark(name, detail) {
     if (marks[name]) return;
     marks[name] = { t: now(), ...detail };
-    if (startupLogged) afterThisTask(() => log(formatLateStartupMark(name, marks[name])));
+    if (startupLogged) afterThisTask(() => { log(formatLateStartupMark(name, marks[name])); report(lateStartupPerfRecord(name, marks[name])); });
   }
 
   // 导航时间点，距导航开始的 ms；0 = 还没发生，不写
-  function navigationMarks() {
-    const nav = entriesByType(win, 'navigation')?.[0];
+  function navigationMarks(nav) {
     const out = {};
     if (!nav) return out;
     for (const [name, at] of [['html', nav.responseEnd], ['parsed', nav.domInteractive], ['dcl', nav.domContentLoadedEventStart]]) {
@@ -72,8 +73,15 @@ export function createPerfTrace({ log, now = () => performance.now(), win = glob
   function startupReady(label) {
     if (startupLogged) return;
     startupLogged = true;
-    const line = { marks: { ...navigationMarks(), ...marks }, ready: { t: now(), label }, resources: firstPartyResources() };
-    afterThisTask(() => log(formatStartupPerfLine({ ...line, longTasks: longTasksIn(0, line.ready.t) })));
+    const nav = entriesByType(win, 'navigation')?.[0];
+    const line = { marks: { ...navigationMarks(nav), ...marks }, ready: { t: now(), label }, resources: firstPartyResources() };
+    // nav：navigate / reload / back_forward；discarded：系统在后台回收过这个页面，这次是被迫冷启动
+    const context = { nav: nav?.type ?? null, discarded: win.document?.wasDiscarded === true };
+    afterThisTask(() => {
+      const withTasks = { ...line, longTasks: longTasksIn(0, line.ready.t) };
+      log(formatStartupPerfLine(withTasks));
+      report(startupPerfRecord({ ...withTasks, ...context }));
+    });
   }
   // 停在新会话页、首页列表卡住时没人报就绪：到点照样出一行，时间点照样有用
   win.setTimeout?.(() => startupReady('30s 未就绪'), STARTUP_FALLBACK_MS);
@@ -87,7 +95,11 @@ export function createPerfTrace({ log, now = () => performance.now(), win = glob
     const trace = open;
     open = null;
     const endT = now();
-    afterThisTask(() => log(formatOpenPerfLine({ source: trace.source, steps: trace.steps, end: { t: endT - trace.begin, outcome }, longTasks: longTasksIn(trace.begin, endT) })));
+    afterThisTask(() => {
+      const line = { source: trace.source, steps: trace.steps, end: { t: endT - trace.begin, outcome }, longTasks: longTasksIn(trace.begin, endT) };
+      log(formatOpenPerfLine(line));
+      report(openPerfRecord(line));
+    });
   }
 
   // 上一次还没走完就开了新的：照样写出来、记成被切走——慢到用户放弃的那次正是要看的
@@ -128,9 +140,53 @@ export function createPerfTrace({ log, now = () => performance.now(), win = glob
     startupReady('会话就绪');
   }
 
+  // ---- 切回前台 ----
+  // PWA 从后台回来：页面没重新加载，启动行不会再出。回来、（断了就）重连、追平、必要时重拉历史，单独一行。
+  // 启动就绪之前的不算（那是启动的一部分）；又切走、超时没追平照样写出来
+  let resume = null;
+  let hiddenAt = null;
+
+  // 切走：记下时刻（回来时算离开多久）；还没追平就又切走的那次照样写出来
+  function hide() {
+    hiddenAt = now();
+    if (resume) finishResume('hidden');
+  }
+
+  function finishResume(outcome) {
+    const trace = resume;
+    resume = null;
+    const endT = now();
+    afterThisTask(() => {
+      const line = { hiddenMs: trace.hiddenMs, connected: trace.connected, steps: trace.steps, end: { t: endT - trace.begin, outcome }, longTasks: longTasksIn(trace.begin, endT) };
+      log(formatResumePerfLine(line));
+      report(resumePerfRecord(line));
+    });
+  }
+
+  function resumeBegin({ connected } = {}) {
+    if (!startupLogged) return;
+    if (resume) finishResume('superseded');
+    const begin = now();
+    const trace = { hiddenMs: hiddenAt === null ? null : begin - hiddenAt, connected, begin, steps: [] };
+    resume = trace;
+    win.setTimeout?.(() => { if (resume === trace) finishResume('timeout'); }, RESUME_FALLBACK_MS);
+  }
+
+  function resumeStep(name, detail) {
+    if (resume) resume.steps.push({ name, t: now() - resume.begin, ...detail });
+  }
+
+  function resumeEnd(outcome) {
+    if (resume) finishResume(outcome);
+  }
+
   return {
     mark,
     startupReady,
+    hide,
+    resumeBegin,
+    resumeStep,
+    resumeEnd,
     openBegin,
     openBind,
     openFor,
