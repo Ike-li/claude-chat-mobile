@@ -7,9 +7,10 @@ import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSideb
 // 性能改造 Stage 3b：点开非活会话时，session:history 在点击那一刻和 session:switch 并行发出
 // （app/public/js/app/history-prefetch.js），不再排在切换回执、instances 广播、sync:since 三段往返之后。
 // bindView 拿到 sync:since 的 diskLen 后，条数对得上就直接画预取那份，对不上照常重新拉（prefetchedHistoryFits）；
-// 磁盘到了截顶线（2000 条）就核对不了，不等预取落地、当场重新拉（prefetchCheckable）。
+// 磁盘到了截顶线（2000 条）条数恒等，改比 sync:since 的 diskTotal 与预取回执的 total（削顶前的总条数）。
 // mock 的长会话默认按截顶摆（2000 条、total 2100），PF1–PF3 用 /__arm-uncapped-long-history 改成 1999 条。
-// 不测什么：判据本身的各个分支（变长、变短、diskLen 为空、失败）在 tests/unit/logic-history-prefetch.test.mjs；
+// 不测什么：判据本身的各个分支（变长、变短、diskLen 为空、旧 server 不报 diskTotal、失败）在
+// tests/unit/logic-history-prefetch.test.mjs；
 // 凭打开凭据认领（A→B→A、后点顶掉先点）在 tests/unit/frontend-history-prefetch.test.mjs。
 // mock 只有长会话的 sync:since 报 diskLen，其余会话的预取一律回空、判作废（见 mock 的 session:history）。
 
@@ -112,22 +113,34 @@ test.describe('Stage 3b 点开非活会话时并行预取历史', () => {
 
   // 截顶时两次都只读回最近 2000 条：终端写过，窗口往后滑了，条数照样相等。画了旧窗口，镜像引擎切入时又以
   // 当时的磁盘长度定基线、不推，中间那几条要等终端再写一条、满窗滑动整窗替换才补上（PR #491 review）
-  test('P0-PREFETCH-4 截顶的会话：预取核对不了，不等它落地就重新拉，旧窗口不画', async ({ page }) => {
+  test('P0-PREFETCH-4 截顶的会话：预取读完终端又写了，条数照样 2000、总条数对不上，照常重新拉，旧窗口不画', async ({ page }) => {
     const loads = captureHistoryLoads(page);
     await gotoMock(page);
     await page.request.post('/__arm-stale-long-history?same_length=1');
-    // 预取的回执一直扣着：重新拉要是排在它落地之后，这里就画不出来
-    await page.request.post('/__hold-next-history-ack?prefetch=1');
     await clickLongHistoryInSidebar(page);
 
-    await expect(finalMarker(page), '等预取落地才重新拉').toBeVisible({ timeout: 15_000 });
+    await expect(finalMarker(page)).toBeVisible({ timeout: 15_000 });
     await expect(bubbles(page)).toHaveCount(2000);
+    await expect(page.locator('#messages').getByText('STALE_PREFETCH_MUST_NOT_APPEAR'), '画了滑动前的旧窗口').toHaveCount(0);
     const longLoads = loads.filter(p => p.sessionId === LONG);
     expect(longLoads.map(p => Boolean(p.prefetch)), '应是一次预取、一次重新拉').toEqual([true, false]);
-    // 不再断言「放行后旧窗口也不画」：放行那一刻负向断言立即成立，迟到的那份还没开始渲染，咬不住
-    expect((await (await page.request.post('/__release-history-ack')).json()).released, '前提：预取的回执一直扣着').toBe(1);
     const log = await openConsole(page);
-    await expect(perfRows(log, /历史回执 \+\d+（预取无法核对，重新拉；2000 条/), '[PERF] 行应记下预取核对不了、重新拉的那份').toHaveCount(1, { timeout: 10_000 });
+    await expect(perfRows(log, /历史回执 \+\d+（预取对不上，重新拉；2000 条/), '[PERF] 行应记下预取作废、重新拉的那份').toHaveCount(1, { timeout: 10_000 });
+    await page.locator('#consoleClose').click();
+    await expectNoBrowserErrors(page);
+  });
+
+  // 截顶的会话正是最长、最需要省掉第二次下行的那些：2026-10-31 生产实测，这一拉在重新拉那支上占 2.9s
+  test('P0-PREFETCH-5 截顶的会话：总条数对得上就直接画预取那份，不再拉第二次', async ({ page }) => {
+    const loads = captureHistoryLoads(page);
+    await gotoMock(page);
+    await clickLongHistoryInSidebar(page);
+
+    await expect(finalMarker(page)).toBeVisible({ timeout: 15_000 });
+    await expect(bubbles(page)).toHaveCount(2000);
+    expect(loads.filter(p => p.sessionId === LONG), '截顶的预取对得上还重新拉了一次').toHaveLength(1);
+    const log = await openConsole(page);
+    await expect(perfRows(log, /历史回执 \+\d+（预取；2000 条/), '历史回执一段应标明用的是预取那份').toHaveCount(1, { timeout: 10_000 });
     await page.locator('#consoleClose').click();
     await expectNoBrowserErrors(page);
   });

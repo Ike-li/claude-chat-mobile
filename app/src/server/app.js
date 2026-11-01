@@ -29,7 +29,7 @@ import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, 
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
 import * as folderOrder from '../sessions/folder-order.js';
-import { getSessionHistory, getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, readLastCustomTitle, isSafeSessionId } from '../sessions/history.js';
+import { getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, readLastCustomTitle, isSafeSessionId } from '../sessions/history.js';
 import { createSessionRenamer, sanitizeSessionTitle } from '../sessions/session-rename.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
@@ -5372,8 +5372,10 @@ registerSocketConnection(io, socket => {
     // diskExternalLen=磁盘 history 里最后一条非己方写入的位置（externalHistoryExtent）。与 diskLen 不同，
     // 它在 replayed>0 时照样带：己方 live 轮次不推高它，前端拿它比 seenDiskLen 不会把正常状态判成要重载，
     // 而断线期间终端写进同一会话的内容只有靠它才对得上账（replayed>0 时 diskLen 恒空，见下）。
-    const done = (replayed, gap, found = true, pending = null, diskLen = null, unreadOnEntry = 0, diskExternalLen = null) => {
-      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen, diskExternalLen, unreadOnEntry });
+    // diskTotal=削顶前的总条数，与 diskLen 同口径读、同时留空：截顶的会话 diskLen 恒为 2000，前端核对点击时
+    // 预取的那份只能比它（prefetchedHistoryFits）。
+    const done = (replayed, gap, found = true, pending = null, diskLen = null, unreadOnEntry = 0, diskExternalLen = null, diskTotal = null) => {
+      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen, diskTotal, diskExternalLen, unreadOnEntry });
     };
     const a = routeInstance(instanceId); // 台阶3：续传指定 tab 实例的缓冲（缺省 viewingInstanceId）
     if (!a || a.sessionId !== sessionId) { metrics.inc('catch_up_reloads'); return done(0, false, false); } // 无匹配实例：客户端清屏重载历史（重载口径：仅计后端能确证的触发；前端因 diskLen 盲区的重载后端不可观测、不计）；亦会在下个 live 事件凭 epoch 自愈
@@ -5403,13 +5405,14 @@ registerSocketConnection(io, socket => {
     // mtime 缓存几乎必然失效，这一读就是全量重建（链真相源 + 流式读整份 transcript），而前台探活的 ack
     // 只等 5s——大会话会把健康连接拖成超时重连。此刻终端的并发写入本就落在已登记的「本地 turn 吸收窗」里。
     let diskLen = null;
+    let diskTotal = null;
     let diskExternalLen = null;
     if (replayed === 0 || !(a.pendingTurns > 0)) {
       try {
         const location = a.sessionId ? await sessionRecovery.recover(a) : { status: 'found', cwd: transcriptCwdOf(a) };
         if (location.status !== 'found' && location.status !== 'not_found') throw new Error(locationError(location));
-        const history = await getSessionHistory(a.sessionId, location.cwd ?? transcriptCwdOf(a));
-        if (replayed === 0) diskLen = history.length;
+        const { messages: history, total } = await getSessionHistoryWithTotal(a.sessionId, location.cwd ?? transcriptCwdOf(a));
+        if (replayed === 0) { diskLen = history.length; diskTotal = total; }
         diskExternalLen = externalHistoryExtent(history);
       } catch { /* 读不到就两个都留空：前端按 0 处理，不因此重载 */ }
     }
@@ -5425,7 +5428,7 @@ registerSocketConnection(io, socket => {
       snapshot: unreadSnapshotOnEntry.get(a.instanceId) || 0,
       live: unreadCounts.get(a.instanceId) || 0,
     });
-    done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen, unreadOnEntry, diskExternalLen);
+    done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen, unreadOnEntry, diskExternalLen, diskTotal);
     // 切入/切回后 clearView 会先把 statusline 藏掉；setViewing/switch 的 300ms 防抖刷新可能已在 clearView
     // 之前发出并被清空。此处在 sync 完成后再强制重发一次（清 lastStatusLine 防 key 去重把「已发过但被 clearView 擦掉」的那次吞掉），
     // 保证冷路径/缓存路径都有 statusline 上屏，不依赖下一次 tool 事件。

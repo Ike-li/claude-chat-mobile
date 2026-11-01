@@ -292,16 +292,19 @@ export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, disk
 // 两次读盘之间终端可能写过（变长），rewind 也可能截过（变短），这份还没画过，短了同样不能当最新。
 // diskExternalLen 不用另查：它和 diskLen 出自 server 同一次读盘，条数相等时它不可能越过预取的末尾。
 // diskLen 为空（replayed>0 时 server 不读盘）就看不出磁盘变没变，照常重新拉。
-// 截顶的窗口（磁盘到了 2000 条）也照常重新拉：两次都只读回最近 2000 条，终端写过条数照样相等；
+// 截顶的窗口（磁盘到了 2000 条）光比条数不够：两次都只读回最近 2000 条，终端写过条数照样相等；
 // 而镜像引擎切入时以当时的磁盘长度定基线、不推，画了旧窗口，中间那几条要等终端再写一条、满窗滑动整窗替换才补上。
+// 所以截顶时再比削顶前的总条数（sync:since 的 diskTotal 对预取回执的 total）；没报 diskTotal（后端还没重启的旧版）
+// 就核对不了，照常重新拉。
 // 与 app/src/sessions/history.js 的 HISTORY_MAX_MESSAGES 同值（前后端互不 import，单测对齐两边）。
 export const HISTORY_WINDOW_MAX = 2000;
-export function prefetchCheckable(diskLen) {
-  return Number.isInteger(diskLen) && diskLen < HISTORY_WINDOW_MAX;
+export function prefetchCheckable(diskLen, diskTotal) {
+  return Number.isInteger(diskLen) && (diskLen < HISTORY_WINDOW_MAX || Number.isInteger(diskTotal));
 }
-export function prefetchedHistoryFits({ diskLen, err, res } = {}) {
+export function prefetchedHistoryFits({ diskLen, diskTotal, err, res } = {}) {
   if (err || res?.error || !Array.isArray(res?.messages)) return false;
-  return prefetchCheckable(diskLen) && res.messages.length === diskLen;
+  if (!prefetchCheckable(diskLen, diskTotal) || res.messages.length !== diskLen) return false;
+  return diskLen < HISTORY_WINDOW_MAX || res.total === diskTotal;
 }
 
 // 修「切回会话停在旧位置 + 内容一条条冒出来像重播」：shouldReloadOnEnter 的 'keep' / syncAckAction 的

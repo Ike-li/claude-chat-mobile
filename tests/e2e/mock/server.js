@@ -370,7 +370,7 @@ let outboxPermanentArmed = false;
 // #302：离线重放（fromOutbox）的 ack 先压住，/__release-outbox-acks 才回 ok——让前端停在「重发中」（批处理在途）。null = 不压。
 let outboxAckHold = null;
 // #354 review：下一次 session:history 的回执先扣住（一次性），/__release-history-ack 才回——让前端停在「历史回执在路上」。
-// 'load' 扣页面最终画出来的那次；'prefetch' 只扣 3b 点击时的预取
+// 长会话 3b 点击时的预取也算：它截顶也核对得上，页面画的就是它；别的会话的预取在 handler 开头就回空了，吃不到这一扣
 let historyAckHoldArmed = false;
 let heldHistoryAcks = [];
 // 3b 预取：下一次 session:switch 整个扣住（连同 instances 广播和回执），/__release-switch 才处理——
@@ -1217,9 +1217,8 @@ app.post('/__release-outbox-acks', (_req, res) => {
 });
 
 // #354 review：扣住 / 放行 session:history 的回执（见 historyAckHoldArmed）
-// 默认扣页面最终画出来的那次（不吃 3b 的预取）；?prefetch=1 只扣下一次预取
-app.post('/__hold-next-history-ack', (req, res) => {
-  historyAckHoldArmed = req.query.prefetch ? 'prefetch' : 'load';
+app.post('/__hold-next-history-ack', (_req, res) => {
+  historyAckHoldArmed = true;
   res.json({ ok: true });
 });
 app.post('/__release-history-ack', (_req, res) => {
@@ -2818,8 +2817,8 @@ io.on('connection', socket => {
     // 3b 预取（app/public/js/app/history-prefetch.js）：点开非活会话时，前端在 session:switch 的同时多拉一份，
     // payload 带 prefetch。下面的一次性夹具（扣回执、失败支、P0-ORDER 的抢先增量……）都是按「页面最终画出来的
     // 那次拉取」写的，让预取吃掉就测歪了；这些会话的 sync:since 不报 diskLen（或报的不是 0），回空的预取
-    // 前端必判对不上、照常再拉。只有长会话的预取走真分支：它的 sync:since 如实报 diskLen。默认截顶（2000 条）时
-    // 前端核对不了、照常再拉，/__arm-uncapped-long-history 之后（1999 条）预取才能被复用。
+    // 前端必判对不上、照常再拉。只有长会话的预取走真分支：它的 sync:since 如实报 diskLen 与 diskTotal。
+    // 默认截顶（2000 条、共 2100 条）时前端凭 total 核对，/__arm-uncapped-long-history 之后（1999 条）凭条数核对。
     if (payload?.prefetch && sessionId !== 'mock-session-long-history') {
       rawCallback({ messages: [] });
       return;
@@ -2827,8 +2826,7 @@ io.on('connection', socket => {
     // 真 server 的每条历史消息都带 timestamp（transcript 原样透传，见 app/src/sessions/history.js）。
     // 这里统一在出口补齐，而不是逐个分支手写——17 处 callback 漏一个就是一处静默的契约 drift。
     // 已显式带 timestamp 的（如 mock-session-timeline fixture）保持原值不覆盖。
-    // 截顶的长会话核对不了预取、照常再拉，扣住预取就扣错了那一份
-    const holdThis = historyAckHoldArmed === (payload?.prefetch ? 'prefetch' : 'load');
+    const holdThis = historyAckHoldArmed;
     if (holdThis) historyAckHoldArmed = false;
     const callback = res => {
       const reply = () => rawCallback(stampHistoryMessages(res));
@@ -3130,14 +3128,16 @@ io.on('connection', socket => {
         messages[1937] = { kind: 'tool_use', role: 'assistant', toolUseId: 'toolu_lh_cross', name: 'Read', inputSummary: '{"file_path":"cross.txt"}', timestamp: messages[1937].timestamp };
         messages[1943] = { kind: 'tool_result', role: 'user', toolUseId: 'toolu_lh_cross', ok: true, outputSummary: 'cross-cut result', timestamp: messages[1943].timestamp };
       }
+      // total：真 server 的 session:history 回削顶前的条数（getSessionHistoryWithTotal）。这个会话按「磁盘上有 2100 条、
+      // 只回最近 2000 条」摆，前端据此要说清只显示了一部分（P0-LH4）。
+      let total = uncappedLongHistory ? 1999 : 2100;
       if (staleLongHistoryArmed) {
-        if (staleLongHistoryArmed === 'shorter') messages.length -= 10;
+        // 过期的那份是终端再写之前读的：短了就少那几条；截顶时窗口条数不变，削顶前的总条数少一条
+        if (staleLongHistoryArmed === 'shorter') { messages.length -= 10; total -= 10; } else total -= 1;
         messages[messages.length - 1] = { ...messages[messages.length - 1], content: 'STALE_PREFETCH_MUST_NOT_APPEAR' };
         staleLongHistoryArmed = false;
       }
-      // total：真 server 的 session:history 回削顶前的条数（getSessionHistoryWithTotal）。这个会话按「磁盘上有 2100 条、
-      // 只回最近 2000 条」摆，前端据此要说清只显示了一部分（P0-LH4）。
-      callback({ messages, total: uncappedLongHistory ? 1999 : 2100 });
+      callback({ messages, total });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-gap-pending') {
       callback({
         messages: [
@@ -4145,9 +4145,9 @@ io.on('connection', socket => {
       }
       ack(0); // Fallback to history or empty
     } else if (sessionId === 'mock-session-long-history') {
-      // 3b 预取：如实报磁盘条数（真 server 在 replayed=0 时总带），前端凭它判点击时预取的那份能不能直接画。
-      // 与 session:history 读回的条数一致；置换出来的新实例同一个会话，同样报
-      ack(0, { diskLen: uncappedLongHistory ? 1999 : 2000 });
+      // 3b 预取：如实报磁盘条数与削顶前的总条数（真 server 在 replayed=0 时总带），前端凭它们判点击时预取的
+      // 那份能不能直接画。与 session:history 读回的 messages.length / total 一致；置换出来的新实例同一个会话，同样报
+      ack(0, { diskLen: uncappedLongHistory ? 1999 : 2000, diskTotal: uncappedLongHistory ? 1999 : 2100 });
     } else {
       ack(0);
     }

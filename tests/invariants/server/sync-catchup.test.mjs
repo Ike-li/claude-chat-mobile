@@ -34,6 +34,7 @@ import { randomUUID } from 'node:crypto';
 import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer, waitForCondition } from '../../integration/_spawn-server.mjs';
 import { encodeProjectDir } from '../../../app/src/shared/project-dir.js';
+import { HISTORY_MAX_MESSAGES } from '../../../app/src/sessions/history.js';
 
 const TOKEN = 'inv-sync-catchup-token';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -169,6 +170,7 @@ test('diskLen 只在 replayed=0 时读：活缓冲有内容就不必对账磁盘
   const active = await c.since({ lastSeq: 0, instanceId });
   assert.ok(active.ack.replayed > 0, '前置：这次应有补发内容');
   assert.equal(active.ack.diskLen, null, 'replayed>0 时不读磁盘，diskLen 必须留空');
+  assert.equal(active.ack.diskTotal, null, 'diskTotal 与 diskLen 同口径：replayed>0 时也留空');
   // stub 下种子那一轮永不收尾（pendingTurns 恒 1）：有在途轮时连 diskExternalLen 也不读——文件正被
   // 己方追加、缓存必失效，这一读是全量重建，会把前台探活（5s）拖成超时重连。
   assert.equal(active.ack.diskExternalLen, null, '有在途轮时不该为 diskExternalLen 读磁盘');
@@ -212,22 +214,30 @@ test('epoch 在同一实例内稳定，且补发件与实时件同源', async ()
 // 但不是对话内容。算进 replayed 的话：models 那条会让没有 DOM 缓存的切入跳过 loadHistory、聊天区空白
 // （已修过）；slash_commands 那条会让 shouldReloadOnEnter 判「有回放 → reload」，清屏重拉一遍历史，
 // 点击时预取的那份（#491）白拉，diskLen 也因 replayed>0 留空、对账不了。
-test('刚续接、缓冲里只有元数据（models / slash_commands）：照样回放，但 replayed=0 并带回 diskLen', async () => {
+// transcript 故意摆成超过截顶线（HISTORY_MAX_MESSAGES）：diskLen 只到 2000，预取要凭削顶前的 diskTotal 核对。
+test('刚续接、缓冲里只有元数据（models / slash_commands）：照样回放，但 replayed=0 并带回 diskLen 与 diskTotal', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ccm-inv-sync-meta-'));
   const ws = join(root, 'ws');
   mkdirSync(ws);
   const cwd = realpathSync(ws);
   const sessionId = randomUUID();
   // session:switch 先查 transcript 在不在。只在容器 / CI 跑，那里的 HOME 是一次性目录；cwd 是 mkdtemp 出来的，
-  // 编码出的项目目录也不会撞上别的会话。两条要串成 parentUuid 链，history.js 只认链上的条目。
+  // 编码出的项目目录也不会撞上别的会话。整段要串成 parentUuid 链，history.js 只认链上的条目。
   const projectDir = join(homedir(), '.claude', 'projects', encodeProjectDir(cwd));
   mkdirSync(projectDir, { recursive: true });
   const line = (type, text, parentUuid, uuid) => `${JSON.stringify({
     type, uuid, parentUuid, entrypoint: 'cli', timestamp: new Date().toISOString(), sessionId, cwd, isMeta: false,
     message: { role: type, content: [{ type: 'text', text }] },
   })}\n`;
-  const u1 = randomUUID();
-  writeFileSync(join(projectDir, `${sessionId}.jsonl`), line('user', '终端里说过的', null, u1) + line('assistant', '终端里的回答', u1, randomUUID()));
+  const onDisk = HISTORY_MAX_MESSAGES + 2;
+  let parent = null;
+  let transcript = '';
+  for (let i = 0; i < onDisk; i++) {
+    const uuid = randomUUID();
+    transcript += line(i % 2 ? 'assistant' : 'user', `终端里的第 ${i} 条`, parent, uuid);
+    parent = uuid;
+  }
+  writeFileSync(join(projectDir, `${sessionId}.jsonl`), transcript);
   const modelListFile = join(root, 'models.txt');
   writeFileSync(modelListFile, 'fake-listed-model\n');
 
@@ -251,7 +261,8 @@ test('刚续接、缓冲里只有元数据（models / slash_commands）：照样
     assert.deepEqual(replayedEvents.map(e => e.type).sort(), ['models', 'slash_commands'],
       '元数据照样回放：前端要靠它们填模型下拉与斜杠菜单，只是不计数');
     assert.equal(ack.replayed, 0, `缓冲里没有对话内容，replayed 必须是 0，实际 ack=${JSON.stringify(ack)}`);
-    assert.equal(ack.diskLen, 2, `replayed=0 才带回磁盘条数，前端靠它对账、复用预取，实际 ack=${JSON.stringify(ack)}`);
+    assert.equal(ack.diskLen, HISTORY_MAX_MESSAGES, `replayed=0 才带回磁盘条数（截顶后的），前端靠它对账、复用预取，实际 ack=${JSON.stringify(ack)}`);
+    assert.equal(ack.diskTotal, onDisk, `截顶时条数核对不了，要带回削顶前的总条数，实际 ack=${JSON.stringify(ack)}`);
   } finally {
     try { c?.sock.close(); } catch { /* 已关闭 */ }
     await killServer(metaServer.proc);
