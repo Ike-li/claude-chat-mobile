@@ -92,6 +92,7 @@ import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/
 import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
 import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
 import { searchFiles } from '../files/file-search.js';
+import { isMissingInScope, isUnderVanishedRoot } from '../files/workdir-scope-guard.js';
 import { isProcessed, commitProcessed, processedInstanceId, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
 import {
   resolveInstanceTarget,
@@ -680,6 +681,10 @@ const routeCwd = (cwd, { tier = 'open' } = {}) => {
   // 「无文件夹」的新会话页）时原样交回，调用方各自按 isNoFolderKey 处理，与从前相同。
   if (isNoFolderKey(target)) return explicit ? null : target;
   if (!explicit) return null; // 缺省目标不在当前授权里：拒，但不记越界——那不是请求方给的值
+  // 已连接的文件夹（或其下的 worktree）运行中被删掉：配置要到重启 / 热加载才剔掉它，在那之前抽屉每 12 秒
+  // 对它发一次 session:list。照样拒，但那是「已经不在了」不是越界尝试——记了就是每小时 300 条，
+  // 几小时把环形审计里真正的安全记录挤光（2026-10-17、10-29 生产实况）。
+  if (isMissingInScope(cwd, workDirs) || isUnderVanishedRoot(cwd, workDirs)) return null;
   console.warn(`[scope] 越界工作目录请求被拒：${cwd} 不在已连接的文件夹里`);
   // 最小审计记录：routeCwd 调用点分散、多数无 socket 上下文可传 actor，此处 actor 留空——
   // 目录越界信号的价值在"发生过"本身，拒绝由调用方完成。

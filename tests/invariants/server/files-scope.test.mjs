@@ -106,8 +106,13 @@ test('写回越界 → 拒绝，且工作区外的文件不得被改动', async 
 
 test('越界尝试留下 scope_violation 审计（写路径唯一的事后可追溯记录）', async () => {
   await emit('browse:read', { cwd: workdir, relPath: '../outside/secret.txt' });
-  // 审计是异步落盘，给一小段时间；这里不是在等竞态窗口，而是等一次确定会发生的写。
-  await new Promise(r => setTimeout(r, 300));
+  // 审计是防抖异步落盘：每写一条都把 200ms 计时器重来一遍，到点才 writeFile + rename。固定睡 300ms
+  // 只给写盘留约 100ms，CI 负载高时文件还没写出来，读到的是 []（PR #501 的 unit-test (20)）。
+  // 轮询到落盘或超时：坏掉时才耗满上限。
+  const deadline = Date.now() + 3000;
+  while (!auditActions().includes('scope_violation') && Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 50));
+  }
   assert.ok(auditActions().includes('scope_violation'),
     `越界必须留痕，实际审计动作：${JSON.stringify(auditActions())}`);
 });

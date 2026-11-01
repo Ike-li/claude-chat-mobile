@@ -581,7 +581,7 @@ const AUDIT_DELETE_REJECT_REASON = {
   opening: tk('会话正在打开中'),
   quiet_period: tk('可能正被终端使用'),
 };
-export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
+export function formatAuditEntry({ ts, action, target, outcome, meta, repeat } = {}) {
   const d = meta && typeof meta === 'object' ? meta : {};
   const tgt = target == null ? '' : String(target);
   const via = d.via ? ` · ${d.via}` : '';
@@ -647,6 +647,7 @@ export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
   // （「被拒」「拒绝设备」「限速锁定」）。剩下的 partial_failure / error 才是必须显式说出来的。
   const OUTCOME_ALREADY_IN_TEXT = new Set(['success', 'allowed', 'denied', 'locked', undefined, null, '']);
   if (!outcomeInText && !OUTCOME_ALREADY_IN_TEXT.has(outcome)) text += `（${outcome}）`;
+  if (repeat > 1) text += ` ×${repeat}`; // 服务端 60 秒内合并的完全相同记录（audit.js）
   return { ts, type: 'audit', text, severity };
 }
 

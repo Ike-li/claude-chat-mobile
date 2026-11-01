@@ -476,6 +476,12 @@ test.describe('formatAuditEntry：审计记录 → 一行人话', () => {
     assert.equal(r.severity, 'danger');
   });
 
+  // 服务端把 60 秒内完全相同的记录合并成一条、记 repeat（audit.js）：不显示出来，刷了 5 次和 1 次长得一样
+  test('合并过的记录 → 末尾标出次数；单条不标', () => {
+    assert.equal(formatAuditEntry({ action: 'scope_violation', target: '/gone', outcome: 'denied', repeat: 5 }).text, '越界访问被拒 · /gone ×5');
+    assert.equal(formatAuditEntry({ action: 'scope_violation', target: '/gone', outcome: 'denied' }).text, '越界访问被拒 · /gone');
+  });
+
   test('审批完整性校验失败 → danger', () => {
     const r = formatAuditEntry({ action: 'approval_integrity_mismatch', target: 'req_88', outcome: 'denied', meta: { tool: 'Bash' } });
     assert.equal(r.text, '审批完整性校验失败 · req_88 · Bash');
