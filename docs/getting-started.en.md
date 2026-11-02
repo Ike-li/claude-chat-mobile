@@ -153,7 +153,9 @@ new file wins).
 
 > ⚠️ **Do not "upgrade" with `npm run setup --force`.** `--force` is a clean reinstall and mints a
 > new `AUTH_TOKEN` — every approved device stops working and each phone has to be approved again.
-> When a config already exists, setup refuses and points at `migrate`; do what it says.
+> **The refusal only exists in non-interactive mode (`--yes`)**: interactive `npm run setup` never reaches it
+> (and ignores `--force`) — it just asks whether to overwrite, and answering y mints a new token.
+> To upgrade, run `node scripts/config.js migrate`.
 
 On a legacy deployment the desktop console shows a banner and a "Migrate" button at the top of the
 config window, so you never have to go back to a terminal.
@@ -354,9 +356,9 @@ On the phone, verify:
    - Both cases converge on the same action: **get `claude` through one normal turn in your host terminal, in that same workspace directory**, then retry from the phone.
 3. **Green path (the terminal can already hold a conversation):** send a harmless prompt such as “Reply with OK only.” The response streams and reaches a finished-turn state.
 4. Settings show model, permission mode, effort, and service status.
-5. If Web Push is enabled, use “Send a test push” now instead of discovering a broken path during a real approval.
+5. If Web Push is enabled, use “Send a test notification” now instead of discovering a broken path during a real approval.
 
-The minimum path is now complete. Both bridges below are optional enhancements and are not required for Web-originated sessions.
+The minimum path is now complete. The sections below are optional enhancements and are not required for Web-originated sessions.
 
 ## Optional: CLI statusline bridge
 
@@ -390,8 +392,8 @@ npm run hooks:uninstall
 - Set `CLI_HOOKS_BRIDGE: false` in the config file to pause server consumption without removing global configuration.
 - `uninstall` removes its own hook entries per the manifest and deletes `~/.claude/ccm/hooks-v1` (the inbox and receipts), plus `~/.claude/ccm` once it is empty. Neither install nor uninstall needs a server restart.
 
-The phone UI can also install or remove the bridge explicitly under Settings → 🖥 This computer → Terminal session
-notifications — a sibling of the "📊 Service status" button on that page, **not** something inside the service status panel.
+The phone UI can also install or remove the bridge explicitly under Settings → 🖥 Host → Terminal session
+alerts — a sibling of the "📊 Service status" button on that page, **not** something inside the service status panel.
 
 ## Optional: macOS desktop console
 
@@ -506,7 +508,7 @@ Follow these steps in order and verify each result before continuing:
    I can pick one from my phone later) and whether to install the CLI hooks bridge.
    Do not use my whole home directory. hooks=on changes ~/.claude/settings.json.
 4. Your shell has no TTY, so do not run the interactive wizard. First unset AUTH_TOKEN WORK_DIR WORK_DIRS PORT
-   CCM_DATA_DIR WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL
+   CCM_DATA_DIR WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL
    so inherited values cannot override the file you are about to write. Then:
    node scripts/setup.js --yes --work-dir=<confirmed absolute path> --hooks=<on or off>
    (Drop --work-dir if no folder is being connected.) If a config file already exists, stop instead of adding --force yourself.
@@ -550,6 +552,7 @@ npm run setup -- --help
 | `npm run config:check` | Validate the current configuration |
 | `npm run config:migrate` | Legacy `.env` → `ccm.config.json` |
 | `node scripts/doctor.js` | Preflight self-check. `--fix` tightens config file permissions to 0600; `--env=<file>` diagnoses that specific file |
+| `node scripts/perf-report.js` | Summarise the phone performance records reported into the server log (startup, opening a session, returning to foreground, dropped frames, tap latency) as n·p50·p90·max per device / network / cache; `--since 7d` limits the window. Read-only |
 
 ### Devices and connecting
 

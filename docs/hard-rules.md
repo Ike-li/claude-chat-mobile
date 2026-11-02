@@ -22,8 +22,8 @@
 | 单用户 = 主机所有者 | 无多用户/租户隔离；鉴权通过 ≈ 本机启动 claude 的权限 | [README 安全边界](../README.md#安全边界) |
 | 不是远程桌面 / 共享 TTY / 多租户托管 | 不附着终端 stdin/stdout | [architecture.md](architecture.md) |
 | 尽量不重复造轮子 | 功能先看 Claude Code CLI / Agent SDK | `CLAUDE.md` |
-| **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口。维护者本机的 Docker playground（`docker-compose.playground.yml`）是测试基础设施，与 `test:docker` 并列，**不是**产品入口，用户装机路径不走它 | 2026-08-15 维护者确认；2026-08-17 维护者确认 desktop 单独入口；[deployment.md](deployment.md) |
-| **可选功能由用户开关，不猜** | 桌面控制台、两个 bridge、`LOG_TERMINAL`、推送……默认全关，装机向导逐项问。非交互模式下两类失败模式分开处理：**会动全局的**（`--hooks` 写 `~/.claude`、`--desktop` 跑 swiftc）缺省即 `off`；**静默回落会扩大攻击面的**一律不回落：`--work-dir` 不给就一个文件夹都不连（只剩「无文件夹」），绝不补成 `$HOME`（= 整个家目录挂给远程入口），显式给空值直接拒绝。取值非法（`--hooks=maybe`）一律拒绝，不猜意图 | `scripts/setup.js` `resolveSetupPlan`；`tests/unit/setup.test.mjs` |
+| **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口。维护者本机的 Docker playground（`tests/infra/docker-compose.playground.yml`）是测试基础设施，与 `test:docker` 并列，**不是**产品入口，用户装机路径不走它 | 2026-08-15 维护者确认；2026-08-17 维护者确认 desktop 单独入口；[deployment.md](deployment.md) |
+| **可选功能由用户开关，不猜** | statusline bridge、`LOG_TERMINAL`、推送……默认关，要用户自己在配置里开；会动全局的两项由装机向导问：桌面控制台默认否，CLI hooks bridge 交互默认是（终端会话唯有它能推到手机，但写 `~/.claude` 所以必须问）。非交互模式下两类失败模式分开处理：**会动全局的**（`--hooks` 写 `~/.claude`、`--desktop` 跑 swiftc）缺省即 `off`；**静默回落会扩大攻击面的**一律不回落：`--work-dir` 不给就一个文件夹都不连（只剩「无文件夹」），绝不补成 `$HOME`（= 整个家目录挂给远程入口），显式给空值直接拒绝。取值非法（`--hooks=maybe`）一律拒绝，不猜意图 | `scripts/setup.js` `resolveSetupPlan`；`tests/unit/setup.test.mjs` |
 | **对模型通路零假设** | 不关心 claude CLI 接的是哪个上游——官方订阅 / API key / Bedrock / Vertex / 第三方网关，一视同仁。**禁止任何 `ANTHROPIC_BASE_URL` 匹配、厂商白名单或上游探测**；唯一允许据以调整行为的信号是 CLI 自报的能力位（如 `rate_limits_available`），因为那是 CLI 说的、不是我们猜的。`ANTHROPIC_*` 启动期剥除是为「配置文件不许压过 shell 的 provider 凭据」（终端等价），不是限制上游。官方 Remote Control 在网关 / API key 配置下整条不可用，而本项目全功能可用——**这正是它存在的主要理由之一** | 2026-09-01 维护者确认；`app/src/agent/agent.js` 的 `USAGE_THIRD_PARTY_INTERVAL_MS` 头注「不猜 ANTHROPIC_BASE_URL」；`app/src/shared/child-env.js`；[getting-started.md](getting-started.md) |
 | **不新增持久化层** | 消息内容的真相源**永远**是 `~/.claude/projects/<dir>/<id>.jsonl`，CCM 一条都不存（`sessions.json` 只有索引与指针）。新增持久化必须**同时**满足：① claude 侧不存在该概念（设备信任 / 推送订阅 / 审计这类 web 特有物）② 不能从 transcript 重建。缓存类不受此限，但**必须可随时删除、损坏即当作没有**。唯一的反向例外：往 claude 的 jsonl 追加一行 `entrypoint-marker`，那是互通性所需（让 CLI `/resume` 看得到 web 建的会话），不是 CCM 的存储 | 2026-09-01 维护者确认；`app/src/sessions/history.js`；`app/src/server/app.js` 的 entrypoint 写入；[architecture.md](architecture.md) 状态表 |
 | **鉴权是启动前提** | 没有 `AUTH_TOKEN` 就**不启动**，任何绑定模式都一样，`BIND_MODE=loopback` 也不例外——本机浏览器打开同样是 web 访问。纯空白 token 一并拒绝（它 truthy 但形同虚设）。**鉴权面 = 数据面与操作面**，不含静态壳：`index.html` 与前端 JS 必须登录前可取，那是登录门本身。本机 loopback 仍免**设备审批**（第二因子，见 §6），但不免 token | 2026-09-01 维护者确认；`app/src/shared/bind-host.js` `resolveBindPlan` 的 `token_required`；`tests/invariants/bind-host.test.mjs` |
@@ -146,7 +146,7 @@
 
 > ⚠ **`test:invariants` 的两个兄弟不在名单上**，别照后缀类推：`test:invariants:server` 起真 `app/server.js` 子进程；`test:invariants:env` 跑卸载器，隔离依赖被测代码认注入的 `home`/`root`/`appPath`，回落即打在真实家目录上。两条都进容器（`test:docker` 已含）。
 
-**其余一律容器**：`test:docker` · `test:docker:playground` · `mutate:docker` 等。维护者 playground（干净 Linux HOME、发 loopback 端口、fake-claude）走 `npm run playground:up` / `npm run test:docker:playground`，镜像仍是 `Dockerfile.test`。
+**其余一律容器**：`test:docker` · `test:docker:playground` · `mutate:docker` 等。维护者 playground（干净 Linux HOME、发 loopback 端口、fake-claude）走 `npm run playground:up` / `npm run test:docker:playground`，镜像仍是 `tests/infra/Dockerfile.test`。
 
 **单独授权例外**：`RUN_CLAUDE_INTEGRATION=1` · `npm run test:smoke` · 起验收的真模型环境 `node tests/acceptance/env/up.mjs --env <含 E3 / E3proxy / E3cf，或 all> --yes`（钩子 `ask`：起的是真 claude CLI 容器，机主网关凭据会复制进去，此后每个回合都花真额度；真模型只在容器里跑）。验收入口 `tests/acceptance/run.mjs` 是宿主机侧调度，`--tier C` 也只列清单、不执行，不设闸。
 
@@ -154,7 +154,7 @@
 
 ### 4.3 `npm run check` 包
 
-覆盖面导览，**逐项以 `package.json` 的 `check` 为准**（这行漂过两次：加门禁时没人会回头数散文里的项数）：ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· 架构图漂移（gh-pages 图集的常量/路径/基线）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · 不变量编号（`invariants/` 的 `// 守护：` 行与编号表双向对齐）· Playwright 禁止模式 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· 未分类文件（inventory）。
+覆盖面导览，**逐项以 `package.json` 的 `check` 为准**（这行漂过两次：加门禁时没人会回头数散文里的项数）：ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· 架构图漂移（gh-pages 图集的常量/路径/基线）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · shell 陷阱 · 不变量编号（`invariants/` 的 `// 守护：` 行与编号表双向对齐）· 凭据配置被 `.gitignore` 覆盖 · 执行位守卫接线 · 容器配置隔离 · Playwright 禁止模式 · `tw.css` 与源码一致 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· 未分类文件（inventory）。
 
 链上成员由 `tests/unit/gate-wiring.test.mjs` 钉住：`tests/gates/` 下的门禁要么挂在 check 上，要么在那份 `NOT_IN_CHECK` 白名单里写明理由。新写一个门禁忘了接线会红——**一个不被执行的门禁比没有门禁更危险，它占着「这块有人守」的位置**。
 

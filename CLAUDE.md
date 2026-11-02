@@ -4,7 +4,7 @@
 
 移动端聊天式 Web UI，把**本机 claude CLI** 接到手机上。目标是终端等价性："坐在电脑前对 claude 打字"和"在手机上打字"效果一样。
 
-技术栈：Node ≥20 · ESM · Express 5 · Socket.io · Agent SDK · `jose`（JWT）· `web-push`（离线推送）；**版本号一律以 `package.json` 为准**。测试用内置 `node --test` + Playwright。运行时代码在 `app/`（`app/src/` 后端 · `app/public/` 前端 · `app/server.js` 入口），测试与门禁全在 `tests/`，用户要敲的装机运维命令在 `scripts/`，macOS 菜单栏在 `desktop/`。
+技术栈：Node ≥20 · ESM · Express 5 · Socket.io · Agent SDK · `jose`（JWT）· `web-push`（离线推送）；**版本号一律以 `package.json` 为准**。测试用内置 `node --test` + Playwright。运行时代码在 `app/`（`app/src/` 后端 · `app/public/` 前端 · `app/server.js` 入口），测试与门禁在 `tests/`（`doc-consistency` 例外，留在 `scripts/` 供 doctor import），用户要敲的装机运维命令在 `scripts/`，macOS 菜单栏在 `desktop/`。
 
 **产品立场 n=1 自托管**（单用户、无多租户）。硬性规则、n=1 取舍、已决「不做」的技术债见 [docs/hard-rules.md](docs/hard-rules.md)。
 
@@ -20,7 +20,7 @@
 
 ## 测试跑在哪：宿主机只跑白名单，其余进容器
 
-- **宿主机只跑** `npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e` 及其同源别名（真相源 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。`test:invariants:server` 与 `test:invariants:env` 不在名单上，别照后缀类推。
+- **宿主机只跑** `npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:invariants`、`npm run test:e2e` 及其同源别名（真相源 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。`test:invariants:server` 与 `test:invariants:env` 不在名单上，别照后缀类推。
 - **其余一律进容器**：`npm run test:docker`、`npm run mutate:docker -- <文件>` 等，首次先 `npm run docker:build`。PreToolUse 钩子对有容器替代的命令直接 deny 并指出改跑哪条。
 - **改动过程中只跑相关文件，全量留到开 PR 前跑一次**（CI 会再跑全套）：
   - 单测与 `tests/invariants/` 顶层：`node --import ./tests/setup/preload-env.mjs --test <文件>`。`npm run test:unit -- <文件>` 不是单文件跑法：脚本里写死了 glob，追加的文件会连同全量一起跑。

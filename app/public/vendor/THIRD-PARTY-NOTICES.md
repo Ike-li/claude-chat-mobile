@@ -1,6 +1,6 @@
 # 第三方组件与许可证 / Third-Party Notices
 
-本目录（`public/vendor/`）打包并随项目分发以下第三方组件。它们各自的版权与许可证如下，
+本目录（`app/public/vendor/`）打包并随项目分发以下第三方组件。它们各自的版权与许可证如下，
 分发时须保留本文件。项目自身代码以 Apache-2.0 许可（见仓库根 `LICENSE`），不改变下列组件的许可。
 
 This directory bundles and redistributes the third-party components listed below. Their
@@ -54,7 +54,7 @@ project's own code is licensed under Apache-2.0 (see root `LICENSE`); that does 
 ## Tailwind CSS — `../css/tw.css`
 
 - 版本 / Version: 3.4.17
-- 构建 / Build: Tailwind CSS CLI 预编译的样式表（含 preflight 基础样式），不在本目录，位于 `public/css/tw.css` / stylesheet precompiled by the Tailwind CSS CLI (includes the preflight base styles); it lives at `public/css/tw.css`, not in this directory
+- 构建 / Build: Tailwind CSS CLI 预编译的样式表（含 preflight 基础样式），不在本目录，位于 `app/public/css/tw.css` / stylesheet precompiled by the Tailwind CSS CLI (includes the preflight base styles); it lives at `app/public/css/tw.css`, not in this directory
 - 版权 / Copyright: © Tailwind Labs, Inc. and contributors
 - 许可 / License: MIT (SPDX: `MIT`)
 - 来源 / Source: https://github.com/tailwindlabs/tailwindcss（npm 包 `tailwindcss@3.4.17`）
@@ -70,7 +70,7 @@ project's own code is licensed under Apache-2.0 (see root `LICENSE`); that does 
 
 ## 许可证全文 / Full license texts
 
-### MIT License（适用于 / applies to: marked, Tailwind CSS）
+### MIT License（适用于 / applies to: marked, CodeMirror 5, Tailwind CSS）
 
 ```
 Permission is hereby granted, free of charge, to any person obtaining a copy
