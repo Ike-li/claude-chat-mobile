@@ -978,6 +978,16 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     if (ev?.replay) return;
     setBusy(true);
   }
+  // 子代理的流事件不能证明主轮在跑：后台子代理在主轮 result 之后还会一直推流，那段时间权威快照
+  // 说不在跑（bgActive、turnRunning=false），运行条归 task_progress 横幅管。不挡的话每条 delta 都
+  // 从 0s 重新点亮运行条，ticker 过了 30 秒宽限清掉，下一条又亮（真机 2026-11-02）。
+  // 查不到快照时照旧点亮；前台子代理期间 turnRunning 为真，不受影响。
+  // 守护：tests/e2e/specs/task-progress.spec.ts P0-17u
+  function setBusyFromSubagentEvent(ev) {
+    const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
+    if (resolveRunStateFromSnapshot(live)?.busy === false) return;
+    setBusyFromStreamEvent(ev);
+  }
   // 与上面对称：回放的轮次终止事件同样不写运行态。三处调用（result / error / system:interrupted）
   // 覆盖全部轮次终点；其余收尾动作（收口气泡与工具卡、状态条、滚动）照常执行——那是「补渲染内容」。
   //
@@ -2633,7 +2643,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         s.raw += p.text;
         s.textNode.appendData(p.text);
         scrollBottom();
-        setBusyFromStreamEvent(ev);
+        setBusyFromSubagentEvent(ev);
         return;
       }
       const s = getStream(p.messageId, ev?.ts);
@@ -2660,7 +2670,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
         getSubagentThinking(sa, p.messageId).body.appendData(p.text);
         scrollBottom();
-        setBusyFromStreamEvent(ev);
+        setBusyFromSubagentEvent(ev);
         // 子 agent thinking 不计主线 thinking 时长（内容已折叠进子卡，live 行保留主线状态）
         return;
       }
@@ -2779,7 +2789,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         if (widgetNode) appendMessage(widgetNode);
       }
       scrollBottom();
-      setBusyFromStreamEvent(ev);
+      if (isSubagentPayload(p)) setBusyFromSubagentEvent(ev); else setBusyFromStreamEvent(ev);
       // 子代理/Workflow 活动横幅（主会话 spawn 工具；嵌套内部 Agent 不再叠横幅）
       // Agent/Task：预建空卡占位。Workflow 多数阶段只走 task_progress、常无 parent 子流——
       // 预建会留下「🤖 workflow 已完成」空壳（实测观感怪），故等首条 parentToolUseId 事件再建卡。
