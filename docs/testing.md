@@ -300,7 +300,8 @@ done | sort -rn | head
 - 这批文件**只能在宿主机真跑**。容器（`test:docker*`）和 CI 都设了 `CI=true`，门控判的是
   `CI || !RUN_CLAUDE_INTEGRATION`，在那里带上变量也是全部 skip、照样报绿；容器里也只有假 CLI。
   宿主机上它们顶部的 `require-disposable-env.mjs` 会拒跑，要同时设后门变量，一次只跑一个文件：
-  `CCM_ALLOW_HOST_DESTRUCTIVE_TESTS=1 RUN_CLAUDE_INTEGRATION=1 node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/integration/<文件>`。
+  `CLI_HOOKS_BRIDGE=off CLI_STATUSLINE_BRIDGE=off CCM_ALLOW_HOST_DESTRUCTIVE_TESTS=1 RUN_CLAUDE_INTEGRATION=1 node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/integration/<文件>`。
+  两个桥要关：测试起的 server 默认监听与生产共用的 `~/.claude/ccm/` 投递箱，读完即删，会抢走生产 server 的事件。
   后门开着时真实家目录对测试可写，**不要**配 `npm test` / `npm run test:integration` 全量跑
   （`session-delete` 在真实 `~/.claude/projects` 下做 recursive 删除）。这属于要机主单独授权的那一类，先问。
 - `npm run test:e2e` 是 `workers:1` 串行，全量十几分钟；开发循环只跑相关的那几条：
