@@ -163,7 +163,7 @@ transcript 是一棵树（每行带 `parentUuid`），CLI 每次 `--resume` 只�
 ```
 
 - `type` 是闭合事件集合，由 `tests/gates/contract-check.js` 对**后端发送方**（递归扫 `app/src/`）与 **mock server** 做一致性校验；入向 socket 事件另查前端 emit 是否都在契约内。
-  出向另有一道**前端接收面覆盖**检查：`app/public/js/app.js` 的 `handle` 表 + `outOfBand` 表键并集必须精确等于 `AGENT_EVENT_TYPES`（少一个＝事件到达浏览器后静默丢弃，多一个＝死键），同一 type 落进两表也拦（`outOfBand` 在派发时优先，`handle` 那条会变成死代码）。`event-dispatch.js` 的 `DEFAULT_REPLAY_OOB_TYPES` 是 `outOfBand` 的平行副本，同样被钉成逐字一致——漏改它会让新的 OOB 类型被 replay buffer 误入队，在 `resolve('reload')` 时永久丢失。
+  出向另有一道**前端接收面覆盖**检查（实现在 `tests/gates/agent-event-contract.js`，由 `contract-check.js` 调用）：`app/public/js/app.js` 的 `handle` 表 + `outOfBand` 表键并集必须精确等于 `AGENT_EVENT_TYPES`（少一个＝事件到达浏览器后静默丢弃，多一个＝死键），同一 type 落进两表也拦（`outOfBand` 在派发时优先，`handle` 那条会变成死代码）。`event-dispatch.js` 的 `DEFAULT_REPLAY_OOB_TYPES` 是 `outOfBand` 的平行副本，同样被钉成逐字一致——漏改它会让新的 OOB 类型被 replay buffer 误入队，在 `resolve('reload')` 时永久丢失。
 - `replay: true` 标记这批是 `sync:since` 补发而非实时到达。**它只补渲染内容，对运行态完全中性**——既不点亮也不清除。运行态的真相源是 `instances` 广播，而那里**两个字段各管一件事，不可混用**：
   - `state`（`idle`/`busy`/`permission`/…）驱动**运行条**与抽屉角标。它是粗粒度的——服务端 `stateOf()` 把 `hasBgTasks()` 也折进 `busy`，**所以不能只看它**。带上 `bgActive` 与 `turnRunning` 才是完整判据，三者的组合只有两条规则：
     - `turnRunning === true` → **一定显示运行条**，哪怕同时挂着后台任务（`bgActive` 与 `turnRunning` 可以并存）。
@@ -216,7 +216,7 @@ IdP 管的公网 Host 上是「对方已过 IdP」，其余入口上是「对方
 
 - `AUTH_TOKEN` 证明请求持有实例密钥，不代表设备已经获准。
 - Cloudflare Access 是**可选的**公网身份层，不扩大工作区。开着时在它管的公网 Host 上**替代 token**（那条路只认 JWT），默认还**替代**设备审批（第二因子）；LAN / 本机入口不受影响，仍只认 token。关着时设备审批自动顶上——`AUTH_TOKEN` + 设备审批就是所有拓扑共同的公网基线。
-  - ⚠ 「替代」是字面意义上的：经 Access 进来的连接**完全不查** `trusted-devices.json`，于是「已受信任的设备」那张表**管不到它们**——吊销一台经隧道进来的手机既不会断线也不会被拦（2026-09-10 实测确认）。判据在 `shouldBypassDeviceApproval` 的第一行。
+  - ⚠ 「替代」是字面意义上的：经 Access 进来的连接**完全不查** `trusted-devices.json`，于是「已受信任的设备」那张表**管不到它们**——吊销一台经隧道进来的手机既不会断线也不会被拦（2026-09-10 实测确认）。判据在 `shouldBypassDeviceApproval` 的 `if (accessEnabled) return true`（紧跟在 `DEVICE_APPROVAL_SCOPE` 判断之后）。
   - 想让那张表对所有路径生效，把 `DEVICE_APPROVAL_SCOPE` 设为 `all` 并重启。它是**覆盖全部路径的总开关**：经 Access 进来的新设备要批准一次，本机样 Host 那条也一并关掉。后半条是必须的——那条判据读 Host，而 **Host 是客户端填的头**，纯 TCP 转发（`ssh -R`、frp tcp）不按 Host 路由，远程来客自填 `Host: localhost` 就满足「peer 本机 + Host 本机」（peer 本来就是 loopback）。TCP 层面区分不了真本机与隧道转发，加判据也挡不住（转发头纯转发不加，`localAddress` 两者相同），所以交给知道自己拓扑的人决定（2026-09-17 安全审查 H1）。开了之后自救通道是 `node scripts/device.js approve`、菜单栏、跑 `npm start` 那个终端里按回车——都不读网络判据。缺省保持「Access 替代审批」且本机样放行，因为翻默认会让既有安装升级后一重启就把所有在用设备打回待审，而那时信任表里没有任何一台能用来批准。
 - `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（**首项即主工作目录**，手机端默认打开它；旧版外置 `workdirs.json` 仍受支持，经 `WORK_DIRS_FILE`；shell env 压过配置文件内联 `WORKDIRS`）。清单可以为空：一个文件夹都没连（或配置的全都找不到）时照常启动、只剩「无文件夹」，**绝不回落家目录**；找不到的个数进服务告警（SCOPE-03）。外置清单文件（`WORK_DIRS_FILE`）读不出来则拒绝启动并点名那个文件：那是配置坏了，不是「还没连」。清单不来自配置文件内联 `WORKDIRS`、或没有配置文件时，手机上改不了它：instances 广播的 `foldersReadonly` 带上原因，首页零文件夹引导据此不给「选择文件夹」。
   - 范围按官方桌面端「已连接的文件夹」语义，判据只有一份：`app/src/sessions/folder-access.js` 的 `resolveAuthorizedCwd`，一律 realpath 后比较。已连接文件夹的子目录直接可达（嵌套时归最深的根）；连接范围里的 git linked worktree 归所属仓库，归属从仓库一侧双向回验、**全程不执行 git**（`.git/config` 模型可写）；范围外的（如仓库外的平级目录）不凭 worktree 身份授权，要显式连接，照官方桌面端（SCOPE-04）；「无文件夹」会话跑在应用数据目录下的 scratch 根里，只认 app 自己建的 `scratch-YYYY-MM-DD-xxxxxx` 子目录（SCRATCH-01）。`~/.claude` 与 CCM 数据目录整棵是禁区。
@@ -281,6 +281,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 |---|---|---|
 | `permission_request` | ⚠️ Claude 请求许可 | 无条件 |
 | `question` | ❓ Claude 有问题 | 无条件 |
+| `elicitation` | 🔐 MCP 需要你 | 无条件 |
 | `task_notification` | ✅ / ⚠️ 后台任务完成 / 失败 | 无条件 |
 | `result` | ✅ / ⚠️ / ⏹ 任务完成 / 出错 / 已中止 | 前台可见则抑制 |
 | `system` 且 `notice=gateway_stall` | ⏳ 模型长时间无响应 | 前台可见则抑制 |
@@ -288,7 +289,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 | CLI hooks 的 `Stop` / `Notification` | ✅ 终端会话完成一轮 / ⚠️ 终端会话需要你 | 不走 `agent:event` |
 | presence 跳变为「无前台」且此刻有实例在跑 | ⏳ 任务仍在后台运行 | 不走 `agent:event` |
 
-`agent:event` 的 31 种 type（`AGENT_EVENT_TYPES`）里只有前五种命中，其余全部落 `default → null`——工具调用、流式文本、模型切换、压缩边界、`api_retry`、普通 system notice 一条都不推。后三条不属于任何 envelope type，**刻意拆成独立函数而非塞进那个 switch**：`NOTIFY_CATEGORY` 的节流键也按 type 建，混进去会让「type 对应真实 envelope 类型」这条隐含契约失效。
+`agent:event` 的 type（`AGENT_EVENT_TYPES`）里只有前六种命中，其余全部落 `default → null`——工具调用、流式文本、模型切换、压缩边界、`api_retry`、普通 system notice 一条都不推。后三条不属于任何 envelope type，**刻意拆成独立函数而非塞进那个 switch**：`NOTIFY_CATEGORY` 的节流键也按 type 建，混进去会让「type 对应真实 envelope 类型」这条隐含契约失效。
 
 `task_notification` 只认**真后台任务**。CLI 把跑得久的前台 Bash 也建模成 task（`task_type: local_bash`、`is_backgrounded: false`），完成时走同一条通道且全程不发 `background_tasks_changed`——所以「不在 `bgTasks` 里」不能当判据，唯一可靠的是 `task_started` 上的 `is_backgrounded`（`task_notification` 自己不带这个字段）。不过滤的话，每条跑过几秒的前台命令都会被播报成「后台任务完成」并打到锁屏手机上。
 

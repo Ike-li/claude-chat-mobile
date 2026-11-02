@@ -49,7 +49,7 @@ claude auth status
 
     它由 CLI 按工作区目录从文件读取，不依赖启动 server 的进程环境，**macOS 桌面控制台拉起的常驻服务同样生效**。手建的 `settings.local.json` 要自己加进 `.gitignore`（CLI 只在自己首次写入时才会把它加进全局 git excludes）；`env` 块在目录被 CLI 信任后生效，终端里进过一次该目录即可。
   - **启动 shell 的 `export`**：先在**将要启动 server 的 shell** 里导出 `ANTHROPIC_*`，再 `npm start`。只有这条路才要求 headless 终端入口——macOS 桌面控制台拉起的常驻服务是干净的 GUI 血统环境，里面没有你终端里 export 的变量。两条路同时存在时，网关键以 settings 文件为准（本项目 2026-07-30 实测）。
-- 不要把 `ANTHROPIC_*` 写进本项目的配置文件（`ccm.config.json` / `.env`）：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。剥除不是静默的——启动日志会逐个打印 `[config] 已忽略配置文件里的 ANTHROPIC_…`，`doctor` 的「网关环境一致性」一项也会提示。
+- 不要把 `ANTHROPIC_*` 写进本项目的配置文件（`ccm.config.json` / `.env`）：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。剥除不是静默的——启动日志会逐个打印 `[config] 已忽略配置文件里的 ANTHROPIC_…`，`doctor` 的「ANTHROPIC_* 环境」一项也会提示。
 - worktree 会话注意：CLI 在 worktree 里读的是**主 checkout** 根目录那份 `settings.local.json`（官方文档明写），本项目会把主 checkout 独有的网关键中和掉、不让它误伤 worktree。worktree 要走网关，在 worktree 自己的 `.claude/settings.local.json` 里配，或干脆配在 `~/.claude/settings.json`。
 - `doctor` 的 MODEL_SETTINGS 一项会逐工作区读这些文件，核对 `model` 与 `ANTHROPIC_DEFAULT_*_MODEL` 档位映射是否打架。
 - 顺带说明：官方的 Remote Control 遥控在网关 / API key / 关遥测配置下整条不可用（要求 claude.ai 订阅并直连官方 API）；本项目对模型通路零假设，上述配置下全功能可用——这正是它存在的主要理由之一，见 [README「为什么需要它」](../README.md#和官方-remote-control-差在哪)。
@@ -370,6 +370,17 @@ node scripts/device.js deny <ID>
 | iPhone / iPad（Safari 16.4+ 且已「添加到主屏幕」） | Apple `web.push.apple.com` | 直接可用，不经 Google |
 | 任意设备 + ntfy | 你自建或指定的 ntfy 服务 | 不经 Google |
 
+### 开启 Web Push
+
+Web Push 默认关闭：要配齐 VAPID 公钥、私钥和联系方式三项才启用，缺一项 server 就不提供订阅（`doctor` 的 PUSH_VAPID 一项显示「未配置」）。在项目目录下生成一次密钥并写进配置：
+
+```bash
+node -e "console.log(require('web-push').generateVAPIDKeys())"   # 打印 publicKey / privateKey
+node scripts/config.js set VAPID_PUBLIC_KEY=<publicKey> VAPID_PRIVATE_KEY=<privateKey> VAPID_SUBJECT=mailto:you@example.com
+```
+
+`VAPID_SUBJECT` 必须以 `mailto:` 或 `https:` 开头。重启 server 后，在手机的设置 → 通知页点「开启」订阅。密钥生成后就别再换：换了之后已订阅的设备都要重新订阅。
+
 ### Chromium 系在中国大陆网络下的三个依赖点
 
 Web Push 链路上有三处要连 Google，**分别发生在不同设备上**，而失败症状全都是「收不到推送」：
@@ -522,7 +533,7 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 3. 先跟我确认要不要先连一个项目文件夹（要的话确认它的绝对路径；不连也行，以后在手机上选），
    以及是否安装 CLI hooks bridge。不要把整个家目录当工作区；hooks=on 会修改 ~/.claude/settings.json。
 4. 你的 shell 没有 TTY，不要运行交互向导。先 unset AUTH_TOKEN WORK_DIR WORK_DIRS PORT CCM_DATA_DIR
-   WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL，
+   WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL，
    以免当前会话里已有的值压过刚写入的配置。然后：
    node scripts/setup.js --yes --work-dir=<确认后的绝对路径> --hooks=<on 或 off>
    （不连文件夹就去掉 --work-dir 这一项。）如果配置文件已存在就停下来，不要自行加 --force。

@@ -33,7 +33,7 @@ description: 跑 claude-chat-mobile 的验收套件（tests/acceptance，378 条
    **`--env` 含 E3 / E3proxy / E3cf（或 `all`）时，带 `--yes` 的那条会被钩子拦下来问机主——这就是本轮花额度的确认点**：
    起的是真 claude 容器，机主网关凭据会复制进去，之后在里面跑的每个回合都花真额度。机主不同意就不起 E3，
    要 E3 的用例记 not-run（原因写额度），其余照常。
-   完成：`--wait` 返回 0；浏览器能打开各环境首页。
+   完成：`up.mjs` 退出码 0（它内部跑的是 `docker compose up --wait`）；浏览器能打开各环境首页。
 
 5. **按档执行。**
    - **A**：`node tests/acceptance/run.mjs [--cases …]`。产物在 `local/runs/<UTC 时间戳>/`（`replay.json`、失败的 trace 与截图）。

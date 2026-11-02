@@ -39,10 +39,6 @@ A 档重放只连 127.0.0.1 上的 E1/E2 容器、零 token；真模型只在 E3
 > `mutate` 自带**进程级**执行位守卫（`tests/setup/require-disposable-env.mjs`）：不在一次性环境里
 > 跑就直接 exit 1，对所有调用路径生效（npm 脚本、裸 node、IDE run、CI、别的 agent）。
 > 它同样不是物理隔离——同一个仓库里的一行 import，删得掉；真正的隔离仍然来自容器边界。
->
-> （那句「2026-09-05 实测 `test:invariants:server` 在宿主机上照跑不误」**已作废**：现在它跑不起来。
-> 当时没有污染，是因为那些用例各自注入了一次性 `CCM_DATA_DIR`，不是因为钩子拦住了——
-> 而「靠每个用例自己记得」正是后来把这道隔离下沉成机制的理由。）
 
 **② 变异（`mutate`）无例外进容器。** 它故意把源码改坏再跑测试，而被改坏的**可能恰恰是算删除路径的代码**——
 上面那次事故里 `getProjectDir` 被改成恒返回 `''`，`join(真实根, '')` 塌成真实根本身，测试的 `rmSync` 就打上去了。
@@ -79,7 +75,7 @@ A 档重放只连 127.0.0.1 上的 E1/E2 容器、零 token；真模型只在 E3
 | **找不到，但它确实是一条红线** | 先把它写进编号表，再按第一行走 | 同第一行 |
 
 这不是风格建议，是 `npm run check` 里 `check-invariant-ids.js` 的硬判定：
-`invariants/` 下缺「守护：」行、守护行里没编号、编号在表里查不到、表里登记了却整棵 `tests/` 树无人提及——四种都红。
+`invariants/` 下缺「守护：」行、守护行里没编号、编号在表里查不到、表里登记了却整棵 `tests/` 树没有一处文件头（前 12 行）的「守护：」行声明它——四种都红。
 
 **第三行要谨慎。** 编号表是产品红线的枚举，不是"我需要一个编号所以加一个"。
 判据是：**这条跨版本必须成立吗？违反了会伤到用户吗？**
@@ -165,8 +161,8 @@ gitignored 草稿，草稿没了，编号就成了只有当时在场的人能解
 
 假 CLI 有两档（`tests/fixtures/fake-claude.sh`）：不设 `CCM_FAKE_CLAUDE_MODE` 时吞 stdin、不产出任何输出；
 设了才走可驱动的 Node 实现（应答 initialize、吐 `system/init`，`turn` 档还吐 `result` 让回合收尾）。
-**默认行为是显式 opt-in 保护的**——9 个 S2 文件与 24 个集成文件建在「stub 永不产出、实例恒 busy」这个前提上
-（S2 侧复算：`grep -L CCM_FAKE_CLAUDE_MODE tests/invariants/server/*.test.mjs | wc -l`）。
+**默认行为是显式 opt-in 保护的**——不设 `CCM_FAKE_CLAUDE_MODE` 的 S2 文件与集成文件都建在「stub 永不产出、实例恒 busy」这个前提上
+（数量复算：`grep -L CCM_FAKE_CLAUDE_MODE tests/invariants/server/*.test.mjs tests/integration/*.test.mjs | wc -l`）。
 
 ### 维护者 playground：容器里那张干净的 Web UI
 
@@ -301,6 +297,13 @@ done | sort -rn | head
 - 需要真 agent turn 的集成文件由 `RUN_CLAUDE_INTEGRATION` 门控。列清单用
   `grep -rl 'process\.env\.RUN_CLAUDE_INTEGRATION' tests/integration/`，**必须带 `process.env` 前缀**：
   有几个文件的注释里写着「不挂 RUN_CLAUDE_INTEGRATION」，裸词 grep 会把零 token 的用例误判成要真凭据的。
+- 这批文件**只能在宿主机真跑**。容器（`test:docker*`）和 CI 都设了 `CI=true`，门控判的是
+  `CI || !RUN_CLAUDE_INTEGRATION`，在那里带上变量也是全部 skip、照样报绿；容器里也只有假 CLI。
+  宿主机上它们顶部的 `require-disposable-env.mjs` 会拒跑，要同时设后门变量，一次只跑一个文件：
+  `CLI_HOOKS_BRIDGE=off CLI_STATUSLINE_BRIDGE=off CCM_ALLOW_HOST_DESTRUCTIVE_TESTS=1 RUN_CLAUDE_INTEGRATION=1 node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/integration/<文件>`。
+  两个桥要关：测试起的 server 默认监听与生产共用的 `~/.claude/ccm/` 投递箱，读完即删，会抢走生产 server 的事件。
+  后门开着时真实家目录对测试可写，**不要**配 `npm test` / `npm run test:integration` 全量跑
+  （`session-delete` 在真实 `~/.claude/projects` 下做 recursive 删除）。这属于要机主单独授权的那一类，先问。
 - `npm run test:e2e` 是 `workers:1` 串行，全量十几分钟；开发循环只跑相关的那几条：
   `-- tests/e2e/specs/xxx.spec.ts` 或 `-- --grep "P0-08 …"`。本机必带 `NO_PROXY=127.0.0.1,localhost`，
   否则就绪探针走代理，恒 30s 假红。两个漏跑表现为全绿的坑：
@@ -334,7 +337,7 @@ done | sort -rn | head
 文件名与生产文件同名：`file-browse.js` → `file-browse.test.mjs`。
 **这不只是美观**——`mutate` 默认自动查找「提到该生产文件的测试」，同名让自动匹配生效，省掉每次手写 `--tests=`。
 
-大模块按主题拆，拆的轴是主题不是行数：`agent.js` 一个生产文件拆成 15 个 `agent-*.test.mjs`。
+大模块按主题拆，拆的轴是主题不是行数：`agent.js` 一个生产文件拆成十几个 `agent-*.test.mjs`。
 
 ### 文件头
 
@@ -440,7 +443,7 @@ done | sort -rn | head
 
 ### 交付前：把验证过程写进 commit，不要只说"测了"
 
-项目的 commit 约定里有 `Tested:` / `Not-tested:` trailer（见根 `CLAUDE.md`）。
+项目的 commit 约定里有 `Tested:` / `Not-tested:` trailer（见 `.claude/rules/tests.md`）。
 **两侧验收的证据就写在那里**，一条测试一行，形如：
 
 ```
@@ -547,7 +550,7 @@ PR 默认只跑 S0–S3。S5 不是「在 PR 上持续缺席」——它本就�
 能写成 `logic/` 或后端纯函数的，先写一条会红的 S1。
 接线（握手、ack、热加载、文件监听）走 S2。
 用户看得见且 S1/S2 看不见的，走 S3。
-假后端可能撒谎的那几条用户路径，走 S4。
+假后端可能撒谎的那几条用户路径，走 S4（`tests/playground/e2e/`，`npm run test:docker:playground`）。
 只有模型或真 CLI 进程表才能撒谎的，走 S5。
 算路径的代码改完，走变异。
 
