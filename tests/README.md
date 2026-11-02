@@ -16,7 +16,7 @@
 | `e2e/mock/` | 那个假后端本身（零外部依赖，不碰 `~/.claude`） | — | — |
 | `smoke/` | 真 Claude，需显式授权 | S5 | `npm run test:smoke` |
 | `acceptance/` | 机主本机跑的 agent 驱动验收：agent 首跑用浏览器执行用例并写下判法，判法确定的之后由脚本重放；不是回归套件，见 [acceptance/README.md](acceptance/README.md) | 本机编排：A 档零 token（同 S3·S4 形态，连 127.0.0.1 上的 E1/E2 容器）· C 档真模型在 E3 容器（S5）；永不进 CI | `node tests/acceptance/run.mjs` |
-| `playground/` | 干净 Linux 用户视角的装机/拓扑验收 | — | `npm run test:docker:playground` |
+| `playground/` | 干净 Linux 用户视角的装机/拓扑验收；`e2e/` 是真浏览器 → 真 server → 假 CLI | S4（`e2e/`） | `npm run test:docker:playground` |
 | `gates/` | 门禁脚本（边界、契约、i18n、破坏性删除、变异…） | S0 | `npm run check` |
 | `infra/` | 测试基建：Dockerfile、compose、playwright config、分片编排 | — | — |
 | `fixtures/` `helpers/` `setup/` | 假 CLI、共用 UI helper、preload 隔离 | — | — |
@@ -54,7 +54,7 @@ webServer），266 条全红，一直到 2026-09-07 才被发现——因为在�
 | **S1** 决策与真磁盘 | 纯函数 + 一次性目录上的真 fs / git / symlink / FIFO | 不起 `app.js`、不 spawn Claude |
 | **S2** 真 server + 假 CLI | 真组装根，HTTP + Socket，`CLAUDE_BIN` 指向 `fixtures/fake-claude.sh` | 模型回合 |
 | **S3** 真浏览器 + 假后端 | 真 `app/public`，假 server 只模拟信封 | 无 CLI、无真组装根 |
-| **S4** 薄跨缝 | 真浏览器 → 真 server → 假 CLI，只覆盖「假后端可能与真 server 字段分叉且用户看得见」的几条 | 模型回合 |
+| **S4** 薄跨缝 | 真浏览器 → 真 server → 假 CLI，只覆盖「假后端可能与真 server 字段分叉且用户看得见」的几条。落点 `playground/e2e/`，跑法 `npm run test:docker:playground`（容器，不进 CI） | 模型回合 |
 | **S5** 授权真 Claude | 真 CLI + 真 SDK + 隔离的 `CCM_DATA_DIR` / `HOME` | — |
 | **S6** 变异 | 故意改坏源码再跑 S1（`npm run mutate:docker`） | 永不在宿主机真实 HOME 上跑 |
 | **S7** Darwin | Swift 逻辑 + `CCMProcess` 资源 + 能编出 bundle | 唯一没有容器跑法的槽（容器无 `swiftc`）。验收编排也只在宿主机跑，但它是调度而不是槽：被测环境与真模型都在容器里 |

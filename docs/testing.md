@@ -297,6 +297,12 @@ done | sort -rn | head
 - 需要真 agent turn 的集成文件由 `RUN_CLAUDE_INTEGRATION` 门控。列清单用
   `grep -rl 'process\.env\.RUN_CLAUDE_INTEGRATION' tests/integration/`，**必须带 `process.env` 前缀**：
   有几个文件的注释里写着「不挂 RUN_CLAUDE_INTEGRATION」，裸词 grep 会把零 token 的用例误判成要真凭据的。
+- 这批文件**只能在宿主机真跑**。容器（`test:docker*`）和 CI 都设了 `CI=true`，门控判的是
+  `CI || !RUN_CLAUDE_INTEGRATION`，在那里带上变量也是全部 skip、照样报绿；容器里也只有假 CLI。
+  宿主机上它们顶部的 `require-disposable-env.mjs` 会拒跑，要同时设后门变量，一次只跑一个文件：
+  `CCM_ALLOW_HOST_DESTRUCTIVE_TESTS=1 RUN_CLAUDE_INTEGRATION=1 node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/integration/<文件>`。
+  后门开着时真实家目录对测试可写，**不要**配 `npm test` / `npm run test:integration` 全量跑
+  （`session-delete` 在真实 `~/.claude/projects` 下做 recursive 删除）。这属于要机主单独授权的那一类，先问。
 - `npm run test:e2e` 是 `workers:1` 串行，全量十几分钟；开发循环只跑相关的那几条：
   `-- tests/e2e/specs/xxx.spec.ts` 或 `-- --grep "P0-08 …"`。本机必带 `NO_PROXY=127.0.0.1,localhost`，
   否则就绪探针走代理，恒 30s 假红。两个漏跑表现为全绿的坑：
@@ -543,7 +549,7 @@ PR 默认只跑 S0–S3。S5 不是「在 PR 上持续缺席」——它本就�
 能写成 `logic/` 或后端纯函数的，先写一条会红的 S1。
 接线（握手、ack、热加载、文件监听）走 S2。
 用户看得见且 S1/S2 看不见的，走 S3。
-假后端可能撒谎的那几条用户路径，走 S4。
+假后端可能撒谎的那几条用户路径，走 S4（`tests/playground/e2e/`，`npm run test:docker:playground`）。
 只有模型或真 CLI 进程表才能撒谎的，走 S5。
 算路径的代码改完，走变异。
 
