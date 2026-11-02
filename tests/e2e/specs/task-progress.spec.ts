@@ -356,4 +356,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // 真机 2026-11-02：主轮已结束、只剩后台子代理在跑，每条子代理 delta 都把运行条从 0s 重新点亮，
+  // 30s 后被快照自检清掉，下一条又亮——用户看到「✻ Working… (29s)」反复从头计时。
+  test('P0-17u 主轮结束后后台子代理继续推流：运行条与停止钮不得重新出现', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:bg-subagent-after-result');
+    // 正向对照：三种子代理事件都确实到了前端，否则下面的「没亮」可能只是事件没发出来
+    const card = page.locator('[data-testid="subagent-card"]');
+    await expect(card).toContainText('BG_SUBAGENT_THINKING', { timeout: 10_000 });
+    await expect(card.locator('details.toolcard')).toContainText('Grep');
+    await expect(card.locator('[data-testid="subagent-text"]')).toContainText('BG_SUBAGENT_TEXT');
+
+    await expect(page.locator('#streamLiveStatus')).toHaveCount(0);
+    await expect(page.locator('#btnSend')).not.toHaveAttribute('data-mode', 'stop');
+
+    await expectNoBrowserErrors(page);
+  });
 });

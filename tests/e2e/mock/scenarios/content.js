@@ -865,6 +865,48 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 真机回归（2026-11-02）：后台子代理在主轮 result 之后还在推流。这段时间权威快照是
+      // state=busy、bgActive=true、turnRunning=false，归后台任务横幅管，运行条不该亮。
+      // 子代理三种流事件（thinking / 内部工具 / 正文）各发一条，任何一处还会点亮运行条都会被测出来。
+      command: 'test:bg-subagent-after-result',
+      run: async ({ activeInst }) => {
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart } = getContext();
+        const base = { epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId };
+        socket.emit('agent:event', {
+          ...base, seq: 1, ts: Date.now(), type: 'tool_use', payload: {
+            toolUseId: 'agent-bg-1', name: 'Agent',
+            inputSummary: JSON.stringify({ description: 'Scan repo in background', subagent_type: 'Explore', run_in_background: true }),
+          }
+        });
+        await delay(100);
+        Object.assign(activeInst, { state: 'busy', bgActive: true, turnRunning: false });
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          ...base, seq: 2, ts: Date.now(), type: 'result',
+          payload: { messageId: 'msg_bg_subagent_main', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+        await delay(300);
+        const sub = { parentToolUseId: 'agent-bg-1', subagentType: 'Explore' };
+        socket.emit('agent:event', {
+          ...base, seq: 3, ts: Date.now(), type: 'thinking_delta',
+          payload: { messageId: 'msg_bg_sa_1', text: 'BG_SUBAGENT_THINKING', ...sub }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          ...base, seq: 4, ts: Date.now(), type: 'tool_use',
+          payload: { toolUseId: 't_bg_sa_grep', name: 'Grep', inputSummary: JSON.stringify({ pattern: 'TODO' }), ...sub }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          ...base, seq: 5, ts: Date.now(), type: 'text_delta',
+          payload: { messageId: 'msg_bg_sa_1', text: 'BG_SUBAGENT_TEXT', ...sub }
+        });
+      },
+    },
+    {
       // TC-24：子 agent 可折叠卡——主 Agent tool_use 预建卡 + parentToolUseId 嵌套 text/thinking/tool
       // 默认收起；展开后可见子 agent 正文与内部工具。对齐 agent.js forwardSubagentText 分流字段。
       command: 'test:subagent',
