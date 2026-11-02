@@ -73,6 +73,11 @@ services:
     ports:
       - "127.0.0.1:13000:3000"
       - "127.0.0.1:18080:8080"
+    # 浏览器容器连 ccm-app，不连服务名 app：`app` 是 Chromium HSTS 预载表里的顶级域（include_subdomains），
+    # 主机名恰好叫 app 也被强制改走 https，page.goto 报 ERR_SSL_PROTOCOL_ERROR。Node 侧（probe）不受影响。
+    networks:
+      default:
+        aliases: [ccm-app]
     command: ["bash", "/app/tests/infra/playground/entrypoint-app.sh"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health?token=playground-local-not-a-secret').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]

@@ -108,20 +108,24 @@ test.describe(
       const client = createClient();
       await client.waitFor(e => e.type === 'instances');
 
+      // 带 composeId 开新会话：不带就回退到上一条用例的查看实例，它的回合还在跑，会被忙碌闸拒收。
       const ack1 = await new Promise((resolve, reject) => {
-        client.socket.timeout(30000).emit('user:message', { text: '回复"1"一个字', clientMessageId: `test-a-${Date.now()}` }, (err, res) => {
+        client.socket.timeout(30000).emit('user:message', { text: '回复"1"一个字', clientMessageId: `test-a-${Date.now()}`, composeId: `test-compose-${Date.now()}` }, (err, res) => {
           if (err) reject(err); else resolve(res);
         });
       });
-      assert.equal(ack1.ok, true);
+      assert.equal(ack1.ok, true, JSON.stringify(ack1));
       assert.ok(!ack1.deduped);
+
+      // 回合进行中服务端拒收新消息（busy），等这一轮收尾再发第二条。
+      await client.waitFor(e => e.type === 'result' && e.instanceId === ack1.instanceId, 60000);
 
       const ack2 = await new Promise((resolve, reject) => {
         client.socket.timeout(10000).emit('user:message', { text: '回复"2"一个字', instanceId: ack1.instanceId, clientMessageId: `test-b-${Date.now()}` }, (err, res) => {
           if (err) reject(err); else resolve(res);
         });
       });
-      assert.equal(ack2.ok, true);
+      assert.equal(ack2.ok, true, JSON.stringify(ack2));
       assert.ok(!ack2.deduped, '不同 clientMessageId 不应被误判为重复');
 
       client.disconnect();

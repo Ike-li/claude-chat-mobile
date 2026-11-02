@@ -10,7 +10,8 @@ export default defineConfig({
   outputDir: '/tmp/playground-pw',
   reporter: [['list']],
   use: {
-    baseURL: 'http://app:3000',
+    // 不用 http://app:3000：`app` 在 Chromium HSTS 预载表里，见 docker-compose.playground.yml 的 aliases 注释。
+    baseURL: 'http://ccm-app:3000',
     headless: true,
     viewport: { width: 375, height: 812 },
     isMobile: true,
