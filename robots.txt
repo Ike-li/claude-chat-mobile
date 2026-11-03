@@ -2,7 +2,12 @@
 # 就在主机根（https://ccm.osolee.cc.cd/robots.txt），爬虫会真的读它（RFC 9309）。
 # 在那之前站点在 ike-li.github.io/claude-chat-mobile/ 子路径下，这份文件没人读。
 #
-# 规则全放行，另声明 Sitemap：
+# 线上实际返回的不只是这份文件：Cloudflare 的托管 robots.txt 会在前面插一段
+# （BEGIN/END Cloudflare Managed content），含 Content-Signal 和一串训练爬虫的
+# Disallow: /（ClaudeBot、GPTBot、Google-Extended 等）。这些爬虫只认自己那组规则，
+# 下面的 Allow 对它们不起作用。那段由 Cloudflare 的设置决定，改这个文件管不到。
+#
+# 这份文件本身全放行，另声明 Sitemap：
 #   · 不想被收录的页面各自带 <meta name="robots" content="noindex">（目前只有
 #     404.html），不靠这里的 Disallow
 #   · Bing / Yandex / Seznam 另走 IndexNow 推送（见 _build/submit-indexnow.mjs）

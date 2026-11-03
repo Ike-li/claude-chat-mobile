@@ -42,7 +42,8 @@ Google 不在 IndexNow 这条链上 —— 它只认 Search Console，必须人�
   自定义域名 `ccm.osolee.cc.cd` 的根上之后，这份文件才第一次被爬虫读到（之前在
   `ike-li.github.io/claude-chat-mobile/` 子路径下，没人读）。规则目前全放行，
   不想被收录的页面各自带 `<meta name="robots" content="noindex">`（目前只有 `404.html`），
-  别指望 `Disallow`。
+  别指望 `Disallow`。线上那份前面还会被 Cloudflare 插一段托管内容（训练爬虫的
+  `Disallow: /` 与 `Content-Signal`），实际生效的规则以 `curl https://ccm.osolee.cc.cd/robots.txt` 为准。
 - **`check-link-graph` 报绿不代表每条链接都必要**。站内链接有冗余（删掉首页指向
   `/diagrams/` 的链接后它仍然全绿，因为 docs-site 那 28 页也指向那里）。它守的是
   「没有页面掉出链接图」，不是「链接结构最优」。
