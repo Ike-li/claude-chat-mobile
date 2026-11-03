@@ -17,8 +17,10 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const HOST = 'ike-li.github.io';
-const BASE = `https://${HOST}/claude-chat-mobile`;
+// IndexNow 要求 host 与 urlList 里的 URL 同主机，key 文件也要在这个主机下取得到。
+// sitemap 的 <loc> 已是自定义域名（2026-10-27 起），这里必须跟着它走。
+const HOST = 'ccm.osolee.cc.cd';
+const BASE = `https://${HOST}`;
 const DRY = process.argv.includes('--dry-run');
 
 const keyFile = readdirSync(ROOT).find((f) => /^[0-9a-f]{32}\.txt$/.test(f));

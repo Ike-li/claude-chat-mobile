@@ -45,13 +45,15 @@
     <h1>这个页面不在了</h1>
     <p>链接可能过期，或者地址打错了一个字。下面几个入口都是现成的：</p>
     <!-- 这里必须用绝对路径（站点其余页面一律相对路径）：404 会在任意深度的
-         URL 上被触发，/a/b/c/x 下的 ./demo/ 会解析成 /a/b/c/demo/ 而不是站点根。 -->
+         URL 上被触发，/a/b/c/x 下的 ./demo/ 会解析成 /a/b/c/demo/ 而不是站点根。
+         2026-10-27 起站点挂在自定义域名 ccm.osolee.cc.cd 的根上，路径不再带
+         /claude-chat-mobile/ 前缀，带了就是 404。 -->
     <div class="links">
-      <a class="primary" href="/claude-chat-mobile/zh/">中文首页</a>
-      <a href="/claude-chat-mobile/">English</a>
-      <a href="/claude-chat-mobile/demo/">在线演示</a>
-      <a href="/claude-chat-mobile/en/quickstart.html">快速开始</a>
-      <a href="/claude-chat-mobile/diagrams/">架构图集</a>
+      <a class="primary" href="/zh/">中文首页</a>
+      <a href="/">English</a>
+      <a href="/demo/">在线演示</a>
+      <a href="/en/quickstart.html">快速开始</a>
+      <a href="/diagrams/">架构图集</a>
       <a href="https://github.com/Ike-li/claude-chat-mobile">GitHub</a>
     </div>
     <p class="foot">
