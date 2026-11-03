@@ -1,25 +1,147 @@
-# 2026-10-27 起站点挂在自定义域名 ccm.osolee.cc.cd 的根上，这份 robots.txt
-# 就在主机根（https://ccm.osolee.cc.cd/robots.txt），爬虫会真的读它（RFC 9309）。
-# 在那之前站点在 ike-li.github.io/claude-chat-mobile/ 子路径下，这份文件没人读。
+# As a condition of accessing this website, you agree to abide by the following
+# content signals:
+
+# (a)  If a Content-Signal = yes, you may collect content for the corresponding
+#      use.
+# (b)  If a Content-Signal = no, you may not collect content for the
+#      corresponding use.
+# (c)  If the website operator does not include a Content-Signal for a
+#      corresponding use, the website operator neither grants nor restricts
+#      permission via Content-Signal with respect to the corresponding use.
+
+# The content signals and their meanings are:
+
+# search:   building a search index and providing search results (e.g., returning
+#           hyperlinks and short excerpts from your website's contents). Search does not
+#           include providing AI-generated search summaries.
+# ai-input: inputting content into one or more AI models (e.g., retrieval
+#           augmented generation, grounding, or other real-time taking of content for
+#           generative AI search answers).
+# ai-train: training or fine-tuning AI models.
+# use:      how AI systems may consume the content (immediate, reference, or full).
+
+# ANY RESTRICTIONS EXPRESSED VIA CONTENT SIGNALS ARE EXPRESS RESERVATIONS OF
+# RIGHTS UNDER ARTICLE 4 OF THE EUROPEAN UNION DIRECTIVE 2019/790 ON COPYRIGHT
+# AND RELATED RIGHTS IN THE DIGITAL SINGLE MARKET.
+
+# ---------------------------------------------------------------------------
+# 上面是 Cloudflare 的 Content Signals 政策原文（CC0），照搬自 2026-11-03 的线上版本。
 #
-# 线上实际返回的不只是这份文件：Cloudflare 的托管 robots.txt 会在前面插一段
-# （BEGIN/END Cloudflare Managed content），含 Content-Signal 和一串训练爬虫的
-# Disallow: /（ClaudeBot、GPTBot、Google-Extended 等）。这些爬虫只认自己那组规则，
-# 下面的 Allow 对它们不起作用。那段由 Cloudflare 的设置决定，改这个文件管不到。
-#
-# 这份文件本身全放行，另声明 Sitemap：
+# 2026-11-03 起，这份文件就是线上 robots.txt 的全部内容。
+# 在那之前，Cloudflare 的 Bot Preference Sync 会按后台「训练＝禁止」的设置，在这份文件
+# 前面插一段 Disallow 名单（后台位置：安全性 → 设置 → AI 爬网程序和代理访问策略 →
+# 启用自动程序偏好同步）。那段名单只能整类开关，没法给单个爬虫开例外，而名单里有
+# Baiduspider，也就是百度搜索用的爬虫，所以百度一页都收录不了。Cloudflare 给的例外做法
+# 是关掉同步、自己写名单，所以同步已经关了，名单搬到了下面：
+#   · 训练爬虫名单：2026-11-03 Cloudflare 生成的那份去掉 Baiduspider，其余原样保留
+#   · PetalBot（华为 Petal 搜索的爬虫）仍然禁止：Cloudflare 在边缘把它归为 AI Crawler，
+#     按训练类直接拦截，这里放行它也抓不到。要放它，得先改 Cloudflare 的训练类策略
+#   · 这份名单不会再自动更新。边缘拦截仍由 Cloudflare 按它自己的爬虫库维护，这里只是
+#     写给守规矩的爬虫看的声明
 #   · 不想被收录的页面各自带 <meta name="robots" content="noindex">（目前只有
 #     404.html），不靠这里的 Disallow
 #   · Bing / Yandex / Seznam 另走 IndexNow 推送（见 _build/submit-indexnow.mjs）
+#
+# 站点 2026-10-27 起挂在自定义域名的根上，这份文件从那时起才被爬虫读到（RFC 9309 只认
+# 主机根下的 robots.txt）。线上实际内容以 curl https://ccm.osolee.cc.cd/robots.txt 为准。
 
 User-agent: *
+Content-Signal: search=yes,ai-train=no,use=reference
 Allow: /
-
 # Agent & LLM quick indexes
 Allow: /llms.txt
 Allow: /skill.md
 
-# Build sources / authoring notes are not public handbook pages
-# （实际拦截靠各页自己的 meta robots，见文件头说明）
+# Training crawlers
+User-agent: Amazonbot
+Disallow: /
+
+User-agent: Applebot-Extended
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: Diffbot
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: omgili
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Claude-Web
+Disallow: /
+
+User-agent: cohere-ai
+Disallow: /
+
+User-agent: MistralAI-Training
+Disallow: /
+
+User-agent: meta-externalagent
+Disallow: /
+
+User-agent: GoogleOther
+Disallow: /
+
+User-agent: PetalBot
+Disallow: /
+
+User-agent: AwarioSmartBot
+User-agent: AwarioRssBot
+Disallow: /
+
+User-agent: Google-CloudVertexBot
+Disallow: /
+
+User-agent: QualifiedBot
+Disallow: /
+
+User-agent: Cotoyogi
+Disallow: /
+
+User-agent: ICC-Crawler
+Disallow: /
+
+User-agent: atlassian-bot
+Disallow: /
+
+User-agent: FishBot
+Disallow: /
+
+User-agent: BorderxBot
+Disallow: /
+
+User-agent: NavuBot
+Disallow: /
+
+User-agent: SemrushBot-SWA
+Disallow: /
+
+User-agent: WARDBot
+Disallow: /
+
+User-agent: magpie-crawler
+Disallow: /
+
+User-agent: KimiBot
+Disallow: /
+
+User-agent: CitibotSiteCrawler
+Disallow: /
 
 Sitemap: https://ccm.osolee.cc.cd/sitemap.xml
