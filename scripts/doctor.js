@@ -451,8 +451,8 @@ function checkAnthropicEnv() {
     return;
   }
   ok(NAME, bi(
-    `${targets.map(f => basename(f)).join(' / ')} 不含 ANTHROPIC_* 变量（正确；网关配置应从 shell export）`,
-    `${targets.map(f => basename(f)).join(' / ')} has no ANTHROPIC_* variables (correct: gateway config must come from the shell)`));
+    `${targets.map(f => basename(f)).join(' / ')} 不含 ANTHROPIC_* 变量（正确；网关配置写在 CLI 自己的 settings.json env 块或 shell export）`,
+    `${targets.map(f => basename(f)).join(' / ')} has no ANTHROPIC_* variables (correct: gateway config belongs in the CLI's own settings.json env block or a shell export)`));
 }
 
 
@@ -831,10 +831,16 @@ function fixConfigFiles() {
   const files = effectiveConfigFiles().map(f => f.path); // WS-011：--fix 修的是 effective 上下文的文件，与检查同源
 
   let fixed = 0;
+  let already = 0;
   let skipped = 0;
   for (const path of files) {
     if (!existsSync(path)) {
       skipped++;
+      continue;
+    }
+    // 本来就是 0600 的不算修复：此前一律 chmod 再计数，1 个过宽报成「修复完成: 6 个文件」（2026-11-03 mini）。
+    if (isOwnerOnly(path)) {
+      already++;
       continue;
     }
     if (fixPermissions(path)) {
@@ -845,5 +851,5 @@ function fixConfigFiles() {
     }
   }
 
-  console.log(`\n修复完成: ${fixed} 个文件，${skipped} 个跳过（不存在）\n`);
+  console.log(`\n修复完成: ${fixed} 个文件收紧到 0600，${already} 个本来就是 0600，${skipped} 个跳过（不存在）\n`);
 }

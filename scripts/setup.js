@@ -418,11 +418,16 @@ function writeSetupFile({ outPath, workDir, workDirs, fileEdit, accessProfile, t
 
 // CLI hooks 桥安装（两条路径共用）。写的是用户全局 ~/.claude/settings.json，故只在明确要装时才调。
 // 此刻 server 通常还没起，安装器的服务级验证会显示"跳过"，文件级验证仍然真跑一遍。
+// stdout 过一道再转给用户：安装器最后一行是给程序读的 JSON（server 一键安装、doctor 都靠它），原样透传
+// 就在报告后面夹一整行原始 JSON（2026-11-03 mini 全新安装核对）。口径同 server 的 hooks:setup：去掉以 { 开头的行。
 function installHooksBridge(t) {
   console.log(c.dim(t.hooksInstalling));
   const r = spawnSync(process.execPath, [join(HERE, 'scripts', 'hooks-bridge-setup.js'), 'install'], {
-    stdio: 'inherit',
+    stdio: ['inherit', 'pipe', 'inherit'],
+    encoding: 'utf8',
   });
+  const report = String(r.stdout || '').split('\n').filter(l => !l.trim().startsWith('{')).join('\n').trimEnd();
+  if (report) console.log(report);
   if (r.status !== 0) console.log(c.dim(t.hooksFailed));
 }
 

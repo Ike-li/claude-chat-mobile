@@ -265,7 +265,7 @@
       "id": "AC-01-16",
       "t": "健康检查端点",
       "pre": "",
-      "st": "curl /health 与 /metrics：带令牌、不带、错令牌",
+      "st": "curl /health 与 /metrics：带令牌、不带、错令牌，按这个顺序、每条之间隔 2 秒——每次失败会留 0.5 秒起、连续失败翻倍的退避短锁，锁内带令牌（含错令牌）的请求回 429 cooldown，是 O83 的设计、不算失败；带令牌成功会把失败计数清零",
       "ex": "带令牌返回 JSON（含 status、versions、buildNonce、timestamp）；后两种 401",
       "b": "ARCH 可观测；GS§5",
       "env": [

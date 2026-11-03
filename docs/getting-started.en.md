@@ -60,7 +60,7 @@ The project does not bundle, install, or sign in to Claude for you.
   - **`export` in the startup shell**: export `ANTHROPIC_*` in the **shell that will start the server**, then `npm start`. Only this path requires the headless terminal entrypoint — the persistent service launched by the macOS desktop console runs in a clean GUI-lineage environment that does not contain what you exported in your terminal. When both are present, gateway keys from the settings file win (verified in this project on 2026-07-30).
 - Do not put `ANTHROPIC_*` in this project's config files (`ccm.config.json` / `.env`). Startup strips those values so a project file cannot override the CLI/provider environment. The stripping is not silent — the startup log prints `[config] 已忽略配置文件里的 ANTHROPIC_…` for each one, and `doctor` flags it too.
 - Worktree sessions: inside a worktree the CLI reads the `settings.local.json` at the **main checkout's** root (the official docs say so); this project neutralizes the gateway keys that exist only in the main checkout so they cannot leak into the worktree. To use a gateway in a worktree, configure it in the worktree's own `.claude/settings.local.json`, or simply in `~/.claude/settings.json`.
-- The `doctor` MODEL_SETTINGS check reads these files per workspace and reports when `model` and the `ANTHROPIC_DEFAULT_*_MODEL` tier mapping conflict.
+- The MODEL_SETTINGS item of the phone's security check (⚙️ Settings & status → 🩺 Troubleshoot → 🔍 Security check) reads these files per workspace and reports when `model` and the `ANTHROPIC_DEFAULT_*_MODEL` tier mapping conflict (the command-line `doctor` has no such item). It only reads config and sends no request: a ✓ means the config is consistent, not that the gateway serves those models.
 
 ## 2. Get the code and install dependencies
 
@@ -352,10 +352,10 @@ On the phone, verify:
 1. The expected workspace appears on the home screen.
 2. **Hard gate (works even before the model path is configured):** start a new session and send a message. **As long as what reaches the phone is the CLI's real result — a normal answer, or a specific error — this step passes**: it proves the CCM→CLI link works instead of faking a streaming success.
    - Claude subscription, signed out → `Not logged in · Please run /login`: on the host, open `claude` and run `/login` (or first get a clean `claude auth status`).
-   - A third-party gateway **never** shows that line (it does not use Anthropic login). When its config is not in effect you get the gateway's own error instead — 401, connection refused, unknown model name → check which layer holds `ANTHROPIC_*` per [Claude subscriptions and third-party gateways](#claude-subscriptions-and-third-party-gateways), then look at `doctor`'s MODEL_SETTINGS entry.
+   - A third-party gateway **never** shows that line (it does not use Anthropic login). When its config is not in effect you get the gateway's own error instead — 401, connection refused, unknown model name → check which layer holds `ANTHROPIC_*` per [Claude subscriptions and third-party gateways](#claude-subscriptions-and-third-party-gateways), then look at the MODEL_SETTINGS item of the phone's security check (it only checks that the mapping is consistent; whether the gateway accepts a model name is what this error tells you).
    - Both cases converge on the same action: **get `claude` through one normal turn in your host terminal, in that same workspace directory**, then retry from the phone.
 3. **Green path (the terminal can already hold a conversation):** send a harmless prompt such as “Reply with OK only.” The response streams and reaches a finished-turn state.
-4. Settings show model, permission mode, effort, and service status.
+4. In a session, tap the “model · permission · effort” pill below the input box (Session settings) and confirm model, permission mode, and effort are shown; service status is under ⚙️ Settings & status → 🖥 Host → 📊 Service status in the session drawer.
 5. If Web Push is enabled, use “Send a test notification” now instead of discovering a broken path during a real approval.
 
 The minimum path is now complete. The sections below are optional enhancements and are not required for Web-originated sessions.
@@ -605,13 +605,21 @@ See the [Updating](#updating) and [Uninstall](#uninstall) sections below.
 
 ### Option A: overwrite in place (installed from the archive)
 
-Go back to the directory you originally unpacked into (the parent of `claude-chat-mobile-master/`) and re-run the same command:
+Go back to the directory you originally unpacked into (the parent of `claude-chat-mobile-master/`), download the archive to a file first, and only unpack it once the download has succeeded:
 
 ```bash
-curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+curl -fsSL -o ccm-master.tar.gz https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz \
+  && tar xzf ccm-master.tar.gz && rm ccm-master.tar.gz
 cd claude-chat-mobile-master
 npm ci --omit=dev
+node -p "require('./package.json').version"
 ```
+
+**The version printed by the last line must match the [latest release](https://github.com/Ike-li/claude-chat-mobile/releases/latest)**; if it has not changed, the update did not land.
+This deliberately avoids the install-time `curl … | tar xz`: when the download fails, the tar that ships with macOS
+gets empty input and still exits successfully without replacing a single file, `npm ci` runs anyway, and everything
+looks updated; a download cut off halfway can replace only some of the files. If your connection to GitHub is
+unreliable, give curl a proxy (`https_proxy=…`) and try again.
 
 **Overwriting does not touch your config or your data.** `ccm.config.json` and `data/` are both in `.gitignore`,
 and the archive is exactly what GitHub's on-the-fly `git archive` produces — it only packs files git tracks, so

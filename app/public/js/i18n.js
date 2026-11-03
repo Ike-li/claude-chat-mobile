@@ -35,7 +35,7 @@ export const EN_DICT = Object.freeze({
   '#token=值': '#token=VALUE',
   '直接进入。令牌在服务器': '. Find the token in',
   '的': 'as',
-  '或启动日志里。': 'on the server, or in the startup log.',
+  '里（启动日志只显示掩码）。': 'on the server (the startup log only shows a masked copy).',
   '不知道令牌？查看帮助': "Don't know the token? Get help",
   '会话已过期': 'Session expired',
   '等待授权': 'Waiting for approval',
@@ -352,13 +352,14 @@ export const EN_DICT = Object.freeze({
 
   // —— 设备授权 / 访问帮助 ——
   '🔒 等待授权': '🔒 Waiting for approval',
-  '这是一台新设备。在你': 'This is a new device. On',
-  '另一台已登录的设备': "another device you're already signed in on",
-  '上会弹出「新设备请求接入」，点一下「准入」即可——': ', a "New device requesting access" prompt will appear. Just tap "Approve" —',
+  // 末尾空格有意为之：紧跟其后的是 <strong> 第二句，中文不需要空格、英文需要
+  '这是一台新设备，需要批准一次。手边有已登录的设备时，那台上会弹出「新设备请求接入」，点「准入」即可；': 'This is a new device and needs a one-time approval. If you have a device that is already signed in, it shows "New device requesting access" — tap "Approve". ',
+  '这是第一台设备': 'If this is your first device',
+  '的话，只能在电脑上批准，见下方。': ', it can only be approved on the computer — see below.',
   '无需上电脑终端': 'no computer terminal needed',
   '。': '.',
   '本设备 ID': 'This device ID',
-  '没有其它已登录的设备？用命令授权 ▾': 'No other signed-in device? Approve by command ▾',
+  '第一台设备，或手边没有已登录的设备？在电脑上批准 ▾': 'First device, or no signed-in device at hand? Approve on the computer ▾',
   '在跑着 server 的那个终端窗口里按': 'In the terminal window running the server, press',
   '回车键': 'Enter',
   '一键同意最新设备，或在该项目目录下执行：': 'to approve the latest device, or run this from that project directory:',
@@ -376,7 +377,7 @@ export const EN_DICT = Object.freeze({
   '里找': 'on your computer for',
   '这一项（旧版装的是': '(older installs use',
   '），或者跑': '), or run',
-  '打一张二维码直接扫。启动日志只有第一次打印完整 URL，之后为防泄露只显示掩码，别照着它输。清除浏览器数据会一并清掉令牌，届时重输一次即可。': 'to print a QR code you can scan directly. The startup log prints the full URL only the first time; after that it shows a masked token — do not type that one in. Clearing browser data wipes the token too, so just enter it again when that happens.',
+  '打一张二维码直接扫。启动日志里的令牌是掩码，别照着它输。清除浏览器数据会一并清掉令牌，届时重输一次即可。': 'to print a QR code you can scan directly. The token in the startup log is masked — do not type that one in. Clearing browser data wipes the token too, so just enter it again when that happens.',
   '🆕 新设备怎么获批': '🆕 How a new device gets approved',
   '除了本机直连、以及已开 Cloudflare Access 的域名，其余路径（局域网 IP、Tailscale、没配 Access 的隧道域名）新设备都要批一次。你已登录的设备上会弹「新设备请求接入」，点「准入」即可——': 'Every path needs a one-time approval for a new device, except direct localhost access and a domain already protected by Cloudflare Access. That includes LAN IPs, Tailscale, and tunnel domains without Access. A device you are already signed in on shows "New device requesting access" — just tap "Approve", ',
   // 末尾空格有意为之：紧跟其后的是 <code>，中文冒号后不留空格、英文冒号后要留

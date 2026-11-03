@@ -119,7 +119,6 @@ import {
   isValidDeviceToken,
   noteAuditedExternally,
   addPendingDevice,
-  getLatestPendingDevice,
   approveDevice,
   denyDevice,
   getPendingDevices,
@@ -131,6 +130,7 @@ import {
   setDeviceAlias
 } from '../auth/devices.js';
 import { createDeviceGate } from '../auth/device-gate.js';
+import { createTtyDeviceConsole } from '../auth/tty-device-console.js';
 import * as approvalStore from '../agent/approval-store.js';
 import { expireOrphanedPending, startApprovalRetentionSweep } from '../agent/approval-lifecycle.js';
 import * as audit from '../ops/audit.js';
@@ -623,8 +623,11 @@ function preflight() {
     // 恒为 unknown，而它恰恰是本段头注说的「升级后回归核对」要用的那一项。
     versions.server = require('../../../package.json').version;
   } catch { /* 非致命 */ }
+  // 不是告警：推荐的网关配法是写进 Claude Code 自己的 settings.json env 块（doctor 也这么劝），那份配置只有 claude
+  // 子进程自己读，本进程环境里本来就看不到。此前这里打 ⚠️「将依赖 claude CLI 自身的登录态」，照文档配好网关的人
+  // 每次启动都被警告一次，而且说错了路径（2026-11-03 mini 全新安装核对）。
   if (!process.env.ANTHROPIC_AUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) {
-    console.warn('⚠️  未检测到 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY，将依赖 claude CLI 自身的登录态');
+    console.log('本进程环境里没有 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY：模型调用按 claude 自己的配置走（settings.json 的 env 块，或它的登录态）');
   }
   return claudeBin;
 }
@@ -987,40 +990,10 @@ if (usingConfigJson()) {
   watchFileDebounced(CONFIG_FILE_PATH, () => configReloader.handleChange(), 'config');
 }
 
-// 终端控制台交互：敲回车一键同意最新申请设备，或输入 deny 拒绝。
+// 终端控制台交互：敲回车一键同意最新申请设备，或输入 deny 拒绝（逻辑在 auth/tty-device-console.js）。
 if (process.stdin.isTTY) {
   process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (data) => {
-    const text = data.trim().toLowerCase();
-    const latest = getLatestPendingDevice();
-    if (text === '') {
-      if (latest) {
-        console.log(`\n[TTY] 收到回车！一键批准最新设备: ${latest}`);
-        // F2（code-review #5）：回车批准的是「Enter 那刻的最新」待审设备——若你看提示到按回车之间又来了新设备，
-        // 批准的可能已不是你以为的那个。这里若尚有其他待审设备就告警，让你察觉可能的竞态、必要时 deny 复核。
-        const others = getPendingDevices().filter(d => d.deviceToken !== latest).length;
-        if (others > 0) {
-          console.log(`   ⚠️ 另有 ${others} 个待审设备未处理——请确认刚批准的正是你想放行的那台（如有疑虑，运行 node scripts/device.js deny "${latest}" 撤销）`);
-        }
-        if (approveDevice(latest)) {
-          unlockDeviceSockets(latest);
-          broadcastPendingDevices();
-        } else {
-          console.error(`   ❌ 批准 ${latest} 落盘失败、未生效，请检查服务端磁盘后重试`); // BE-011：不静默当成功
-        }
-      }
-    } else if (text === 'deny') {
-      if (latest) {
-        console.log(`\n[TTY] 收到 deny！拒绝并移除最新设备: ${latest}`);
-        const denied = denyDevice(latest);
-        disconnectDeviceSockets(latest); // 断连照做（纵深防御）
-        broadcastPendingDevices();
-        if (!denied) console.error(`   ❌ 吊销 ${latest} 落盘失败、可能未生效（设备重连会复活），请检查服务端磁盘后重试`); // BE-011
-      } else {
-        console.log('\n[TTY] 当前没有等待审批的设备。');
-      }
-    }
-  });
+  process.stdin.on('data', createTtyDeviceConsole({ unlockDeviceSockets, disconnectDeviceSockets, broadcastPendingDevices }));
 }
 
 // 握手拒绝：把 authRejection 的判定翻译成 socket.io 的错误对象。
@@ -1881,6 +1854,21 @@ if (process.env.CLI_HOOKS_BRIDGE === 'off') {
 // statusline 桥同理：读一次落进缓存，供 service:status 下发给面板。
 // 只在装/卸时变，而 instances 广播很频繁——不能每次广播都去读盘。
 refreshStatuslineInstallState();
+// 启动日志也说一句：此前只有 hooks 桥有，电脑上看不出 statusline 桥装没装（2026-11-03 mini 全新安装核对）。
+// 读不出（unknown）不说「未安装」——那是一句确定的断言，会让人以为不必再查（同 readStatuslineInstallState 头注）。
+if (statusBridgeOff) {
+  console.log('[statusline] CLI statusline 桥已由 CLI_STATUSLINE_BRIDGE=off 停用（状态栏只用 SDK 自己的数据）');
+} else if (statuslineInstallState === 'installed') {
+  console.log('[statusline] CLI statusline 桥已安装——终端会话的模型 / 额度 / 上下文用量会同步到手机');
+} else if (statuslineInstallState === 'drifted') {
+  console.log('[statusline] ⚠️ CLI statusline 桥安装记录与 ~/.claude/settings.json 已漂移，运行 npm run statusline:status 检查');
+} else if (statuslineInstallState === 'unknown') {
+  console.log(`[statusline] ⚠️ CLI statusline 桥安装态读不出（${statuslineInstallDetail.unreadable === 'manifest' ? '安装清单' : '~/.claude/settings.json'}），运行 npm run statusline:status 检查`);
+} else if (statuslineInstallDetail.configured === false) {
+  console.log('[statusline] CLI statusline 桥未安装：终端会话的模型 / 额度 / 上下文用量不同步到手机。要先给 Claude Code 配好状态栏（~/.claude/settings.json 的 statusLine）才能装');
+} else {
+  console.log('[statusline] CLI statusline 桥未安装：终端会话的模型 / 额度 / 上下文用量不同步到手机（npm run statusline:install 或在设置面板一键启用）');
+}
 
 // effort UI 归一：normalizeEffortUiLevel（cli-settings-defaults.js）——ultracode → xhigh + Settings.ultracode。
 // 最近一次 init payload + 按 cwd 归键的 models / slashCommands 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
@@ -3366,7 +3354,7 @@ registerSocketConnection(io, socket => {
       broadcastTrustedDevices();
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_approved', target: deviceId, outcome: 'allowed', meta: { via: 'web' } });
       // 已在这里记过 via:'web'，登记一下免得文件监听器按差集再补一条 via:'cli'（同一动作两条记录、
-      // 且归因是错的）。TTY 的回车批准【不】登记——它自己不记审计，监听器是它唯一的审计来源。
+      // 且归因是错的）。终端里的回车批准 / deny 同理，在 auth/tty-device-console.js 自记 via:'tty' 再登记。
       noteAuditedExternally({ trustedAdded: [deviceId], pendingRemoved: [deviceId] });
     } else {
       // BE-011：批准落盘失败——设备并未真正信任（isDeviceTrusted 每次重读磁盘），不解锁、不谎报成功，告警并提示重试。
@@ -5677,7 +5665,8 @@ httpServer.listen(listenPort, host, () => {
   // 而那条路径退出太快、状态文件还没写完就没了，留下关不掉的孤儿窗口（实测踩到）。
   startLogTerminal({ home: homedir(), dataDir: DATA_DIR }).catch(() => {});
   console.log('========================================');
-  console.log('  Claude Chat Mobile v2');
+  // 版本取 package.json（preflight 已读进 versions.server）：此前写死的「v2」与发布号对不上（2026-11-03 mini）。
+  console.log(`  Claude Chat Mobile v${versions.server}`);
   console.log(workDirs.length
     ? `  工作目录: ${primaryWorkDir()}${workDirs.length > 1 ? `  (可切换 ${workDirs.length} 个: ${workDirs.join(', ')})` : ''}`
     : workdirStatus.missing()
