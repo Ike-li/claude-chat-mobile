@@ -1,34 +1,26 @@
-import { createHash } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createServer } from 'node:http';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
-import { setSecurityHeaders } from '../../../app/src/server/http.js';
+import {
+  computeAssetVersion,
+  injectModulePreloads,
+  listAppModuleGraph,
+  rewriteAppModuleImports,
+  rewriteCssAssetUrls,
+  rewriteIndexAssetUrls,
+  setSecurityHeaders,
+  versionedAssetCacheControl,
+} from '../../../app/src/server/http.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = join(HERE, '..', '..', '..', 'app', 'public');
 const DEFAULT_REJECTED_TOKENS = ['bad-token', 'invalid-token', 'expired-token'];
-
-function javascriptFiles(directory) {
-  const files = [];
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...javascriptFiles(path));
-    else if (entry.isFile() && entry.name.endsWith('.js')) files.push(path);
-  }
-  return files.sort();
-}
-
-export function computeMockAssetVersion(publicDir = DEFAULT_PUBLIC_DIR) {
-  const hash = createHash('sha256');
-  for (const path of javascriptFiles(join(publicDir, 'js'))) {
-    hash.update(readFileSync(path));
-  }
-  hash.update(readFileSync(join(publicDir, 'css', 'app.css')));
-  return hash.digest('hex').slice(0, 8);
-}
+// 带这个令牌的握手按「来源已被长锁」拒（P0-20g）。
+const RATE_LIMITED_TOKEN = 'rate-limited-token';
 
 // 出向事件的形状闸。真 server 的 instances 载荷只有 instancesPayload() 一个产地（app/src/server/app.js），
 // service / canRestart 恒在；mock 却是 100 多处手写字面量，漏一处就是一条真 server 发不出来的事件。
@@ -61,9 +53,24 @@ function assertOutboundShape(event) {
   );
 }
 
-function guardAgentEvents(emitter) {
+// 用例边界的时间闸。上面那条形状闸只管「发出去的是不是真 server 发得出的事件」，管不了「该不该由这条用例发」：
+// /__reset 能复位模块状态，复位不了已经在途的 async 尾巴。场景开头从上下文快照了 viewingInstanceId，睡几秒
+// 醒来再 io.emit——广播落到下一条用例的新页面上，把它刚切过去的视图拽回 inst_1。P0-SYNC-ACK-TIMEOUT 长期
+// 间歇红就是这个（2026-10-19 查实：同片排在它前面的 RECAP-2 发了 test:tool，场景要跑 ~4.4s，用例 0.7s 就结束；
+// 两条连跑 4/4 复现）。
+// 做法：客户端每个事件进来时，用 AsyncLocalStorage 记下当时的用例代数（caseGeneration，即 /__reset 的计数）；
+// 处理函数 await 之后 emit 时，代数已经变了就丢弃。ALS 跨 await / 定时器传递，各场景不必各自判断，新写的场景
+// 自动受管。不在任何客户端事件里发出的（连接时的 hydration、HTTP 端点）不带代数，照常放行。
+const caseScope = new AsyncLocalStorage();
+
+function guardAgentEvents(emitter, caseGeneration) {
   const original = emitter.emit.bind(emitter);
   emitter.emit = (eventName, ...args) => {
+    const born = caseScope.getStore();
+    if (born !== undefined && born !== caseGeneration()) {
+      console.log(`[mock] 丢弃上一条用例的尾巴：${eventName} ${args[0]?.type ?? ''}（代数 ${born} → ${caseGeneration()}）`);
+      return false;
+    }
     if (eventName === 'agent:event') assertOutboundShape(args[0]);
     return original(eventName, ...args);
   };
@@ -73,21 +80,47 @@ export function createMockTransport({
   publicDir = DEFAULT_PUBLIC_DIR,
   buildNonce = process.env.CCM_BUILD_NONCE || null,
   rejectedAuthTokens = DEFAULT_REJECTED_TOKENS,
+  caseGeneration = () => 0, // 当前用例的代数（server.js 传 /__reset 计数），见 caseScope
 } = {}) {
   const app = express();
   const httpServer = createServer(app);
   const io = new Server(httpServer, { cors: { origin: '*' } });
   const rejectedTokens = new Set(rejectedAuthTokens);
   const jsDir = join(publicDir, 'js');
-  const assetVersion = computeMockAssetVersion(publicDir);
+  // 版本戳、index 的模块预载与 ?v= 改写、子模块改写、缓存头判据都直接用真 server 那一份：桌面性能对照
+  // 跑在 mock 上，这几处一分叉，量出来的冷/热启动就不是生产那条路径。
+  const assetVersion = computeAssetVersion(jsDir, publicDir, null, join(publicDir, 'vendor'));
+  const modulePreloads = listAppModuleGraph(jsDir);
 
-  guardAgentEvents(io);
+  guardAgentEvents(io, caseGeneration);
+  // 验收 O83：模拟真 server 的退避短锁。上锁后窗口内的握手一律回 cooldown（令牌不校验），
+  // err.data 的形状与真 server 的 rejectHandshake 一致。
+  let authCooldownUntil = 0;
   io.use((socket, next) => {
-    if (rejectedTokens.has(socket.handshake.auth?.token)) {
+    const cooldownLeft = authCooldownUntil - Date.now();
+    if (cooldownLeft > 0) {
+      const err = new Error('cooldown');
+      err.data = { reason: 'cooldown', retryAfterMs: cooldownLeft, retryAfterSeconds: Math.max(1, Math.ceil(cooldownLeft / 1000)) };
+      next(err);
+      return;
+    }
+    const token = socket.handshake.auth?.token;
+    // 不带令牌一律拒：真 server 在非公网 Host 上不留「无 token 放行」的分支（AUTH_TOKEN 是启动前提）。
+    // mock 此前放行无令牌握手，「开页没令牌也照样连上」在 E2E 里成立、在真机上不成立（验收 O20）。
+    if (!token || rejectedTokens.has(token)) {
       next(new Error('unauthorized'));
       return;
     }
-    guardAgentEvents(socket); // 单播也要过闸：hydration 的 instances 走的就是 socket.emit
+    // 被防暴破长锁拦下：与真 server 的 rejectHandshake 同形（message + data.retryAfterSeconds）。
+    if (token === RATE_LIMITED_TOKEN) {
+      const err = new Error('rate_limited');
+      err.data = { reason: 'rate_limited', retryAfterMs: 900_000, retryAfterSeconds: 900 };
+      next(err);
+      return;
+    }
+    guardAgentEvents(socket, caseGeneration); // 单播也要过闸：hydration 的 instances 走的就是 socket.emit
+    // 每个入向事件在「收到时的用例代数」里派发；socket.io 经 process.nextTick 调处理函数，ALS 随之传递
+    socket.use((_packet, nextPacket) => caseScope.run(caseGeneration(), nextPacket));
     next();
   });
 
@@ -98,6 +131,12 @@ export function createMockTransport({
   app.use((req, res, next) => {
     setSecurityHeaders(res, req.headers?.host);
     next();
+  });
+  app.use(versionedAssetCacheControl(() => assetVersion));
+
+  app.post('/__auth-cooldown', (req, res) => {
+    authCooldownUntil = Date.now() + Math.max(0, Number(req.query?.ms) || 0);
+    res.json({ ok: true });
   });
 
   app.get('/__ready', (req, res) => {
@@ -110,8 +149,10 @@ export function createMockTransport({
 
   app.get(['/', '/index.html'], (_req, res) => {
     try {
-      const html = readFileSync(join(publicDir, 'index.html'), 'utf8')
-        .replace(/(\/(?:js|css)\/[\w./-]+\.(?:js|css))(?!\?)/g, `$1?v=${assetVersion}`);
+      const html = rewriteIndexAssetUrls(
+        injectModulePreloads(readFileSync(join(publicDir, 'index.html'), 'utf8'), modulePreloads),
+        assetVersion,
+      );
       res.setHeader('Cache-Control', 'no-store');
       res.type('html').send(html);
     } catch (error) {
@@ -136,15 +177,28 @@ export function createMockTransport({
     }
     res.setHeader('Cache-Control', 'no-cache');
     res.type('application/javascript')
-      .send(source.replace(/from\s+(['"])(\.\.?\/[\w./-]+\.js)\1/g, `from '$2?v=${assetVersion}'`));
+      .send(rewriteAppModuleImports(source, assetVersion));
+  });
+
+  // css 里 url() 的字体引用同样戳 ?v=，与真 server 同一份 rewriteCssAssetUrls；漏了字体就一直 304 重验。
+  app.get(/^\/css\/.+\.css$/i, (req, res, next) => {
+    const rel = req.path.slice('/css/'.length);
+    if (rel.includes('..')) return next();
+    let source;
+    try {
+      source = readFileSync(join(publicDir, 'css', rel), 'utf8');
+    } catch {
+      return next();
+    }
+    res.type('text/css').send(rewriteCssAssetUrls(source, assetVersion));
   });
 
   app.use(express.static(publicDir, {
     setHeaders: (res, filePath) => {
       if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
-      else if (filePath.startsWith(jsDir) && filePath.endsWith('.js')) res.setHeader('Cache-Control', 'no-cache');
     },
   }));
 
-  return { app, httpServer, io, assetVersion };
+  const resetAuthCooldown = () => { authCooldownUntil = 0; };
+  return { app, httpServer, io, assetVersion, resetAuthCooldown };
 }

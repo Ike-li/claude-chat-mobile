@@ -2,6 +2,38 @@ function withContext(getContext, handler) {
   return async args => handler(getContext(), args);
 }
 
+async function crashViewingInstance({ io, activeEpoch, viewingInstanceId, mockInstances, setViewingInstanceId, mockServicePayload, getMockCanRestart, armCrashReload }, { beforeInit = false } = {}) {
+  const idx = mockInstances.findIndex(i => i.instanceId === viewingInstanceId);
+  if (idx === -1) return;
+  const crashed = mockInstances[idx];
+  const broadcast = viewingId => io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: {
+      canRestart: getMockCanRestart(),
+      service: mockServicePayload(),
+      viewingInstanceId: viewingId,
+      viewingCwd: crashed.cwd,
+      dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), crashed.cwd])),
+      instances: mockInstances,
+    },
+  });
+  if (beforeInit) {
+    crashed.sessionId = null;
+    broadcast(crashed.instanceId);
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  io.emit('agent:event', {
+    seq: 1, epoch: activeEpoch, sessionId: crashed.sessionId, instanceId: crashed.instanceId, ts: Date.now(),
+    type: 'error', payload: {
+      message: '进程异常：Claude Code process terminated by signal SIGKILL', recoverable: true, processExited: true,
+    },
+  });
+  if (crashed.sessionId) armCrashReload(crashed.sessionId);
+  mockInstances.splice(idx, 1);
+  setViewingInstanceId(null);
+  broadcast(null);
+}
+
 export function createStatusScenarios(getContext) {
   const run = handler => withContext(getContext, handler);
 
@@ -188,6 +220,44 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      // 验收 O53 / O52 / O26：网关下跑着的会话，init 报的是真实 wire（grok-4.5[1m]），不是档位 id；SDK 列表里它是
+      // opus 那张的 resolvedModel，default 与其余几档指裸名 grok-4.5。在跑的刻意不是 default 那张：否则「没点过时
+      // 回落 default 的 wire」碰巧也等于在跑模型，发送意图那条断言就分不出对错。
+      // 实例的 model 一并改掉，instances 广播与 init 说的是同一个在跑模型（/__reset 时复原）。
+      command: 'test:gateway-loaded-wire',
+      run: run(async ({ socket, activeEpoch, viewingInstanceId, mockInstances, permissionMode, delay }) => {
+        mockInstances[0].model = 'grok-4.5[1m]';
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'init', payload: {
+            model: 'grok-4.5[1m]',
+            cwd: mockInstances[0].cwd,
+            claudeVersion: '0.1.0-mock',
+            mcpServers: [],
+            skillsCount: 7,
+            permissionMode,
+            slashCommands: [{ name: 'model', description: 'Switch active model' }],
+          },
+        });
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'models', payload: {
+            models: [
+              { value: 'default', displayName: 'Default (recommended)', resolvedModel: 'grok-4.5' },
+              { value: 'opus', displayName: 'Custom Opus model', resolvedModel: 'grok-4.5[1m]' },
+              { value: 'sonnet', displayName: 'Custom Sonnet model', resolvedModel: 'grok-4.5' },
+              { value: 'haiku', displayName: 'Custom Haiku model', resolvedModel: 'grok-4.5' },
+            ],
+          },
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_gateway_loaded_wire_1', durationMs: 100, costUsd: 0, isError: false, models: ['grok-4.5[1m]'] },
+        });
+      }),
+    },
+    {
       // 新会话（未选具体模型）+ 网关默认：CLI 报 cwd 默认为档位别名 opus（instances.defaultModel），SDK
       // supportedModels() 在 resolvedModel 带出真实 wire id。回归 bug：currentModel 空时底栏 pill 须解析出
       // 真实模型名，而不是停在裸别名 'opus'——原表现「选了 opus 才显具体名」。models 列表无 default 项，
@@ -222,7 +292,7 @@ export function createStatusScenarios(getContext) {
             service: mockServicePayload(),
             viewingInstanceId,
             viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
-            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            ...getContext().mockDirFields(),
             instances: mockInstances,
             defaultModel: 'opus', // scout 探得的 cwd 默认（档位别名）
           },
@@ -385,12 +455,25 @@ export function createStatusScenarios(getContext) {
     {
       // 服务状态面板告警注入：后续 service:status ack 将带 deliveryFailure（+pushFailure=3），
       // 供 E2E 验证面板告警段渲染（P0-22b）。18 分钟前 → 文案「推送最近失败于 18 分钟前」。
+      // 同时推一帧 instances：真 server 投递失败时 onDeliveryFailure → scheduleBgBroadcast 也会广播，
+      // 抽屉「服务」小节只从这条广播取数（P0-SVC-ALERT-4）。
       command: 'test:service-delivery-failure',
-      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, setMockDeliveryFailure }) => {
+      run: run(async ({ io, socket, activeEpoch, viewingInstanceId, activeModel, setMockDeliveryFailure, getMockCanRestart, mockInstances, mockServicePayload }) => {
         setMockDeliveryFailure({ channel: 'push', at: Date.now() - 18 * 60_000, count: 3 });
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_svc_fail_1', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] },
+        });
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            canRestart: getMockCanRestart(),
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            ...getContext().mockDirFields(),
+            instances: mockInstances,
+            service: mockServicePayload(),
+          },
         });
       }),
     },
@@ -412,7 +495,7 @@ export function createStatusScenarios(getContext) {
             canRestart: false,
             viewingInstanceId,
             viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
-            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            ...getContext().mockDirFields(),
             instances: mockInstances,
             service: mockServicePayload(),
           },
@@ -442,10 +525,14 @@ export function createStatusScenarios(getContext) {
     {
       // 判定化告警注入：后续 service:status ack 带 rateLimitLockout（⛔ 红）+ clientError（🐞 黄），
       // 供 E2E 验证升格告警行渲染与判色（P0-22c）。42 分钟前锁定、3 分钟前前端错误。
-      command: 'test:service-incidents',
-      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, setMockServiceIncidents }) => {
+      // test:service-incidents-local：同一条锁定来自本机（ip:127.0.0.1）——验收 O23，判色降为黄。
+      commands: ['test:service-incidents', 'test:service-incidents-local'],
+      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, setMockServiceIncidents }, { cmd }) => {
         setMockServiceIncidents({
-          rateLimitLockout: { at: Date.now() - 42 * 60_000, count: 2 },
+          rateLimitLockout: {
+            at: Date.now() - 42 * 60_000, count: 2,
+            ...(cmd === 'test:service-incidents-local' ? { source: 'ip:127.0.0.1' } : {}),
+          },
           clientError: { at: Date.now() - 3 * 60_000, count: 5 },
         });
         socket.emit('agent:event', {
@@ -488,6 +575,17 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      // 验收 O60 后一半：正在看的会话 CLI 进程被 kill。照真 server 的顺序：agent.js consume 收尾先发 error
+      // （带 processExited），再 onExit 摘掉实例、广播 viewing 变化。之后重开这个会话走清屏全量重载（见 armCrashReload）。
+      command: 'test:process-crash',
+      run: run(ctx => crashViewingInstance(ctx)),
+    },
+    {
+      // #329 review P2：新开的进程还没吐 init 就退出——实例此时没有 sessionId，中断面照样要写出原因。
+      command: 'test:process-crash-before-init',
+      run: run(ctx => crashViewingInstance(ctx, { beforeInit: true })),
+    },
+    {
       // 修「server 重启都会跳'会话已中断'页」误报：整机重启时 agents Map/viewingInstanceId 全部归零
       //（纯内存态），重连后首条 instances 广播形态（实例从列表消失 + viewing 变 null）与上面
       // test:instance-destroyed 完全同构——唯一区分信号是广播恒带的 service.startedAt（进程级常量，
@@ -498,7 +596,7 @@ export function createStatusScenarios(getContext) {
       run: run(async ({ io, viewingInstanceId, mockInstances, setViewingInstanceId, bumpServiceStartedAt, mockServicePayload, getMockCanRestart }) => {
         const removedCwd = mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd
           ?? '/Users/you/code/claude-chat-mobile';
-        const dirs = Array.from(new Set(mockInstances.map(i => i.cwd)));
+        const dirFields = getContext().mockDirFields(); // 清空实例之前取：缺省口径从实例 cwd 现算
         mockInstances.length = 0; // 重启 = 所有 live 实例消失（不只正在看的那个）
         setViewingInstanceId(null);
         bumpServiceStartedAt();
@@ -508,7 +606,7 @@ export function createStatusScenarios(getContext) {
             canRestart: getMockCanRestart(),
             viewingInstanceId: null,
             viewingCwd: removedCwd,
-            dirs,
+            ...dirFields,
             instances: mockInstances,
             service: mockServicePayload(),
           },

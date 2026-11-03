@@ -3,22 +3,22 @@
 // 测什么：① isInScope 在 realpath 之后判定候选路径是否落在授权工作区内，拦截越界、../ 穿越、symlink 逃逸与前缀碰撞
 //         ② 白名单**写入侧**（validateEnvChanges 的 WORKDIRS 档）拒绝相对路径与非数组——
 //            范围门再严，也挡不住一条把父目录整棵树写进白名单的配置
-//         ③ resolveManagedWorktree 的派生放行面：只认「白名单目录下 .claude/worktrees/ 的直接子目录」，
-//            深度固定为 1、不递归、symlink 真实落点必须仍在该目录子树内
-//         ④ resolveDrivingCwd：会话中途换 cwd（EnterWorktree）的采信判据——合法集同 ③，
-//            但失败方向是 fail-closed 返回 null，不像 routeCwd 那样回退
-//         ⑤ instanceAuthorizedDirs：工作区被热移除后，其上已开实例保留自己那一个授权根（仅拒新开）
-//         ⑥ resolveGoneWorktreeParent：worktree 目录被删、实例 cwd 悬空时推出父仓——合法形态集同 ③，
-//            但**不 realpath**（目标已不存在），安全性改由「返回值恒取自 dirs」保证
-// 不测什么 + 为什么：不测文件权限或内容敏感度——用户即 root，防线在范围门不在内容审查
+//         ⑥ resolveGoneWorktreeParent：worktree 目录被删、实例 cwd 悬空时推出父仓——**不 realpath**
+//            （目标已不存在），安全性改由「返回值恒取自 dirs」保证
+// 不测什么 + 为什么：① 不测文件权限或内容敏感度——用户即 root，防线在范围门不在内容审查
+//   ② 原来的 ③④⑤（resolveManagedWorktree / ensureWhitelisted / resolveDrivingCwd / instanceAuthorizedDirs）
+//      2026-09-24 随「已连接的文件夹」退役：cwd 授权统一由 sessions/folder-access.js 的 resolveAuthorizedCwd 判，
+//      用例在 folder-access.test.mjs（SCOPE-05：子目录可达、禁区、scratch、热移除保护）与
+//      worktree-ownership.test.mjs（SCOPE-04：worktree 双向回验）。其中「再深一层 / 普通子目录 / 平级兄弟不放行」
+//      三条按新语义翻转，各自换上了新反例（symlink 逃逸、禁区、伪造与单侧指针、没有 .git 的兄弟目录）
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { isInScope } from '../../app/src/files/workdir-scope-guard.js';
+import { isInScope, isMissingInScope, isUnderVanishedRoot } from '../../app/src/files/workdir-scope-guard.js';
 import { validateEnvChanges } from '../../app/src/ops/env-schema.js';
-import { resolveManagedWorktree, ensureWhitelisted, resolveDrivingCwd, instanceAuthorizedDirs, resolveGoneWorktreeParent } from '../../app/src/sessions/workdirs.js';
+import { resolveGoneWorktreeParent } from '../../app/src/sessions/workdirs.js';
 
 test.describe('SCOPE-01: workdir-scope-guard', () => {
   const base = mkdtempSync(join(tmpdir(), 'ccm-inv-scope-'));
@@ -111,6 +111,112 @@ test.describe('SCOPE-01: workdir-scope-guard', () => {
   });
 });
 
+// ── 「不存在」与「越界」分开（验收 O80）────────────────────────────────────────
+// isInScope 对不存在的路径一律 false（上面那条，fail-closed 不变），调用方随后把它记成 scope_violation——
+// 文件面板开着时 Claude 删掉或改名的文件，点旧条目就在安全日志里留一条「越界访问被拒」。
+// isMissingInScope 只回答「它是不是范围内一个已经不在的东西」：只影响审计分类和报错文案，不放行任何访问。
+// 判据：叶子本身 lstat 不存在（悬空 symlink 不算——它存在，只是指向的东西不在），且最近一个存在的祖先
+// realpath 之后仍在范围内（祖先是指出去的 symlink、或 ../ 走出去的，都不算）。
+test.describe('SCOPE-01: isMissingInScope 只把「范围内已经不在的东西」认作不存在', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-inv-scope-missing-')));
+  test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
+  const scope = join(base, 'scope');
+  const outside = join(base, 'outside');
+  mkdirSync(join(scope, 'sub'), { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(scope, 'sub', 'here.txt'), 'x');
+  writeFileSync(join(outside, 'secret.txt'), 'x');
+  if (process.platform !== 'win32') {
+    symlinkSync(outside, join(scope, 'link-out'));
+    symlinkSync(join(outside, 'gone.txt'), join(scope, 'dangling-out'));
+  }
+  const dirs = [scope];
+
+  test('范围内被删掉的文件、被删掉的整层目录：是', () => {
+    assert.equal(isMissingInScope(join(scope, 'deleted.txt'), dirs), true);
+    assert.equal(isMissingInScope(join(scope, 'sub', 'renamed.txt'), dirs), true);
+    assert.equal(isMissingInScope(join(scope, 'gone-dir', 'deeper', 'x.txt'), dirs), true);
+  });
+
+  // 只有 ENOENT 算「不在了」；把文件当目录往下走（ENOTDIR）、没权限之类的失败照旧按越界记，判据 fail-closed
+  test('叶子不是 ENOENT 而是别的失败（文件底下再走一层）：不是', () => {
+    assert.equal(isMissingInScope(join(scope, 'sub', 'here.txt', 'child'), dirs), false);
+  });
+
+  test('还在的东西不是（不管在不在范围内）', () => {
+    assert.equal(isMissingInScope(join(scope, 'sub', 'here.txt'), dirs), false);
+    assert.equal(isMissingInScope(join(outside, 'secret.txt'), dirs), false);
+  });
+
+  test('范围外的不存在路径不是：直接在外面、经 ../ 走出去', () => {
+    assert.equal(isMissingInScope(join(outside, 'nope.txt'), dirs), false);
+    assert.equal(isMissingInScope(join(scope, '..', 'outside', 'nope.txt'), dirs), false);
+    assert.equal(isMissingInScope(join(base, 'no-such-dir', 'x.txt'), dirs), false);
+  });
+
+  test('经指向范围外的 symlink 落到一个不存在的位置：不是', { skip: process.platform === 'win32' }, () => {
+    assert.equal(isMissingInScope(join(scope, 'link-out', 'nope.txt'), dirs), false);
+  });
+
+  test('悬空 symlink 本身存在，不是「不存在」（照旧按越界记）', { skip: process.platform === 'win32' }, () => {
+    assert.equal(isMissingInScope(join(scope, 'dangling-out'), dirs), false);
+  });
+
+  test('非法入参一律不是', () => {
+    assert.equal(isMissingInScope('', dirs), false);
+    assert.equal(isMissingInScope(null, dirs), false);
+    assert.equal(isMissingInScope(join(scope, 'deleted.txt'), []), false);
+    assert.equal(isMissingInScope(join(scope, 'deleted.txt'), null), false);
+  });
+});
+
+// ── 已连接、但整个从磁盘消失的文件夹（2026-11-01）──────────────────────────────
+// isMissingInScope 要求「最近一个存在的祖先」在范围内：连接根本身被删掉（连同父目录）时，
+// 祖先早已在范围外，于是判成越界。抽屉每 12 秒对每个已连接文件夹发一次 session:list，
+// 一个消失的根就是每小时 300 条 scope_violation，几小时把 5000 条环形审计里真正的安全记录挤光。
+// isUnderVanishedRoot 只认「词法上落在某个连接根之下、且那个根自己 lstat 是 ENOENT」：
+// 根还在的（哪怕底下的东西不在）、根被换成了 symlink 的、经 ../ 走出去的，都不是。同样只影响审计分类。
+test.describe('SCOPE-01: isUnderVanishedRoot 只把「已连接的根整个不在了」认作不存在', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-inv-scope-vanished-')));
+  test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
+  const alive = join(base, 'alive');
+  const gone = join(base, 'parent-gone', 'gone');
+  const outside = join(base, 'outside');
+  mkdirSync(alive, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  const dirs = [alive, gone];
+
+  test('消失的根本身、根下的子路径：是', () => {
+    assert.equal(isUnderVanishedRoot(gone, dirs), true);
+    assert.equal(isUnderVanishedRoot(join(gone, 'sub', 'deeper'), dirs), true);
+  });
+
+  test('根还在：不是（根下不存在的东西归 isMissingInScope 管）', () => {
+    assert.equal(isUnderVanishedRoot(alive, dirs), false);
+    assert.equal(isUnderVanishedRoot(join(alive, 'nope'), dirs), false);
+  });
+
+  test('经 ../ 从消失的根走出去、前缀碰撞、范围外：不是', () => {
+    assert.equal(isUnderVanishedRoot(join(gone, '..', '..', 'outside', 'nope'), dirs), false);
+    assert.equal(isUnderVanishedRoot(`${gone}-sibling`, dirs), false);
+    assert.equal(isUnderVanishedRoot(join(outside, 'nope'), dirs), false);
+  });
+
+  test('根的位置被换成指出去的 symlink：根 lstat 存在，不是', { skip: process.platform === 'win32' }, () => {
+    const swapped = join(base, 'swapped');
+    symlinkSync(outside, swapped);
+    assert.equal(isUnderVanishedRoot(join(swapped, 'nope'), [swapped]), false);
+  });
+
+  test('非法入参一律不是：相对路径、空串、空范围', () => {
+    assert.equal(isUnderVanishedRoot('gone/sub', dirs), false);
+    assert.equal(isUnderVanishedRoot('', dirs), false);
+    assert.equal(isUnderVanishedRoot(null, dirs), false);
+    assert.equal(isUnderVanishedRoot(gone, []), false);
+    assert.equal(isUnderVanishedRoot(gone, null), false);
+  });
+});
+
 // ── 写入侧（2026-09-10 打开手机端编辑面时补）────────────────────────────────
 //
 // WORKDIRS 是 claude 的文件作用域边界，不是展示用的列表：写进去的每一项都会成为
@@ -178,7 +284,7 @@ test.describe('SCOPE-01: WORKDIRS 写入侧', () => {
   // 文件可经文件编辑器直写、不过 Agent 审批链。把 $HOME 写进去，等于把 ~/.ssh、~/.aws、
   // 浏览器 profile 一并挂到远程入口上。
   //
-  // 【与 SCOPE-03 的分工】那条管「启动时一个都解析不出 → 拒绝启动、绝不回落家目录」，
+  // 【与 SCOPE-03 的分工】那条管「清单为空或一个都解析不出 → 只剩「无文件夹」、绝不回落家目录」，
   // 管的是**回落**；这里管**显式写入**。两条路不同，家目录暴露的后果相同，都要堵。
   const homeDeps = (home = '/home/tester') => ({ ...envDeps(), home });
 
@@ -313,7 +419,7 @@ test.describe('SCOPE-01: WORKDIRS 写入侧', () => {
 // 派生放行把这一种形态放进来，**边界必须是 SCOPE-01 原本就成立的那条**：
 // 放行集恒为白名单目录的子树，所以「候选路径 realpath 后落在授权工作区内」没有被放松。
 // 真正新增的自由度只有一个——深度固定为 1 的那一层目录名。下面每条都在钉这个自由度不外溢。
-test.describe('SCOPE-01: 托管 worktree 的派生放行', () => {
+test.describe('SCOPE-01: worktree 目录已删时的父仓推导', () => {
   // ★ base 必须先 realpath 再往下构造。macOS 的 /var -> /private/var 会让「候选未解析、dirs 已解析」
   //   成为默认形态，而在那个形态下**所有**候选都因前缀不匹配返回 null——symlink 逃逸那条期望的
   //   恰好也是 null，于是它永远绿。第一版就是这么写的：注入「删掉 realpath」后红的是正对照，
@@ -348,153 +454,6 @@ test.describe('SCOPE-01: 托管 worktree 的派生放行', () => {
   const realB = realpathSync(repoB);
   const dirs = [realA, realB];
 
-  test('托管 worktree 放行并归属到父仓——正对照：这道判据不是恒拒', () => {
-    assert.equal(
-      resolveManagedWorktree(join(wtRoot, 'feature-x'), dirs)?.parent ?? null, realA,
-      '.claude/worktrees/ 的直接子目录必须放行，否则 worktree 会话仍然打不开',
-    );
-    assert.equal(
-      resolveManagedWorktree(join(repoB, '.claude', 'worktrees', 'other'), dirs)?.parent ?? null, realB,
-      '多工作区下必须归属到自己的父仓，不能恒取首项',
-    );
-  });
-
-  test('再深一层不放行——否则 worktree 里再套一层就能无限派生出授权路径', () => {
-    assert.equal(resolveManagedWorktree(join(wtRoot, 'nested', 'deep'), dirs), null);
-  });
-
-  test('worktrees 容器自身不是 worktree，不放行', () => {
-    assert.equal(resolveManagedWorktree(wtRoot, dirs), null);
-    assert.equal(resolveManagedWorktree(join(repoA, '.claude'), dirs), null);
-  });
-
-  test('白名单目录自身走精确匹配那条路，派生判据不认领', () => {
-    assert.equal(
-      resolveManagedWorktree(repoA, dirs), null,
-      '父仓自身返回非 null 会让调用方把普通工作区误当 worktree 归属',
-    );
-  });
-
-  test('普通子目录不放行——派生只认 .claude/worktrees 这一条固定路径', () => {
-    assert.equal(resolveManagedWorktree(join(repoA, 'sub'), dirs), null);
-  });
-
-  test('仓库外的平级兄弟 worktree 不放行——那类须显式写进 WORKDIRS', () => {
-    assert.equal(
-      resolveManagedWorktree(sibling, dirs), null,
-      '放行它等于让放行集跳出白名单子树，SCOPE-01 的前提当场不成立',
-    );
-  });
-
-  test('symlink 指向范围外拒绝（字面在 worktrees 下、真实落点在外）', { skip: process.platform === 'win32' }, () => {
-    assert.equal(
-      resolveManagedWorktree(join(wtRoot, 'escape'), dirs), null,
-      '拿未解析路径比前缀 = macOS 上静默永远放行，这条是那个坑的负片',
-    );
-  });
-
-  test('不存在的路径 fail-closed——无法确认真实落点', () => {
-    assert.equal(resolveManagedWorktree(join(wtRoot, 'never-created'), dirs), null);
-  });
-
-  test('非法入参拒绝', () => {
-    assert.equal(resolveManagedWorktree('', dirs), null);
-    assert.equal(resolveManagedWorktree(null, dirs), null);
-    assert.equal(resolveManagedWorktree(123, dirs), null);
-    assert.equal(resolveManagedWorktree(join(wtRoot, 'feature-x'), []), null);
-    assert.equal(resolveManagedWorktree(join(wtRoot, 'feature-x'), null), null);
-  });
-
-  // routeCwd 与 ensureWhitelisted 在 8 个 handler 里是成对出现的（`ensureWhitelisted(routeCwd(x), dirs)`）。
-  // 只让 routeCwd 认派生形态，放行会被紧随其后的 ensureWhitelisted 原样撤销——归位到 dirs[0]，
-  // 症状与完全没改一模一样。两道闸必须认同一套合法集，这两条各钉一侧。
-  test('ensureWhitelisted 不把托管 worktree 当热移除目录归位', () => {
-    assert.equal(
-      ensureWhitelisted(join(wtRoot, 'feature-x'), dirs), realpathSync(join(wtRoot, 'feature-x')),
-      '归位到 dirs[0] 会让 routeCwd 刚放行的 worktree cwd 当场作废',
-    );
-  });
-
-  test('ensureWhitelisted 对真正的越界路径仍归位到首项（正对照：没把闸拆了）', () => {
-    assert.equal(ensureWhitelisted(join(base, 'outside'), dirs), realA);
-    assert.equal(ensureWhitelisted(join(wtRoot, 'nested', 'deep'), dirs), realA);
-    assert.equal(ensureWhitelisted('/definitely/not/here', dirs), realA);
-  });
-
-  // realpath 在这条判据里是双向的：上面那条挡 symlink 逃逸，这条证明它同时是功能——
-  // 候选来自前端/注册表时未必解析过（macOS 上 /var 与 /private/var 是同一个目录的两种写法），
-  // 不解析就比前缀会把合法的 worktree 判成越界，症状是「会话列得出来、点开被弹回父仓」。
-  test('候选未解析也能放行——realpath 不只是防逃逸，也是功能', { skip: rawBase === base }, () => {
-    assert.equal(
-      resolveManagedWorktree(join(rawBase, 'repo-a', '.claude', 'worktrees', 'feature-x'), dirs)?.parent ?? null,
-      realA,
-    );
-  });
-
-  // ④ 会话中途换 cwd（EnterWorktree / ExitWorktree）的采信判据。
-  //
-  // 【为什么不能复用 routeCwd】合法集同源，但**失败方向相反**：routeCwd 面对的是「前端传错了 cwd」，
-  // 回退 viewingCwd 是纠正；这里面对的是「CLI 报了一个新 cwd」，没有任何安全回退可言——
-  // 回退到别的目录等于把实例的驾驶轴指到一个 SDK 并不在那儿跑的地方。拒绝 = 保持原样。
-  //
-  // 【为什么必须校验】new_cwd 源自 EnterWorktree 的 path 参数，是会话内可被引导的值，
-  // 与前端传来的路径同属用户可控面，SCOPE-01 原样适用。
-  test('resolveDrivingCwd 采信白名单目录本身与其下的托管 worktree', () => {
-    assert.equal(resolveDrivingCwd(realA, dirs), realA);
-    assert.equal(resolveDrivingCwd(join(wtRoot, 'feature-x'), dirs), realpathSync(join(wtRoot, 'feature-x')));
-    assert.equal(
-      resolveDrivingCwd(join(repoB, '.claude', 'worktrees', 'other'), dirs),
-      realpathSync(join(repoB, '.claude', 'worktrees', 'other')),
-    );
-  });
-
-  test('resolveDrivingCwd 对越界路径 fail-closed 返回 null——不回退、不归位', () => {
-    assert.equal(resolveDrivingCwd(outside, dirs), null, '越界目录被采信 = 实例驾驶轴被引到授权范围外');
-    assert.equal(resolveDrivingCwd(sibling, dirs), null, '仓库外平级兄弟 worktree 须显式写进 WORKDIRS');
-    assert.equal(resolveDrivingCwd(join(wtRoot, 'nested', 'deep'), dirs), null);
-    assert.equal(resolveDrivingCwd('/definitely/not/here', dirs), null);
-    assert.notEqual(resolveDrivingCwd(outside, dirs), realA, 'fail-closed 不是"归位到 dirs[0]"——那会静默换掉驾驶目标');
-  });
-
-  test('resolveDrivingCwd 挡 symlink 逃逸', { skip: process.platform === 'win32' }, () => {
-    assert.equal(resolveDrivingCwd(join(wtRoot, 'escape'), dirs), null);
-  });
-
-  // ⑤ 热移除保护。产品判据是「工作区被移出 WORKDIRS 后，该目录上的已开会话继续运行、仅拒新开」
-  // （CLAUDE.md 工作区热加载那段）。只拿新 workDirs 校验的话，这类实例中途 EnterWorktree 会被拒，
-  // instance.cwd 停在旧值 —— 复发「历史消息加载失败」，而且是静默的。
-  //
-  // 【为什么这不是给范围门开口子】放行集只多出「该实例创建时所属的那个工作区」，而它的 CLI
-  // 本来就在那个目录里跑着、早已能读写那里 —— 不新增任何能力。别的目录一律照旧拒。
-  test('instanceAuthorizedDirs：白名单里有原授权根时原样返回', () => {
-    assert.deepEqual(instanceAuthorizedDirs(dirs, realA), dirs);
-    assert.deepEqual(instanceAuthorizedDirs(dirs, null), dirs);
-  });
-
-  test('instanceAuthorizedDirs：原授权根被热移除后仍保留给该实例', () => {
-    const afterRemoval = [realB]; // realA 被移出 WORKDIRS，但它上面还有 live 实例
-    assert.deepEqual(instanceAuthorizedDirs(afterRemoval, realA), [realB, realA]);
-    assert.equal(
-      resolveDrivingCwd(join(wtRoot, 'feature-x'), instanceAuthorizedDirs(afterRemoval, realA)),
-      realpathSync(join(wtRoot, 'feature-x')),
-      '热移除后该实例的 worktree 切换被拒 = instance.cwd 停在旧值，静默复发历史加载失败',
-    );
-  });
-
-  test('instanceAuthorizedDirs：保留的只有它自己那一个根，别的仍越界', () => {
-    const relaxed = instanceAuthorizedDirs([realB], realA);
-    assert.equal(resolveDrivingCwd(outside, relaxed), null);
-    assert.equal(resolveDrivingCwd(sibling, relaxed), null);
-    assert.equal(resolveDrivingCwd(join(wtRoot, 'nested', 'deep'), relaxed), null);
-  });
-
-  test('resolveDrivingCwd 非法入参拒绝', () => {
-    assert.equal(resolveDrivingCwd('', dirs), null);
-    assert.equal(resolveDrivingCwd(null, dirs), null);
-    assert.equal(resolveDrivingCwd(realA, []), null);
-    assert.equal(resolveDrivingCwd(realA, null), null);
-  });
-
   // ⑥ worktree 目录被删掉之后的归属推导（2026-09-13 真机形态，会话 5a8793ca）。
   //
   // 【为什么①~⑤全都答不了这个问题】它们一律先 realpath 再判，面对一条指向已删目录的 cwd
@@ -511,7 +470,7 @@ test.describe('SCOPE-01: 托管 worktree 的派生放行', () => {
   // 这条判据存在的前提就是它解析不了。安全性不靠 realpath 兜：**返回值恒取自 dirs**（已 realpath
   // 的白名单本身），候选路径一个字节都不进返回值，没有 symlink 逃逸面。代价是前缀比较要求 cwd
   // 与 dirs 同规范；生产路径上这一条成立（instance.cwd 恒来自 createSessionWorktree 或
-  // resolveDrivingCwd，两者给的都是 realpath 后的串），万一不成立也只是判不出、退回今天的行为，
+  // 授权判据，两者给的都是 realpath 后的串），万一不成立也只是判不出、退回今天的行为，
   // 失败方向是「不自愈」而不是「错放行」。
   test('resolveGoneWorktreeParent：worktree 目录已删时推出父仓', () => {
     assert.equal(
@@ -524,7 +483,7 @@ test.describe('SCOPE-01: 托管 worktree 的派生放行', () => {
     );
   });
 
-  test('resolveGoneWorktreeParent：路径还在时让位——不抢 resolveManagedWorktree 的活', () => {
+  test('resolveGoneWorktreeParent：路径还在时让位——活着的 worktree 由授权判据认', () => {
     assert.equal(
       resolveGoneWorktreeParent(join(wtRoot, 'feature-x'), dirs), null,
       '对活着的 worktree 也回落父仓 = 文件面板永远看不到 worktree 里的改动，等于把这个功能废掉',

@@ -82,6 +82,11 @@ export function formatCalendarDayLabel(ts, now) {
   return sameYear ? md : `${d.getFullYear()}年${md}`;
 }
 
+// 抽屉会话行 / 首页最近会话行的时间：与消息流的日期行同一套文案（跟界面语言走，不跟浏览器 locale）。
+export function formatSessionRowTime(ts, { now = Date.now() } = {}) {
+  return `${formatCalendarDayLabel(ts, now)} ${formatClockHm(ts)}`;
+}
+
 // marker → 可直接 textContent 的文案。day 行走微信形态单行「今天 09:00」。
 // 若将来要「日期行只写日期、时间另起一行」，只改这里的模板串，判定层零改动。
 export function formatMessageTimeMarker(marker, { now = Date.now() } = {}) {

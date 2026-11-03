@@ -124,6 +124,33 @@ test.describe('send()', () => {
     s.dispose();
   });
 
+  // 验收 O53 / O26：未 pin 模型的续接会话（defaultModel / attemptedModel 都空），用户没动模型，前端原样带回
+  // init 报的在跑模型。那就是当前在跑的；再 setModel 一次只多一次控制请求（O26：transcript 里多出一条 /model）。
+  test('未 pin、本进程从没切过：带来的正是 init 报的在跑模型 → 不 setModel，差分基准记下它', async () => {
+    const { s } = makeSession();
+    s.reportedModel = 'grok-4.7[1m]';
+    let calls = 0;
+    s.q = { setModel() { calls++; return Promise.resolve(); } };
+    assert.equal(await s.send('hi', 'grok-4.7[1m]'), true);
+    assert.equal(calls, 0, '在跑的就是它，不该再下发 setModel');
+    assert.equal(s.attemptedModel, 'grok-4.7[1m]');
+    s.dispose();
+  });
+
+  // 上一条的边界：init 快照只在「从没尝试过切换」时可信。切过一次以后它就过期了，拿它当差分依据会让
+  // 「切走再切回」被判成无变化（agent.js 构造函数注释点名否决的那条路）。
+  test('切过一次之后切回 init 报的模型 → 照常 setModel', async () => {
+    const { s } = makeSession();
+    s.reportedModel = 'grok-4.7[1m]';
+    const calls = [];
+    s.q = { setModel(m) { calls.push(m); return Promise.resolve(); } };
+    await s.send('a', 'grok-4.5');
+    s.pendingTurns = 0;
+    await s.send('b', 'grok-4.7[1m]');
+    assert.deepEqual(calls, ['grok-4.5', 'grok-4.7[1m]']);
+    s.dispose();
+  });
+
   test('model 变化 → 调 setModel + activeModel 更新', async () => {
     const { s } = makeSession({ model: 'sonnet' });
     let setModelCalled = null;
@@ -636,6 +663,16 @@ test.describe('fetchUsage()（statusline 5h/7d 数据源：实验性 usage RPC +
     s.dispose();
   });
 
+  test('#450 请求带 skipBehaviors:true（只取额度，不让 CLI 每次扫近 7 天 transcript 填 behaviors）', async () => {
+    const { s } = makeSession();
+    const seen = [];
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async (opts) => { seen.push(opts); return {}; } };
+    await s.fetchUsage(1500, { minIntervalMs: 0 });
+    assert.deepEqual(seen, [{ skipBehaviors: true }],
+      '没传 skipBehaviors：CLI 会为没人读的 behaviors 段全量扫盘，在大机器上把这条 RPC 推过 1.5s 超时、额度栏停更');
+    s.dispose();
+  });
+
   test('无 q（实例未 start）→ null（不崩）', async () => {
     const { s } = makeSession();
     s.q = null;
@@ -666,7 +703,7 @@ test.describe('fetchUsage()（statusline 5h/7d 数据源：实验性 usage RPC +
 });
 
 // SDK get_usage 在 CLI 侧不是"读一个内存里的百分比"：CLI 2.1.220 实测，它 = 一次真实网络请求
-// + 一次全量 transcript 扫盘（includeBehaviors 默认 true，SDK 侧无参数可传）。而 statusline 每
+// + 一次全量 transcript 扫盘（后者已用 skipBehaviors 关掉，见 #450 那条用例）。而 statusline 每
 // 10s 兜底轮询 + 每个 assistant usage 边界都会把它拉起。额度是 5h/7d 窗口、按分钟变化——
 // 频率与数据变化率严重失配，是 1500ms 偶发超时的结构性来源。now 注入而非假时钟：纯函数式、零 flake。
 test.describe('fetchUsage() 节流（昂贵 RPC 的调用频率对齐数据变化率）', () => {

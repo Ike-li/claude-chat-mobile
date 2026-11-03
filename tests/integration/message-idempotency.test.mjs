@@ -18,7 +18,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { reserveFreePort, waitForServerReady } from './_spawn-server.mjs';
+import { importServerInProcess, waitForServerReady } from './_spawn-server.mjs';
 
 let port, dataDir, httpServer, io;
 
@@ -30,12 +30,11 @@ async function startServer(authToken = 'msg-idempotency-test-token') {
   for (const k of ['PORT', 'AUTH_TOKEN', 'IDLE_TIMEOUT_MS', 'WORK_DIR', 'CCM_DATA_DIR',
     'CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   process.env.CCM_DATA_DIR = dataDir;
-  process.env.PORT = String(await reserveFreePort());
   process.env.IDLE_TIMEOUT_MS = '10000';
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = authToken;
 
-  const serverModule = await import('../../app/server.js');
+  const serverModule = await importServerInProcess();
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
@@ -109,20 +108,24 @@ test.describe(
       const client = createClient();
       await client.waitFor(e => e.type === 'instances');
 
+      // 带 composeId 开新会话：不带就回退到上一条用例的查看实例，它的回合还在跑，会被忙碌闸拒收。
       const ack1 = await new Promise((resolve, reject) => {
-        client.socket.timeout(30000).emit('user:message', { text: '回复"1"一个字', clientMessageId: `test-a-${Date.now()}` }, (err, res) => {
+        client.socket.timeout(30000).emit('user:message', { text: '回复"1"一个字', clientMessageId: `test-a-${Date.now()}`, composeId: `test-compose-${Date.now()}` }, (err, res) => {
           if (err) reject(err); else resolve(res);
         });
       });
-      assert.equal(ack1.ok, true);
+      assert.equal(ack1.ok, true, JSON.stringify(ack1));
       assert.ok(!ack1.deduped);
+
+      // 回合进行中服务端拒收新消息（busy），等这一轮收尾再发第二条。
+      await client.waitFor(e => e.type === 'result' && e.instanceId === ack1.instanceId, 60000);
 
       const ack2 = await new Promise((resolve, reject) => {
         client.socket.timeout(10000).emit('user:message', { text: '回复"2"一个字', instanceId: ack1.instanceId, clientMessageId: `test-b-${Date.now()}` }, (err, res) => {
           if (err) reject(err); else resolve(res);
         });
       });
-      assert.equal(ack2.ok, true);
+      assert.equal(ack2.ok, true, JSON.stringify(ack2));
       assert.ok(!ack2.deduped, '不同 clientMessageId 不应被误判为重复');
 
       client.disconnect();

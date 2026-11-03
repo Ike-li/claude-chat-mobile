@@ -4,7 +4,7 @@
 // worktree 不再自动分组：每个路径须是显式 workdir，recents 只合并各 workdir 的 session:list。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeRecentSessionsAcrossWorkspaces, summarizeRecentsLoad } from '../../app/public/js/logic.js';
+import { mergeRecentSessionsAcrossWorkspaces, recentsSnapshot, recentWorkspaceChips, summarizeRecentsLoad } from '../../app/public/js/logic.js';
 
 // 空首页「最近活跃」：跨全部 workdir 的 session:list 结果合并后按 lastUsedAt 降序取 topN，
 // 每条带 cwd + workspaceName，方便一键 session:switch 到任意工作区会话（不必先展开侧栏目录树）。
@@ -12,6 +12,14 @@ import { mergeRecentSessionsAcrossWorkspaces, summarizeRecentsLoad } from '../..
 // 父仓的（无 cwd 字段）与 worktree 的（自带真实 cwd）。这里原本无条件写 `cwd`（工作区那个），
 // 把后者的真实 cwd 覆盖掉——点开时按父仓去找 transcript，落到「会话不存在」页。
 // workspaceName 仍取工作区的：归属展示本来就要显示父仓，那一维没有变。
+// 验收 O42：服务端占位「(无标题)」原样透过合并，首页最近会话行在英文界面上也显示成它
+test('mergeRecentSessionsAcrossWorkspaces: 服务端占位标题换成「无标题会话」，空标题同样兜底', () => {
+  const merged = mergeRecentSessionsAcrossWorkspaces([
+    { cwd: '/repo', sessions: [{ id: 'a', title: '(无标题)', lastUsedAt: 2000 }, { id: 'b', lastUsedAt: 1000 }] },
+  ], { limit: 10 });
+  assert.deepEqual(merged.map(r => r.title), ['无标题会话', '无标题会话']);
+});
+
 test('mergeRecentSessionsAcrossWorkspaces: 会话自带 cwd 时不被工作区 cwd 覆盖', () => {
   const wt = '/repo/.claude/worktrees/feature-x';
   const merged = mergeRecentSessionsAcrossWorkspaces([
@@ -32,6 +40,26 @@ test('mergeRecentSessionsAcrossWorkspaces: 会话自带 cwd 时不被工作区 c
   // 正对照：父仓行照旧回落工作区 cwd
   assert.equal(byId['main-1'].cwd, '/repo');
   assert.equal(byId['main-1'].worktree, null);
+});
+
+// 首页的项目胶囊：点一下进那个项目最近的一条。行的 cwd 是会话自己的目录（worktree、scratch 目录），
+// 按它去重的话同一个项目会冒出好几个同名胶囊——「无文件夹」每个会话各一个。
+test('recentWorkspaceChips: 一个项目一个胶囊，取它最近的那一条；worktree、scratch 目录里的会话不各占一个', () => {
+  const recent = mergeRecentSessionsAcrossWorkspaces([
+    { cwd: '/repo', workspaceName: 'repo', sessions: [
+      { id: 'wt', lastUsedAt: 3000, cwd: '/repo-feat', worktree: 'feat' },
+      { id: 'main', lastUsedAt: 1000 },
+    ] },
+    { cwd: '/scratch', workspaceName: '无文件夹', sessions: [
+      { id: 's1', lastUsedAt: 2500, cwd: '/scratch/scratch-2026-09-24-aaaaaa' },
+      { id: 's2', lastUsedAt: 2000, cwd: '/scratch/scratch-2026-09-24-bbbbbb' },
+    ] },
+    { cwd: '/other', workspaceName: 'other', sessions: [{ id: 'o', lastUsedAt: 500 }] },
+  ], { limit: 10 });
+  const chips = recentWorkspaceChips(recent);
+  assert.deepEqual(chips.map(c => c.id), ['wt', 's1', 'o'], '每个项目取最近那一条，按时间序');
+  assert.deepEqual(chips.map(c => c.workspaceName), ['repo', '无文件夹', 'other']);
+  assert.equal(chips[0].cwd, '/repo-feat', '点胶囊进的是那一条会话：cwd 仍是它自己的目录');
 });
 
 test('mergeRecentSessionsAcrossWorkspaces: 跨 cwd 合并、按 lastUsedAt 降序截断、补 workspaceName', () => {
@@ -169,5 +197,35 @@ test.describe('summarizeRecentsLoad：拿不到 ≠ 没有', () => {
   test('脏输入不炸：非数组 / 缺 cwd 一律忽略', () => {
     assert.deepEqual(summarizeRecentsLoad(null), { complete: true, failedCount: 0, failedDirs: [] });
     assert.equal(summarizeRecentsLoad([{ timedOut: true }]).complete, true, '无 cwd 无从提示，不计入');
+  });
+});
+
+// ---- recentsSnapshot：先到先画，结论等全部落定 ----
+// 2026-10-31 性能计划 2d：首页不再等齐所有工作区的 session:list，先回的先画。但「还没有最近会话」
+// 是对整张表的结论——慢的那个没回之前先说出来，下一刻又冒出行，等于先宣布了一件没被证实的事。
+test.describe('recentsSnapshot：先回的先画，没回齐不下结论', () => {
+  const pending = cwd => ({ cwd, sessions: [], pending: true });
+
+  test('先回的那个是空的、别的还没回 → 先不画（不能先出「还没有最近会话」）', () => {
+    const r = recentsSnapshot([{ cwd: '/a', sessions: [] }, pending('/b')]);
+    assert.deepEqual(r, { recent: null, settled: false });
+  });
+
+  test('先回的那个有行 → 先画这些行，但还没落定', () => {
+    const r = recentsSnapshot([pending('/a'), { cwd: '/b', sessions: [{ id: 'x', title: 't', lastUsedAt: 5 }] }]);
+    assert.equal(r.settled, false);
+    assert.deepEqual(r.recent.map(s => s.id), ['x']);
+  });
+
+  test('全部落定且都没有会话 → 画空列表（这时才轮到空提示）', () => {
+    assert.deepEqual(recentsSnapshot([{ cwd: '/a', sessions: [] }, { cwd: '/b', sessions: [], timedOut: true }]), { recent: [], settled: true });
+  });
+
+  test('全部落定 → 与一次性合并的结果相同', () => {
+    const lists = [
+      { cwd: '/a', sessions: [{ id: 'old', title: 't', lastUsedAt: 1 }] },
+      { cwd: '/b', sessions: [{ id: 'new', title: 't', lastUsedAt: 9 }] },
+    ];
+    assert.deepEqual(recentsSnapshot(lists, { limit: 8 }), { recent: mergeRecentSessionsAcrossWorkspaces(lists, { limit: 8 }), settled: true });
   });
 });

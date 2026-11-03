@@ -648,15 +648,28 @@ const VAPID_SAMPLE = 'test-vapid-public-key-not-a-real-secret';
 
 // userAgent / standalone 可覆写：订阅失败的解释按平台分岔（Chromium 系走 FCM、iOS 走 Apple），
 // 只有从 UA 走通 environment() → describeSubscribeError 这条链，才验得到分岔接线是对的。
-function pushReadyContext({ serviceWorker, fetch: fetchFn, alerts, userAgent = 'Mozilla/5.0 (Linux; Android 14)', standalone }) {
+function makePushSubscribeResult() {
+  // #381：explain() 写行内 #pushSubscribeResult，不再走 alert。测试用同款 DOM 替身收集文案。
+  const classes = new Set(['hidden']);
+  return {
+    textContent: '',
+    className: 'hidden',
+    classList: {
+      add(...names) { names.forEach(n => classes.add(n)); },
+      remove(...names) { names.forEach(n => classes.delete(n)); },
+      contains: (n) => classes.has(n),
+    },
+  };
+}
+
+function pushReadyContext({ serviceWorker, fetch: fetchFn, userAgent = 'Mozilla/5.0 (Linux; Android 14)', standalone }) {
   return createAppContext({
-    dom: { btnPush: { classList: { add() {}, remove() {} } } },
+    dom: { btnPush: { classList: { add() {}, remove() {} } }, pushSubscribeResult: makePushSubscribeResult() },
     dependencies: {
       navigator: { serviceWorker, userAgent, ...(standalone === undefined ? {} : { standalone }) },
       window: { isSecureContext: true, PushManager: function () {} },
       Notification: { permission: 'default', requestPermission: async () => 'granted' },
       fetch: fetchFn,
-      alert: message => alerts.push(message),
       console: { warn() {}, log() {}, error() {} },
       storage: { getItem: () => null, setItem() {} },
     },
@@ -666,8 +679,7 @@ function pushReadyContext({ serviceWorker, fetch: fetchFn, alerts, userAgent = '
 test.describe('订阅失败的可诊断性', () => {
   // 归类不出来的错误必须原样带到 UI。这是本段的原始契约（2026-07-27 真机：只弹"请稍后重试"，
   // 排查无从下手），加了 FCM 分类之后依然成立——分类只该拦它认得的那一类，其余一律放行原文。
-  async function subscribeAndCollectAlert(errorMessage, ctxOverrides = {}) {
-    const alerts = [];
+  async function subscribeAndCollectResult(errorMessage, ctxOverrides = {}) {
     const registration = {
       pushManager: {
         getSubscription: async () => null,
@@ -677,24 +689,23 @@ test.describe('订阅失败的可诊断性', () => {
     const context = pushReadyContext({
       serviceWorker: { register: async () => registration, ready: Promise.resolve(registration) },
       fetch: async () => ({ ok: true, json: async () => ({ key: VAPID_SAMPLE }) }),
-      alerts,
       ...ctxOverrides,
     });
     const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
     await notifications.setup();
     await notifications.requestSubscription();
-    return alerts.join('\n');
+    return context.dom.pushSubscribeResult.textContent || '';
   }
 
   test('归类不出的错误 → 原文出现在用户可见的提示里', async () => {
-    const shown = await subscribeAndCollectAlert('QuotaExceededError: registration limit reached');
+    const shown = await subscribeAndCollectResult('QuotaExceededError: registration limit reached');
     assert.match(shown, /QuotaExceededError: registration limit reached/, `真实错误必须带到 UI，实际提示：${shown}`);
   });
 
   // 中国大陆网络下 Chromium 系卡的就是这一句。原文 'push service error' 对用户是天书，且它有
   // 明确的下一步；更要紧的是当场回答"是不是得一直开着代理"——不答这句，人会以为推送要长期挂梯子。
   test('连不上 FCM → 说人话 + 给下一步，且讲明代理只需订阅那一次', async () => {
-    const shown = await subscribeAndCollectAlert('Registration failed - push service error');
+    const shown = await subscribeAndCollectResult('Registration failed - push service error');
     assert.match(shown, /连不上推送服务/, `实际提示：${shown}`);
     assert.match(shown, /重试一次/, `必须给出下一步动作，实际提示：${shown}`);
     assert.match(shown, /关掉代理仍能正常收推送/, `必须回答"要不要一直挂着代理"，实际提示：${shown}`);
@@ -703,7 +714,7 @@ test.describe('订阅失败的可诊断性', () => {
   // iOS 的 endpoint 在 Apple，压根不经 Google。给 iPhone 用户提代理是把人指向完全错误的
   // 排查方向，比不解释更糟——这里验的是 UA → environment() → describeSubscribeError 的分岔接线。
   test('同一句错误在 iOS 上不提代理（那条路走 Apple，不经 Google）', async () => {
-    const shown = await subscribeAndCollectAlert('Registration failed - push service error', {
+    const shown = await subscribeAndCollectResult('Registration failed - push service error', {
       userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
       standalone: true,
     });
@@ -712,7 +723,6 @@ test.describe('订阅失败的可诊断性', () => {
   });
 
   test('POST /push/subscribe 返回非 2xx 时，HTTP 状态码出现在提示里', async () => {
-    const alerts = [];
     const fakeSubscription = { endpoint: 'https://push.example/a', toJSON() { return { endpoint: this.endpoint, keys: { p256dh: 'a', auth: 'b' } }; } };
     const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
     const context = pushReadyContext({
@@ -720,14 +730,13 @@ test.describe('订阅失败的可诊断性', () => {
       fetch: async url => (String(url).includes('vapid')
         ? { ok: true, json: async () => ({ key: VAPID_SAMPLE }) }
         : { ok: false, status: 403, json: async () => ({}) }),
-      alerts,
     });
     const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
 
     await notifications.setup();
     await notifications.requestSubscription();
 
-    const shown = alerts.join('\n');
+    const shown = context.dom.pushSubscribeResult.textContent || '';
     assert.match(shown, /403/, `HTTP 状态码必须带到 UI，实际提示：${shown}`);
   });
 });

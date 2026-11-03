@@ -1,9 +1,9 @@
 // tests/unit/logic-session-panel.test.mjs —— 工作区抽屉 SWR 保鲜 + 按目录局部重建的纯逻辑单测。
-// 覆盖 shouldRerenderSessionList / buildDirInstanceSignatures / diffDirSignatures（见 app/public/js/logic.js
-// 对应函数注释）。同域拆分惯例：新行为域另起文件，不往 logic-session.test.mjs 里塞。
+// 覆盖 shouldRerenderSessionList / buildDirInstanceSignatures / diffDirSignatures / dirPanelStructuralKey
+// （见 app/public/js/logic.js 对应函数注释）。同域拆分惯例：新行为域另起文件，不往 logic-session.test.mjs 里塞。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures } from '../../app/public/js/logic.js';
+import { shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, dirPanelStructuralKey } from '../../app/public/js/logic.js';
 
 test('shouldRerenderSessionList: 首次拿到数据（此前无缓存/正显示骨架屏）恒需要渲染', () => {
   assert.equal(shouldRerenderSessionList({ hasPrevEntry: false, nextSessions: [] }), true);
@@ -46,6 +46,25 @@ test('shouldRerenderSessionList: total 变化需要重渲染（「还有 N 个�
     prevSessions: sessions, prevHasMore: true, prevTotal: 60,
     nextSessions: sessions, nextHasMore: true, nextTotal: 60,
   }), false);
+});
+
+// open（验收 O46）：开着、但被分页挤出本页的会话的元数据，服务端单独补回。它的成员跟着「开了哪些会话」走，
+// 主列表一个字都不变时也会增删、改标题——不进判据，那几行就停在首次渲染的样子（或一直是「新会话」）。
+test('shouldRerenderSessionList: open 组增删或改标题需要重渲染，主列表不变也不豁免', () => {
+  const sessions = [{ id: 's1', title: 'Foo', lastUsedAt: 100 }];
+  const base = { hasPrevEntry: true, prevSessions: sessions, nextSessions: sessions };
+  assert.equal(shouldRerenderSessionList({ ...base, prevOpen: [], nextOpen: [{ id: 'old', title: 'Old', lastUsedAt: 1 }] }), true);
+  assert.equal(shouldRerenderSessionList({ ...base, prevOpen: [{ id: 'old', title: 'Old', lastUsedAt: 1 }], nextOpen: [{ id: 'old', title: 'Renamed', lastUsedAt: 1 }] }), true);
+  assert.equal(shouldRerenderSessionList({ ...base, prevOpen: [{ id: 'old', title: 'Old', lastUsedAt: 1 }], nextOpen: [{ id: 'old', title: 'Old', lastUsedAt: 1 }] }), false);
+});
+
+// #289 方案 F：镜像锁转变后 revalidate 回来，状态不变、只有来源变（终端 → 桌面端）也得重画——
+// 行上的 dataset.terminalSource 与 chip 措辞只在重画时更新，不重画就停在旧来源上。
+test('shouldRerenderSessionList: 只有 terminalSource 变也要重渲染', () => {
+  const prev = [{ id: 's1', title: 'Foo', lastUsedAt: 100, terminal: 'busy', terminalSource: 'cli' }];
+  const next = [{ id: 's1', title: 'Foo', lastUsedAt: 100, terminal: 'busy', terminalSource: 'claude-desktop' }];
+  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: prev, nextSessions: next }), true);
+  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: prev, nextSessions: prev.map(s => ({ ...s })) }), false);
 });
 
 test('shouldRerenderSessionList: 空/未定义入参安全，不抛异常', () => {
@@ -162,4 +181,30 @@ test('shouldRerenderSessionList: 旧服务端不发 pinned（两侧 undefined）
   assert.equal(shouldRerenderSessionList({
     hasPrevEntry: true, prevSessions: same, nextSessions: same,
   }), false);
+});
+
+// 拖动排序只换目录顺序、不改集合：结构性指纹必须不变，否则调用方会把它当结构性变化去全量重建，
+// 顺带把 UX-007「当前工作区强制展开」误套在跟这次换序无关的目录上（回归：2026-10-26）。
+test('dirPanelStructuralKey: 纯换序（集合不变）指纹不变', () => {
+  const a = dirPanelStructuralKey({ dirs: ['/root/a', '/root/b'], viewingInstanceId: 'i1', currentCwd: '/root/a' });
+  const b = dirPanelStructuralKey({ dirs: ['/root/b', '/root/a'], viewingInstanceId: 'i1', currentCwd: '/root/a' });
+  assert.equal(a, b);
+});
+
+test('dirPanelStructuralKey: 目录集合真变了（新增/删除工作区）指纹必须变', () => {
+  const a = dirPanelStructuralKey({ dirs: ['/root/a', '/root/b'], viewingInstanceId: 'i1', currentCwd: '/root/a' });
+  const b = dirPanelStructuralKey({ dirs: ['/root/a', '/root/b', '/root/c'], viewingInstanceId: 'i1', currentCwd: '/root/a' });
+  assert.notEqual(a, b);
+});
+
+test('dirPanelStructuralKey: viewingInstanceId 变了指纹必须变', () => {
+  const a = dirPanelStructuralKey({ dirs: ['/root/a'], viewingInstanceId: 'i1', currentCwd: '/root/a' });
+  const b = dirPanelStructuralKey({ dirs: ['/root/a'], viewingInstanceId: 'i2', currentCwd: '/root/a' });
+  assert.notEqual(a, b);
+});
+
+test('dirPanelStructuralKey: 当前查看 cwd 变了指纹必须变', () => {
+  const a = dirPanelStructuralKey({ dirs: ['/root/a', '/root/b'], viewingInstanceId: 'i1', currentCwd: '/root/a' });
+  const b = dirPanelStructuralKey({ dirs: ['/root/a', '/root/b'], viewingInstanceId: 'i1', currentCwd: '/root/b' });
+  assert.notEqual(a, b);
 });

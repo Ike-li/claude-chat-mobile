@@ -21,11 +21,12 @@ import { dataFile } from '../shared/data-dir.js';
 // 与 sessions.js 同款优先级：CCM_READ_STATE_FILE（仅测试）> CCM_DATA_DIR/read-state.json > data/read-state.json。
 const FILE = process.env.CCM_READ_STATE_FILE || dataFile('read-state.json');
 
-const SEEN_CAP = 500;    // 与前端 unread-tracker.js 的 SEEN_CAP 同值
+const SEEN_CAP = 1000;   // 与前端 unread-tracker.js 的 SEEN_CAP 同值；为什么是 1000 见那边的注释（#300）
 const MANUAL_CAP = 100;  // 同上 MANUAL_CAP
+const FOLDER_CAP = 200;  // 文件夹水位，一个文件夹一条；与前端 FOLDER_CAP 同值
 
 // n=1 单用户：一份全局位点，不按设备分档。多租户那天要先改 docs/hard-rules.md §2 的立场。
-export function createReadStateStore({ file = FILE, now = () => Date.now(), seenCap = SEEN_CAP, manualCap = MANUAL_CAP } = {}) {
+export function createReadStateStore({ file = FILE, now = () => Date.now(), seenCap = SEEN_CAP, manualCap = MANUAL_CAP, folderCap = FOLDER_CAP } = {}) {
   // baselineTs=null 表示「尚未建档」：故意不在 import/启动时就写盘，让基线钉在【第一个客户端真正用到】
   // 的时刻，而不是 server 启动的时刻。
   let state = load(file);
@@ -67,11 +68,15 @@ export function createReadStateStore({ file = FILE, now = () => Date.now(), seen
 
   // 客户端连上时上报本地表 → 归并 → 回权威态。升级时本设备 localStorage 里已有的 seen 表也由这条路
   // 迁移上来（否则升级瞬间用户在本机读过的记录全丢，屏幕上是一整屏假未读）。离线期间攒的位点同理。
+  // folders（文件夹水位）随这趟一起归并：离线时长按「全部标为已读」，水位只在本地，靠重连这一趟带上来。
+  // 键由调用方先换成 session:list 用的那个 cwd 键（见 app.js read:sync），这里只管合并。
   function applyClientState(client) {
     ensureBaseline();
-    const seen = mergeLatest(state.seen, client?.seen);
-    const manual = mergeLatest(state.manual, client?.manual);
-    state = { ...state, seen: capNewest(seen, seenCap), manual: capNewest(manual, manualCap) };
+    const { seen: clientSeen, manual: clientManual } = clampClientState(client, now());
+    const seen = mergeLatest(state.seen, clientSeen);
+    const manual = mergeLatest(state.manual, clientManual);
+    const folders = mergeLatest(state.folders, clampMap(client?.folders, now()));
+    state = { ...state, seen: capNewest(seen, seenCap), manual: capNewest(manual, manualCap), folders: capNewest(folders, folderCap) };
     save();
     return snapshot();
   }
@@ -114,6 +119,39 @@ export function createReadStateStore({ file = FILE, now = () => Date.now(), seen
     return snapshot();
   }
 
+  // 文件夹「全部标为已读」（2026-10-26）：记一条水位而不是逐条写 seen——前端只看得见已加载的那几行，
+  // 更早的会话没加载就标不到，点「显示更多」拉出来一片未读（真机 34 个）；逐条写又会撑爆 SEEN_CAP，
+  // 挤掉的旧记录照样复亮。水位只在 session:list 回执里折进本文件夹那几行（stateForRows），不进快照。
+  function markFolder(folder, at) {
+    const ts = normalizeTs(at, now);
+    if (!isId(folder) || ts === null) return;
+    ensureBaseline();
+    if (!((state.folders[folder] ?? -Infinity) < ts)) return; // 单调不回退，同 markRead
+    state = { ...state, folders: capNewest({ ...state.folders, [folder]: ts }, folderCap) };
+    save();
+  }
+
+  function folderReadAt(folder) {
+    return state.folders[folder] ?? null;
+  }
+
+  // session:list 搭车用的裁剪版：只回这些行的位点（全量表上限 1000 条，抽屉每 12 秒就 revalidate 一次）。
+  // 给了 folder 就把它的水位折进每行 seen：水位之前的活动与手动标记都算看过（判据 manual > seen，前端不用改）。
+  // 裁剪与折叠都安全的前提是前端 hydrate 逐 key 取 max、只增不减。
+  function stateForRows(ids, folder) {
+    const s = ensureBaseline();
+    const floor = folder === undefined ? undefined : s.folders[folder];
+    const seen = {};
+    const manual = {};
+    for (const id of ids || []) {
+      if (!id) continue;
+      const at = Math.max(s.seen[id] ?? -Infinity, floor ?? -Infinity);
+      if (at !== -Infinity) seen[id] = at;
+      if (s.manual[id] !== undefined) manual[id] = s.manual[id];
+    }
+    return { baselineTs: s.baselineTs, seen, manual };
+  }
+
   // 进程退出时同步 flush（与 sessions.js 对称）：先 fence 作废在飞异步写，再同步权威写。
   function flushSaveSync() {
     clearTimeout(saveTimer);
@@ -130,15 +168,17 @@ export function createReadStateStore({ file = FILE, now = () => Date.now(), seen
   //
   // 用途是让 session:list 把这些会话补进列表（绕过分页截断）。上限 100（MANUAL_CAP）已由存储层保证，
   // 这里不再截断——截了就等于让「第 101 条标记」静默消失，而它恰恰是用户最近标的那条。
-  function manualUnreadIds() {
+  // floor：该文件夹的水位，水位之前标的已被「全部标为已读」盖过。别的文件夹的 id 也会被它筛一遍，无妨——
+  // 调用方随后按 cwd 取行（listSessionsByIds），不属于这个文件夹的本来就取不到。
+  function manualUnreadIds({ floor } = {}) {
     const s = ensureBaseline();
-    return Object.keys(s.manual).filter(id => s.manual[id] > (s.seen[id] ?? -Infinity));
+    return Object.keys(s.manual).filter(id => s.manual[id] > Math.max(s.seen[id] ?? -Infinity, floor ?? -Infinity));
   }
 
-  return { getState: snapshot, applyClientState, markRead, setManual, manualUnreadIds, flushSaveSync };
+  return { getState: snapshot, applyClientState, markRead, setManual, markFolder, folderReadAt, stateForRows, manualUnreadIds, flushSaveSync };
 }
 
-const EMPTY = () => ({ baselineTs: null, seen: {}, manual: {} });
+const EMPTY = () => ({ baselineTs: null, seen: {}, manual: {}, folders: {} });
 
 // 损坏/形状不对一律当作没有——缓存类状态，宁可重新建档也不能让 server 起不来。
 function load(file) {
@@ -152,16 +192,37 @@ function load(file) {
     || typeof raw.baselineTs !== 'number' || !Number.isFinite(raw.baselineTs)) {
     return EMPTY();
   }
-  return { baselineTs: raw.baselineTs, seen: numericMap(raw.seen), manual: numericMap(raw.manual) };
+  return { baselineTs: raw.baselineTs, seen: numericMap(raw.seen), manual: numericMap(raw.manual), folders: numericMap(raw.folders) };
 }
 
 function isId(v) {
   return typeof v === 'string' && v.length > 0;
 }
 
+// 位点时间戳来自客户端时钟，一律 clamp 到服务端 now（#300）：设备时钟偏快时写下的未来位点，会让
+// 此后那段偏差里服务端来的新活动（lastUsedAt 是服务端时钟）在所有设备上被吞掉。
 function normalizeTs(at, now) {
   if (at === undefined) return now();
-  return typeof at === 'number' && Number.isFinite(at) ? at : null;
+  return typeof at === 'number' && Number.isFinite(at) ? Math.min(at, now()) : null;
+}
+
+function clampMap(src, ts) {
+  const out = numericMap(src);
+  for (const k of Object.keys(out)) if (out[k] > ts) out[k] = ts;
+  return out;
+}
+
+// read:sync 上报的整表 clamp。同一会话的 seen 与 manual 都落在未来时，各自 clamp 会把两者压成相等，而相等算已读——
+// 快钟设备离线时「先读、后标未读」的那次标记就被吞掉（Codex review #348）。原本 manual > seen 的，clamp 后仍要保住先后。
+function clampClientState(client, ts) {
+  const rawSeen = numericMap(client?.seen);
+  const rawManual = numericMap(client?.manual);
+  const seen = clampMap(rawSeen, ts);
+  const manual = clampMap(rawManual, ts);
+  for (const id of Object.keys(manual)) {
+    if (id in seen && rawManual[id] > rawSeen[id] && seen[id] >= manual[id]) seen[id] = manual[id] - 1;
+  }
+  return { seen, manual };
 }
 
 function numericMap(src) {
@@ -193,9 +254,11 @@ function capNewest(map, cap) {
 // 默认实例：server 全局共用一份（n=1 单用户，见上方工厂头注）。
 const store = createReadStateStore();
 
-export const getReadState = store.getState;
 export const applyClientReadState = store.applyClientState;
 export const markRead = store.markRead;
 export const setManualUnread = store.setManual;
+export const markFolderRead = store.markFolder;
+export const folderReadAt = store.folderReadAt;
+export const stateForRows = store.stateForRows;
 export const manualUnreadIds = store.manualUnreadIds;
 export const flushSaveSync = store.flushSaveSync;

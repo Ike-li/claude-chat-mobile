@@ -101,7 +101,7 @@ npm run setup
 The wizard:
 
 1. Creates a random `AUTH_TOKEN`, writes it to `ccm.config.json`, and sets mode `0600`.
-2. Asks which project folder should open on your phone. It must be an absolute (or `~/`) path; an empty answer or your home directory itself is rejected. After the first one you can keep adding more folders (press Enter to finish) — they are all written to the `WORKDIRS` array, and **the first entry is the one your phone opens by default**. To add or remove workspaces later, edit `WORKDIRS` in the config; it hot-reloads on save.
+2. Asks which project folder should open on your phone. Give an absolute (or `~/`) path; your home directory itself is rejected. **Press Enter to skip** — it works with no folders connected at all; pick one from your phone when you start a session, or just use "No folder". After the first one you can keep adding more folders (press Enter to finish) — they are all written to the `WORKDIRS` array, and **the first entry is the one your phone opens by default**. To add or remove workspaces later, edit `WORKDIRS` in the config; it hot-reloads on save.
 3. Asks how your phone will reach this machine (LAN only / Cloudflare / encrypted tunnel VPN / reverse proxy and hosted tunnels / direct public exposure). Press Enter to skip; if you pick one it is stored as `ACCESS_PROFILE`, `doctor` and the phone security check tailor their checks to it, and the wizard ends with the matching docs pointer.
 4. Asks whether to enable the phone file editor's direct writes (the only write path that bypasses the Agent tool-approval chain). Enter keeps the default on; answering `n` writes `FILE_EDIT=off`.
 5. On macOS, asks whether to compile the [desktop console](#optional-macos-desktop-console). Not compiled by
@@ -153,7 +153,9 @@ new file wins).
 
 > ⚠️ **Do not "upgrade" with `npm run setup --force`.** `--force` is a clean reinstall and mints a
 > new `AUTH_TOKEN` — every approved device stops working and each phone has to be approved again.
-> When a config already exists, setup refuses and points at `migrate`; do what it says.
+> **The refusal only exists in non-interactive mode (`--yes`)**: interactive `npm run setup` never reaches it
+> (and ignores `--force`) — it just asks whether to overwrite, and answering y mints a new token.
+> To upgrade, run `node scripts/config.js migrate`.
 
 On a legacy deployment the desktop console shows a banner and a "Migrate" button at the top of the
 config window, so you never have to go back to a terminal.
@@ -189,7 +191,7 @@ node scripts/setup.js \
   --hooks=off
 ```
 
-- `--work-dir` is required and never silently falls back to `$HOME`.
+- `--work-dir` is optional: leave it out and no folder is connected (pick one from your phone when you start a session); if given, it must be an absolute path and not your home directory itself. It never falls back to `$HOME`, and an explicitly empty value (`--work-dir=`, usually an unexpanded variable) is rejected.
 - `--hooks` accepts only `on` or `off`; `on` changes user-level Claude hooks configuration.
 - `--desktop` accepts only `on` or `off` and defaults to `off`; `on` runs `swiftc`. On a
   non-macOS host, an explicit `--desktop=on` is rejected with a reason rather than ignored.
@@ -214,12 +216,14 @@ For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry
 `WORKDIRS` **hot-reloads** — edits take effect immediately, no restart. Which settings hot-reload is
 decided by the `reload` flag in the schema; `node scripts/config.js schema` marks them on each entry
 (only `WORKDIRS` when this was written — trust the schema output, not this sentence).
-A git worktree outside the repository (`../repo-<branch>` and friends) must be listed as its own absolute path.
-**The one exception is a "managed worktree"**: anything under `<allowlisted workspace>/.claude/worktrees/<single-segment name>`
-(the default landing spot for `EnterWorktree`, `--worktree`, and agent isolation) is authorized by derivation via
-`resolveManagedWorktree` without being listed in `WORKDIRS`, and its sessions are folded into the parent repo's session
-list. Depth is fixed at 1, the prefix is compared after `realpath`, and a non-existent directory is rejected.
-Anything outside that shape still has to be listed explicitly.
+
+`WORKDIRS` is your list of **connected folders**, with the same meaning as the folder list the Claude desktop app opens up to your phone:
+
+- **Subfolders just work**: once `~/code` is connected, a session in `~/code/app` needs no separate entry; each subfolder that has sessions gets its own section in the drawer. When connected folders nest, the deepest one owns the path.
+- **git worktrees follow their repository**: worktrees inside a connected repository (such as the managed ones under `.claude/worktrees/`) are usable, and their sessions are folded into the repository's list. Sibling worktrees outside the repository (`../repo-<branch>`) don't follow it — as in the official desktop app, such a worktree is just another folder: connect it on its own ("+ Choose a folder" on the phone works) and it gets its own section. If its parent folder is connected, it is already in scope and still folds into the repository. Ownership is verified from the repository's side in both directions (the worktree's `.git` pointer and the repository's back-link must agree), and git is never executed to decide it.
+- **Can't be connected**: your home folder itself and the disk root (the config file rejects them too). `~/.claude` and this app's own data directory can't be added from the phone, and connecting a parent (say `~/code`, with this app inside it) doesn't turn them into session directories — unless you list them in `WORKDIRS` explicitly in the config file. A worktree under a repository's `.claude/worktrees/` can't be added on its own; add the repository it belongs to.
+- **Pick and disconnect folders from the phone**: tap the folder chip on the new-session page, or "＋ Choose a folder" at the top of the drawer — it browses folder names inside your home folder only, and greys out the ones that can't be added with the reason. "Start a session here" connects the folder first (one that is already connected isn't added twice), and a folder you create there is connected and opened right away. The "⋯" next to a connected folder in the drawer disconnects it: it just stops showing up and you can't start new sessions in it — its files and session history stay untouched, and sessions already open keep running. Adding and disconnecting both write back into `WORKDIRS` in the config file and take effect immediately. Two cases can't be changed from the phone: the folder list comes from environment variables (the two legacy keys below), or there is no `ccm.config.json` (legacy `.env` only) — run `npm run config:migrate` on the computer to create one (it keeps your token; see [Upgrading from a legacy `.env`](#upgrading-from-a-legacy-env)).
+- **No folder**: a new session can also live outside every folder, in a throwaway directory the app creates (on macOS under `~/Library/Application Support/claude-chat-mobile/scratch-workspaces`, on Linux under `${XDG_DATA_HOME:-~/.local/share}/claude-chat-mobile/scratch-workspaces`). It is created when the first message is sent and deleted together with the session (kept if other sessions still use it).
 
 The legacy `WORK_DIRS` (comma-separated) and `WORK_DIRS_FILE=workdirs.json` (external file) still work.
 Priority: shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > config-file inline `WORKDIRS`.
@@ -334,7 +338,7 @@ To revoke a mistaken approval or a lost device:
 node scripts/device.js deny <ID>
 ```
 
-Only two things skip device approval: a connection already validated by Cloudflare Access JWT, or a **genuine local connection** — the peer is loopback **and** the Host header is `localhost` / `127.0.0.1` / `::1` (an empty Host does not count).
+Only two things skip device approval: a connection already validated by Cloudflare Access JWT, or a **genuine local connection** — the peer is loopback **and** the Host header is `localhost` or `127.0.0.1` (an empty Host does not count; a page opened as `http://[::1]:<port>` does not skip it and needs one approval).
 Requests arriving through cloudflared / nginx / an SSH reverse proxy also have `127.0.0.1` as their peer, but their Host is a public domain, so they **still need approval**. Normal LAN access and temporary quick tunnels do not skip it either. The rule lives in `shouldBypassDeviceApproval` in `app/src/auth/rate-limiter.js`.
 
 ## 8. Complete the first-run check
@@ -352,9 +356,9 @@ On the phone, verify:
    - Both cases converge on the same action: **get `claude` through one normal turn in your host terminal, in that same workspace directory**, then retry from the phone.
 3. **Green path (the terminal can already hold a conversation):** send a harmless prompt such as “Reply with OK only.” The response streams and reaches a finished-turn state.
 4. Settings show model, permission mode, effort, and service status.
-5. If Web Push is enabled, use “Send a test push” now instead of discovering a broken path during a real approval.
+5. If Web Push is enabled, use “Send a test notification” now instead of discovering a broken path during a real approval.
 
-The minimum path is now complete. Both bridges below are optional enhancements and are not required for Web-originated sessions.
+The minimum path is now complete. The sections below are optional enhancements and are not required for Web-originated sessions.
 
 ## Optional: CLI statusline bridge
 
@@ -368,7 +372,7 @@ npm run statusline:install
 - `status` is read-only and does not modify `~/.claude`.
 - `install` is explicit opt-in and wraps an existing Claude CLI statusline command. The installer refuses when no statusline is configured.
 - Reopen the terminal Claude CLI and restart the persistent server after installation.
-- `npm run statusline:uninstall` restores the original command from its manifest and refuses to overwrite drifted configuration.
+- `npm run statusline:uninstall` restores the original command from its manifest and refuses to overwrite drifted configuration. It also removes `~/.claude/ccm/statusline-v1` (including snapshots), and `~/.claude/ccm` itself once it is empty.
 
 ## Optional: CLI hooks bridge
 
@@ -386,9 +390,10 @@ npm run hooks:uninstall
 - Open a new terminal Claude CLI session after installation; an existing process does not reload hooks.
 - If the server is offline, the hook writes its file and exits quietly without blocking the CLI.
 - Set `CLI_HOOKS_BRIDGE: false` in the config file to pause server consumption without removing global configuration.
+- `uninstall` removes its own hook entries per the manifest and deletes `~/.claude/ccm/hooks-v1` (the inbox and receipts), plus `~/.claude/ccm` once it is empty. Neither install nor uninstall needs a server restart.
 
-The phone UI can also install or remove the bridge explicitly under Settings → 🖥 This computer → Terminal session
-notifications — a sibling of the "📊 Service status" button on that page, **not** something inside the service status panel.
+The phone UI can also install or remove the bridge explicitly under Settings → 🖥 Host → Terminal session
+alerts — a sibling of the "📊 Service status" button on that page, **not** something inside the service status panel.
 
 ## Optional: macOS desktop console
 
@@ -499,13 +504,14 @@ Follow these steps in order and verify each result before continuing:
 1. Check that node --version is at least 20, which claude finds the command, and claude auth status shows a login.
    Stop and tell me if any check fails; do not install or sign in to claude yourself.
 2. Run npm ci --omit=dev.
-3. Ask me for the absolute workspace path and whether to install the CLI hooks bridge.
+3. Ask me whether to connect a project folder now (if so, confirm its absolute path; skipping is fine,
+   I can pick one from my phone later) and whether to install the CLI hooks bridge.
    Do not use my whole home directory. hooks=on changes ~/.claude/settings.json.
 4. Your shell has no TTY, so do not run the interactive wizard. First unset AUTH_TOKEN WORK_DIR WORK_DIRS PORT
-   CCM_DATA_DIR WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL
+   CCM_DATA_DIR WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL
    so inherited values cannot override the file you are about to write. Then:
    node scripts/setup.js --yes --work-dir=<confirmed absolute path> --hooks=<on or off>
-   If a config file already exists, stop instead of adding --force yourself.
+   (Drop --work-dir if no folder is being connected.) If a config file already exists, stop instead of adding --force yourself.
 5. Run node scripts/doctor.js. Use --fix only when its output calls for a safe permission repair.
 6. Confirm port 3000 is not held by the desktop app or another npm start, then start with `npm start` (headless).
    Verify authenticated /health JSON; do not rely only on the process existing.
@@ -546,6 +552,7 @@ npm run setup -- --help
 | `npm run config:check` | Validate the current configuration |
 | `npm run config:migrate` | Legacy `.env` → `ccm.config.json` |
 | `node scripts/doctor.js` | Preflight self-check. `--fix` tightens config file permissions to 0600; `--env=<file>` diagnoses that specific file |
+| `node scripts/perf-report.js` | Summarise the phone performance records reported into the server log (startup, opening a session, returning to foreground, dropped frames, tap latency) as n·p50·p90·max per device / network / cache; `--since 7d` limits the window. Read-only |
 
 ### Devices and connecting
 
@@ -652,15 +659,68 @@ npm run statusline:install
 npm run hooks:install
 ```
 
+### Upgrading from v1.13.0: connected folders
+
+In v1.13.0 and earlier, `WORKDIRS` was an exact allowlist: a session directory had to be exactly one of the
+entries (plus the managed worktrees under its `.claude/worktrees/`). The new version replaces it with "connected
+folders"; the meaning is described at the end of [step 3](#3-create-local-configuration). **No data migration is
+needed, and your existing `WORKDIRS` keeps working**; what changes is that the same list now lets more through,
+and a few places that used to quietly correct a request now reject it.
+
+**The scope is wider, so review the list before upgrading.** Subfolders now just work, and when connected folders
+nest, the deepest one owns the path. If your list connects a broad parent such as `~/code`, after the upgrade the
+whole subtree can host sessions, and sessions you opened from a terminal anywhere in it show up in the drawer, one
+section per subfolder that has sessions. If you only meant to expose a few projects, replace the parent with
+those. `~/.claude` and this app's data directory are still off limits; connecting their parent doesn't bring them
+along.
+
+**The hooks bridge pushes more.** With the CLI hooks bridge installed, "needs you" and turn-finished events from
+terminal sessions in subfolders now reach your phone too; before, only the listed directories themselves did.
+
+**Adding folders from the phone needs the list in `WORKDIRS` in `ccm.config.json`**; otherwise tapping it only
+tells you it can't be changed. Both fixes below are only picked up at startup, so do them before restarting the
+server:
+
+- Still on `.env` (including a `workdirs.json` that `WORK_DIRS_FILE` points to): run `npm run config:migrate`.
+  It inlines the list and keeps your existing `AUTH_TOKEN` (see
+  [Upgrading from a legacy `.env`](#upgrading-from-a-legacy-env)). If your `ccm.config.json` itself contains
+  `WORK_DIRS_FILE`, edit the file directly: put that list into `WORKDIRS` and delete `WORK_DIRS_FILE`.
+- `WORK_DIRS` or `WORK_DIRS_FILE` exported in your shell: remove them. Environment variables beat the config
+  file, and while they are set the phone can only view the list, not add to it.
+
+**Sibling worktrees still have to be connected explicitly.** A `../repo-<branch>` outside the repository doesn't
+follow the repository, same as before: one you listed keeps working after the upgrade in its own section, and one
+you didn't list won't appear on its own. One case gets a new hint: a worktree entry that already sits inside
+another connected folder (say its parent is connected as a whole) still gets its own section, and
+`node scripts/doctor.js` points out that the entry can go; remove it and its sessions fold back into the
+repository's section.
+
+**Out-of-scope requests are now rejected.** Before, a directory that wasn't on the list was quietly swapped for the
+one you were viewing; now the request is refused. You're most likely to notice this in the offline queue: a queued
+message that would open a session in a folder removed from the list before it went out now stops with a "stopped
+retrying" notice instead of landing in another folder. Resend it by hand if you still want it.
+
+**When a session leaves the scope mid-run, the phone doesn't follow.** If a session started from the phone moves
+into a directory outside the connected folders while it runs (most often `EnterWorktree` into a sibling worktree
+that isn't connected), the phone stays where it was and the session shows a notice. Switch away at that point and
+you won't find the session again; to keep using it on the phone, connect that folder first.
+
+**Finally, reload the page on the phone once.** After the server restarts, a page that was already open on the
+phone is still running the old front end; reload it once to get the folder picker (the folder chip on the
+new-session page and "＋ Choose a folder" at the top of the drawer). If you opened it from a home-screen icon, close it
+fully and open it again.
+
 ### Checking whether there is a new version
 
 The product never checks upstream on its own. Look yourself:
 
 ```bash
-git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+git ls-remote --tags --refs --sort=-v:refname https://github.com/Ike-li/claude-chat-mobile.git | head -1
 ```
 
 That does not require a local git repository (it asks the remote directly), so it works for archive installs too.
+Keep `--sort=-v:refname`: the remote lists tags in dictionary order, so taking the last line without sorting gives `v1.9.1`,
+and every release from `v1.10.0` on sorts before it.
 Your local version:
 
 ```bash
@@ -694,12 +754,12 @@ site data and the installed PWA must be cleared manually.
 |---|---|
 | The server refuses to start, saying `AUTH_TOKEN` is missing | The token is a startup prerequisite; it no longer degrades to a loopback bind. Run `npm run setup` to generate one, then restart |
 | Startup logs list only the local URL, no phone URL | `BIND_MODE=loopback` binds `127.0.0.1` only, so nothing is listening on those LAN addresses. Switch back to the default or `lan` for direct phone access |
-| An agent ran setup but wrote nothing | Interactive mode was used without a TTY; setup now refuses. Use `--yes --work-dir=... --hooks=...` |
+| An agent ran setup but wrote nothing | Interactive mode was used without a TTY; setup now refuses. Use `--yes --hooks=...` (add `--work-dir=...` to connect a folder) |
 | doctor / the server reads the old config | Inherited `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` in the current shell override the file; `unset` them first |
 | `EADDRINUSE :3000` | The desktop app or another npm start owns the port; do not blindly start another |
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
 | Phone is in the main shell, but sending shows `Not logged in · Please run /login` | This is **Claude CLI not logged in**, not a broken CCM token/device gate. On the host run `claude auth status`; if logged out, `/login` inside `claude`, then retry from the phone. **A third-party gateway never shows this line** — it does not use Anthropic login, and an ineffective config surfaces the gateway's own error instead; see "A third-party gateway is ignored" below. See §1 prerequisites |
-| After one wrong token, the correct one is rejected too (HTTP 401) | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). **This tier answers 401 `unauthorized` with no `Retry-After`** — the wording deliberately avoids "too many attempts" when you only got it wrong once. **Wait a few seconds and retry** — a correct token recovers on its own; hammering keeps you inside the lock. Only the 15-minute lockout, which needs 8 consecutive failures, answers `{"status":"rate_limited"}` / HTTP 429 |
+| After one wrong token, the correct one is rejected too (HTTP 429 `cooldown`) | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). Requests inside the lock are not checked against the token: **they get 429 `{"status":"cooldown"}` with `Retry-After`**, distinct from a wrong token (401) and never worded as "too many attempts" — you only got it wrong once. The web UI shows "retrying automatically in Ns" and reconnects on its own; scripts should **wait `Retry-After` seconds and retry**, since hammering keeps you inside the lock. Only the 15-minute lockout, which needs 8 consecutive failures, answers `{"status":"rate_limited"}` |
 | You typed the token correctly but rate limiting still blocks you | Limiting buckets by source, and failures inside one bucket add up. **IPv6 clients are bucketed by /64**, so another device on your subnet typing it wrong will affect you; behind a reverse proxy terminating on loopback, all public clients share a single bucket (see the [deployment guide](deployment.md#换掉入口后ccm-侧的四处连带变化)). Wait out the lockout window, or restart the server to clear it immediately |
 | A third-party gateway is ignored | Put `ANTHROPIC_*` where the CLI reads it: the `env` block of the workspace's `.claude/settings.local.json` or of `~/.claude/settings.json`, or the shell that starts the server; values in `ccm.config.json` are stripped. Only the settings-file route works under the desktop console |
 | CLI session status or notifications are missing | Check the statusline and hooks bridges separately; they solve different problems |

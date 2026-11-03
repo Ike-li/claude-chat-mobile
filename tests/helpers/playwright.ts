@@ -22,8 +22,34 @@ export function captureBrowserErrors(page: Page, options: BrowserErrorCaptureOpt
     if (text.includes('Blocked call to navigator.vibrate')) return;
     const resourceStatus = text.match(/Failed to load resource: the server responded with a status of (\d+)/);
     if (resourceStatus && ignoredResourceStatusCodes.has(Number(resourceStatus[1]))) return;
+    // 用例刻意断网（context.setOffline）时，socket.io 按退避发出的重连长轮询必然失败——那是重连在工作，
+    // 不是页面出错。只放过 /socket.io/ 这一种：离线时别的资源加载失败照样记错。
+    if (text.includes('net::ERR_INTERNET_DISCONNECTED') && (message.location()?.url || '').includes('/socket.io/')) return;
+    // Chrome 156 起（Playwright 1.64 的 chromium-1248），DOMPurify 用 DOMParser 解析不可信 HTML 时，浏览器在解析
+    // 那一刻就按本页 CSP 检查 on* 属性并报一条 script-src-attr 违规。那份文档是惰性的、不执行脚本，属性随后被剥掉，
+    // 处理器从未有机会运行（P0-03d 的 DOM 断言另外钉着）。只放过位置在 DOMPurify 自身的这一种：处理器真进了
+    // 活文档时，解析发生在应用代码里，报告位置是 app.js 之类，照样记错。
+    // 允许尾随 ?v=：index 给 vendor 也戳版本戳（与真 server 同一份 rewriteIndexAssetUrls）。
+    if (text.startsWith('Executing inline event handler violates') && /\/vendor\/purify\.min\.js(?:\?[^/]*)?$/.test(message.location()?.url || '')) return;
     if (message.type() === 'error') errors.push(text);
   });
+}
+
+/**
+ * 抓页面发出的每条 user:message（解析后的 payload）。须在 gotoMock 之前调用，否则错过这条连接。
+ * 刚连上、还没升级到 websocket 时走 polling：那段时间发的包拼在 HTTP POST 里（\x1e 分隔），只听 framesent
+ * 看不到——重连后重放的离线条目恰好落在这个窗口里（P0-02d11、P0-PICK-10 都因此假红过）。
+ */
+export function captureUserMessages(page: Page) {
+  const sent: Array<Record<string, unknown>> = [];
+  const take = (payload: string) => {
+    for (const packet of payload.split('\x1e')) {
+      if (packet.includes('"user:message"')) sent.push(JSON.parse(packet.slice(packet.indexOf('[')))[1]);
+    }
+  };
+  page.on('websocket', ws => ws.on('framesent', frame => { if (typeof frame.payload === 'string') take(frame.payload); }));
+  page.on('request', req => { if (req.method() === 'POST' && req.url().includes('/socket.io/')) take(req.postData() || ''); });
+  return sent;
 }
 
 /** 等 socket 真正连上。角标健康时隐藏，所以读 data-conn 而不是元素可见性。 */
@@ -36,8 +62,20 @@ export async function waitUntilDisconnected(page: Page, timeout = 10_000) {
   await expect(page.locator('#connDotWrap')).toHaveAttribute('data-conn', 'offline', { timeout });
 }
 
+const mockTokenSeeded = new WeakSet<Page>();
+
 export async function gotoMock(page: Page) {
   captureBrowserErrors(page);
+  // 带着令牌进来（同真用户扫过码 / 点过 #token= 链接）：mock 与真 server 一样拒绝无令牌握手，前端没令牌时直接出令牌门、不握手。
+  // 用 init script 预置而不是 goto('/#token=…')：页面加载后地址被 replaceState 成 '/'，再 goto('/#token=…') 只算同文档的
+  // hash 跳转、不重新加载——beforeEach 里 gotoMock 过、用例里再调一次的那些（folder-picker 等）就不会建新连接，
+  // 先挂上的 framesent 监听一帧都录不到。本地已有令牌（用例自己用 #token= 进来过）时不覆盖。
+  if (!mockTokenSeeded.has(page)) {
+    mockTokenSeeded.add(page);
+    await page.addInitScript(() => {
+      try { if (!localStorage.getItem('auth_token')) localStorage.setItem('auth_token', 'mock-token'); } catch { /* about:blank 等不透明源 */ }
+    });
+  }
   await page.request.post('/__reset');
   await page.goto('/');
   // 空首页枢纽默认隐藏底部输入条；就绪信号改为顶栏 + data-conn=online。
@@ -96,12 +134,12 @@ export async function openGeneralSettings(page: Page) {
 }
 
 /** 通用设置的 L2 页 id（与 logic/general-nav.js 的 GENERAL_NAV_IDS 同名）。 */
-export type GeneralPageId = 'notify' | 'devices' | 'host' | 'behavior' | 'diag' | 'help';
+export type GeneralPageId = 'notify' | 'devices' | 'host' | 'behavior' | 'diag' | 'help' | 'about';
 
 /**
  * 打开通用设置并切到某个 L2 页。
  *
- * 面板是两级结构（L1 目录 + 6 个 L2 页），未切页时目标控件在 hidden 的子页里——DOM 查得到、
+ * 面板是两级结构（L1 目录 + 7 个 L2 页），未切页时目标控件在 hidden 的子页里——DOM 查得到、
  * 点不到。**凡是要操作面板内某个按钮的用例都得先切页**，否则会红在「元素不可见」而不是被测行为上。
  * 取代了旧的 openGeneralDiagSection：那时三个诊断按钮同住一个 <details> 折叠段，
  * 现在按可写/只读拆开了（服务状态→host、安全体检→diag、全部配置→behavior）。
@@ -147,4 +185,8 @@ export async function waitForIdle(page: Page) {
 export async function expectNoBrowserErrors(page: Page) {
   const errors = (page as Page & { __ccmErrors?: string[] }).__ccmErrors || [];
   expect(errors).toEqual([]);
+  // mock 场景抛错只隔离不外抛（保住同分片后面的用例），账记在 mock 里——这里收尾，触发它的用例必红，
+  // 不会因为 DOM 断言碰巧已满足而假绿（PR #249 review）。栈在 webServer 日志里。
+  const scenarioErrors = await (await page.request.get('/__scenario-errors')).json();
+  expect(scenarioErrors, 'mock 场景抛错（栈见 webServer 日志）').toEqual([]);
 }

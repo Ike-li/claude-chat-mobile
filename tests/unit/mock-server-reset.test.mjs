@@ -11,7 +11,7 @@
 //
 // 这是源码文本断言，属 docs/testing.md §5 说的「架构守卫」：没有行为层的等价物——
 // 行为层要证明「不泄漏」，得把 52 个 spec 的所有先后组合都跑一遍。
-// 不测什么：① 场景尾巴活过用例（时间上的泄漏，由 user:message 的 mockResetGeneration 等各自处理）；
+// 不测什么：① 场景尾巴活过用例（时间上的泄漏，由 transport.js 的用例代数闸统一丢弃，见 mock-transport.test.mjs）；
 // ② 归零成的值对不对（那是各条 E2E 用例自己的断言）。
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -69,6 +69,21 @@ test.describe('权限闸门', () => {
     s.dispose();
   });
 
+  // 验收 O27：permission_request 是 STATE_BOUNDARY 事件，服务端借它广播 instances（含「需要你」聚合）。
+  // 原来先 emit 后写 pendingPermissions，那次广播算 needsYou 时看不到这张卡，计数要等下一次广播才对
+  // （提问那条路是先写后 emit，所以提问一直是即时的）。
+  test('askPermission：emit permission_request 的那一刻，pendingPermissions 里已经有这一条', () => {
+    const { s } = makeSession();
+    let seenAtEmit = null;
+    s.onEvent = (event) => {
+      if (event.type === 'permission_request') seenAtEmit = s.pendingPermissions.has(event.payload.requestId);
+    };
+    s.askPermission('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 't-order' });
+    assert.equal(seenAtEmit, true, 'emit 时还没写进 pendingPermissions：那次广播的「需要你」漏掉这张卡');
+    s.resolvePermission('t-order', 'deny');
+    s.dispose();
+  });
+
   test('resolvePermission(allow)：removeEventListener + emit request_resolved + alwaysThisSession', () => {
     const { s, events } = makeSession();
     const ac = new AbortController();
@@ -144,6 +159,45 @@ test.describe('权限闸门', () => {
     const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
     assert.equal(rr?.payload.outcome, 'expired', 'outcome 标 expired');
     assert.equal(s.denyKinds.get('t1'), 'denied');
+    s.dispose();
+  });
+
+  // 验收 O30：TTL 到期那一轮 CLI 以 is_error 收尾，推送只看 isError，写成了「⚠️ 任务出错」。result 带上
+  // approvalExpired，推送据此说清是审批过期、操作没执行；只标这一轮，下一轮不带。
+  test('审批到期的那一轮：result 带 approvalExpired，下一轮不带', { timeout: 3000 }, async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 30 });
+    const promise = s.askPermission('Bash', { command: 'sleep 999' }, { signal: new AbortController().signal, toolUseID: 't1' });
+    await awaitTtlSettled(promise);
+    s.map({ type: 'result', subtype: 'success', is_error: true, duration_ms: 10, modelUsage: {} });
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    const results = events.filter(e => e.type === 'result');
+    assert.equal(results.length, 2);
+    assert.equal(results[0].payload.approvalExpired, true, '到期那一轮要带上 approvalExpired');
+    assert.equal(results[1].payload.approvalExpired, undefined, '标记一次性消费，不得误标到下一轮');
+    s.dispose();
+  });
+
+  test('过期后才有人提交（惰性过期分支）：那一轮的 result 同样带 approvalExpired', async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 1 });
+    const promise = s.askPermission('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 't1' });
+    // 同步占住事件循环越过 TTL：到期 timer 来不及触发，提交只能撞上惰性过期分支（异步等待的话 timer 先结算）
+    const until = Date.now() + 5;
+    while (Date.now() <= until) { /* busy-wait */ }
+    const outcome = s.resolvePermission('t1', 'allow', false, { tool: 'Bash', args: { command: 'ls' }, cwd: s.cwd });
+    assert.equal(outcome, 'expired', '前提：走的是 resolvePermission 的惰性过期分支');
+    await promise;
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    assert.equal(events.find(e => e.type === 'result').payload.approvalExpired, true);
+    s.dispose();
+  });
+
+  test('用户自己拒绝的那一轮：result 不带 approvalExpired', async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 60_000 });
+    const promise = s.askPermission('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 't1' });
+    s.resolvePermission('t1', 'deny');
+    await promise;
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    assert.equal(events.find(e => e.type === 'result').payload.approvalExpired, undefined);
     s.dispose();
   });
 
@@ -250,6 +304,74 @@ test.describe('权限闸门', () => {
       const rebuilt = s.pendingRequestsSnapshot().permissions.find(p => p.requestId === 't-persist');
       assert.deepEqual(rebuilt, live, '重建出来的卡片与当初弹出的那张必须一模一样');
       s.resolvePermission('t-persist', 'deny');
+      s.dispose();
+    });
+
+    // Claude in Chrome 的 read_page / find / computer 只带 tabId，卡片上看不出网站；网站只在 CLI 的建议规则里。
+    // 卡片拿 chromeSite 做两件事：标题写出网站，「总是允许」写成「本会话内允许 <网站> 上的所有操作」。
+    // 后一句是对授权范围的陈述，而勾选回传的是**全部** session 档建议（见 resolvePermission）——
+    // 所以只有 session 档恰好就是「允许这个网站」这一条时才下发，多一条别的规则就不能这么说。
+    const chromeSiteRule = (site, destination = 'session') => ({
+      type: 'addRules', destination, behavior: 'allow', rules: [{ toolName: 'ClaudeInChromeDomain', ruleContent: site }],
+    });
+    // 内置 Claude in Chrome 的来源：CLI 把它配成 scope:'dynamic' 的 stdio 服务器，mcp_server.source 因此是 'dynamic'；
+    // 项目 / 用户 / 插件里配一个同名的 claude-in-chrome，source 会是 project / user / plugin（SDK 文档：名字不可信，认 source）。
+    const BUILTIN_CHROME = { name: 'claude-in-chrome', source: 'dynamic' };
+    const askChrome = (s, toolUseID, suggestions, mcpServer = BUILTIN_CHROME) => s.handleCanUseTool('mcp__claude-in-chrome__read_page', { tabId: 7 }, {
+      signal: new AbortController().signal, toolUseID, suggestions, mcpServer,
+    });
+
+    test('handleCanUseTool：内置 Claude in Chrome、session 档建议恰好是一条 ClaudeInChromeDomain → 下发 chromeSite，快照重建同样带着', () => {
+      const { s, events } = makeSession();
+      // 形状取自 2026-10-11 真会话的 server 日志
+      askChrome(s, 't-chrome', [chromeSiteRule('example.org')]);
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-chrome').payload;
+      assert.equal(live.chromeSite, 'example.org', '卡片要靠它显示网站；缺了就只剩 tabId，看不出要操作哪个网站');
+      assert.equal(live.claudeInChrome, true, '来源核对过是内置 Claude in Chrome，卡片才能用它的名义写标题');
+      const rebuilt = s.pendingRequestsSnapshot().permissions.find(p => p.requestId === 't-chrome');
+      assert.deepEqual(rebuilt, live, '切会话重建的卡片也得看得出网站');
+      s.resolvePermission('t-chrome', 'deny');
+      s.dispose();
+    });
+
+    test('askPermission：session 档除了网站规则还有别的规则 → 不下发 chromeSite（不能把授权范围说小）', () => {
+      const { s, events } = makeSession();
+      askChrome(s, 't-mixed', [
+        chromeSiteRule('example.org'),
+        { type: 'addRules', destination: 'session', behavior: 'allow', rules: [{ toolName: 'Bash', ruleContent: 'ls' }] },
+      ]);
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-mixed').payload;
+      assert.equal(live.chromeSite, undefined, '勾选会连 Bash 规则一起放行，卡片却只说网站——用户会批准一个他没看清的授权');
+      s.resolvePermission('t-mixed', 'deny');
+      s.dispose();
+    });
+
+    test('askPermission：网站规则不是 session 档 → 不下发 chromeSite（「本会话内」那句话就不成立）', () => {
+      const { s, events } = makeSession();
+      askChrome(s, 't-local', [chromeSiteRule('example.org', 'localSettings')]);
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-local').payload;
+      assert.equal(live.chromeSite, undefined);
+      s.resolvePermission('t-local', 'deny');
+      s.dispose();
+    });
+
+    test('handleCanUseTool：项目里配了个同名 claude-in-chrome（source=project）→ 不标 claudeInChrome、不下发 chromeSite', () => {
+      const { s, events } = makeSession();
+      askChrome(s, 't-fake', [chromeSiteRule('example.org')], { name: 'claude-in-chrome', source: 'project' });
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-fake').payload;
+      assert.equal(live.claudeInChrome, undefined, '同名的第三方服务器不得在卡片上冒充成 Claude in Chrome');
+      assert.equal(live.chromeSite, undefined);
+      s.resolvePermission('t-fake', 'deny');
+      s.dispose();
+    });
+
+    test('handleCanUseTool：CLI 没带 mcpServer（旧版 CLI）→ 不标 claudeInChrome，卡片退回原样', () => {
+      const { s, events } = makeSession();
+      askChrome(s, 't-nosrc', [chromeSiteRule('example.org')], null);
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-nosrc').payload;
+      assert.equal(live.claudeInChrome, undefined, '来源不明时按不可信处理');
+      assert.equal(live.chromeSite, undefined);
+      s.resolvePermission('t-nosrc', 'deny');
       s.dispose();
     });
   });
@@ -421,18 +543,18 @@ test.describe('权限闸门', () => {
     s.dispose();
   });
 
-  // 批准内含的模式切换：若 SDK 经 canUseTool 的 suggestions 给出 setMode PermissionUpdate，批准时应始终
-  // 应用（非「始终允许」可选项）→ 回传 SDK + 更新本实例档 + emit permission_mode 让 server 同步手机端图标。
-  // 注：这是「SDK 主动下发 suggestion」的前向兼容路径——实测当前 SDK 的 ExitPlanMode 并不走这里（见下条），
-  // 但别的工具/未来版本可能给 setMode，故此路径优先于兜底。
-  test('resolvePermission(allow)：setMode suggestion → 应用 + emit permission_mode + 更新 permissionMode', async () => {
+  // 勾了「总是允许」时，CLI 随审批附带的 setMode 建议照旧应用 → 回传 SDK + 更新本实例档 + emit permission_mode
+  // 让 server 同步手机端图标。2026-10-16 前这条用例传的是普通允许（alwaysThisSession=false），断言的却是
+  // 「档位切到 acceptEdits」——那正是全量 review P0-3 的缺陷本身：真机上 Write、越界 Bash 都带这条建议，
+  // 批一次写文件整个会话就不再审批写删移。普通允许那一侧现由 tests/invariants/approval-allow-once.test.mjs 守。
+  test('resolvePermission(allow + 总是允许)：setMode suggestion → 应用 + emit permission_mode + 更新 permissionMode', async () => {
     const { s, events } = makeSession({ permissionMode: 'plan' });
     const ac = new AbortController();
     const promise = s.askPermission('SomeTool', { x: 1 }, {
       signal: ac.signal, toolUseID: 't1',
       suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]
     });
-    s.resolvePermission('t1', 'allow', false, { tool: 'SomeTool', args: { x: 1 }, cwd: s.cwd }); // 非「始终允许」，但 setMode 仍应应用
+    s.resolvePermission('t1', 'allow', true, { tool: 'SomeTool', args: { x: 1 }, cwd: s.cwd });
     const result = await promise;
     assert.equal(result.behavior, 'allow');
     assert.deepEqual(result.updatedPermissions, [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]);
@@ -676,8 +798,8 @@ test('persistRules 在完整性校验失败时不得生效', async () => {
   s.dispose();
 });
 
-// setMode 是工具批准的内在部分（如 ExitPlanMode 退出 plan），与「记不记住」正交。
-// persist 档不得把它重复塞两次——SDK 收到两条同类 update 的行为未定义。
+// persist 档会连同 CLI 建议里的 setMode 一起回传（普通允许不会，见 resolvePermission 注释），
+// 但不得把它重复塞两次——SDK 收到两条同类 update 的行为未定义。
 test('persistRules：setMode 只出现一次，不因走 persist 分支而重复', async () => {
   const { s } = makeSession();
   const ac = new AbortController();

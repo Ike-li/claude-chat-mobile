@@ -35,6 +35,27 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O45（AC-21-04）：375 宽下一张 12 列的表格让 #messages 可以左右拖 33px、底部出现横向滚动条，每格被压到一字一行。
+  // 宽表格应在自己内部横向滚动，不撑宽整个对话。
+  test('P0-03f 宽表格在自己内部横向滚动，不把整个对话撑出横向滚动', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:wide-table');
+    await waitForIdle(page);
+    const table = page.locator('.msg-body table').nth(-2);
+    await expect(table).toBeVisible();
+    const m = await page.locator('#messages').evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    expect(m.scroll, '整个消息列表被表格撑出了横向滚动').toBeLessThanOrEqual(m.client);
+    const t = await table.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth, cell: el.querySelector('td')?.getBoundingClientRect().width ?? 0 }));
+    expect(t.scroll, '表格比屏幕宽，应在自己内部可横向滚动').toBeGreaterThan(t.client);
+    expect(t.cell, '格子被压成一字一行').toBeGreaterThan(50);
+    // 全中文的那张（O45 残留）：每个字之间都是合法断行点，R6 实测仍被压到 32px、一字一行
+    const zh = page.locator('.msg-body table').last();
+    const zt = await zh.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth, cell: el.querySelector('td')?.getBoundingClientRect().width ?? 0 }));
+    expect(zt.cell, '中文格子被压成一字一行').toBeGreaterThan(50);
+    expect(zt.scroll, '中文宽表格同样应在自己内部横向滚动').toBeGreaterThan(zt.client);
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-03b 代码块复制按钮提供可见反馈', async ({ page }) => {
     await gotoMock(page);
 
@@ -65,16 +86,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-03c 用户气泡「改写重发」填回提问原文（UX-012）', async ({ page }) => {
+  test('P0-03c 用户气泡「填入输入框」填回提问原文（UX-012 / #362）', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:message-edit 复制 README');
     await waitForIdle(page);
     const reply = page.locator('[data-testid="assistant-message"]').last();
     await expect(reply).toContainText('message edit fixture');
-    // UX-012：改写重发放在用户气泡，不再挂在助手动作栏
+    // UX-012 / #362：填入输入框放在用户气泡，不再挂在助手动作栏；只回填不 rewind
     const user = page.locator('[data-testid="user-message"]').last();
-    await user.getByRole('button', { name: /改写重发/ }).click();
+    await user.getByRole('button', { name: /填入输入框/ }).click();
     await expect(page.locator('#input')).toHaveValue('test:message-edit 复制 README');
 
     await expectNoBrowserErrors(page);
@@ -91,7 +112,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(reply.locator('strong')).toContainText('safe bold markdown');
     await expect(reply.locator('code', { hasText: 'safe_inline_code' })).toHaveCount(1);
 
-    // class 走白名单：Tailwind 运行时会把任意 class 现编成 CSS，工具类不剥就能做出盖住审批按钮的遮罩；
+    // class 走白名单：tw.css 里有现成的 fixed、inset-0、z-50，工具类不剥就能做出盖住审批按钮的遮罩；
     // 而 markdown 自己产出的 language-xxx 必须留下（hljs 靠它选语言）。
     // 用会重试的断言：回复在收尾时可能整块重渲染，一次性 evaluate 会打在刚被换下、已脱离文档的旧节点上
     // （getComputedStyle 对它返回空串），重复 12 次红 3 次。
@@ -100,6 +121,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(overlay).not.toHaveAttribute('class');
     await expect(overlay).toHaveCSS('position', 'static');
     await expect(reply.locator('pre code')).toHaveClass(/\blanguage-js\b/);
+
+    // <style> 元素：FORBID_ATTR 的 style 只管属性，CSP 又放行 inline style。漏过去的 <style> 整页生效，
+    // 隐藏着的审批按钮也照样被改写——所以直接看按钮本身的计算样式（HTML 与 SVG 两个探针各打一个）。
+    await expect(reply.locator('style')).toHaveCount(0);
+    await expect(reply).not.toContainText('permAllow'); // 剥掉的 <style> 连同 CSS 一起丢，不漏成正文
+    await expect(page.locator('#permAllow')).toHaveCSS('position', 'static');
+    await expect(page.locator('#permDeny')).toHaveCSS('position', 'static');
 
     const unsafeState = await reply.evaluate(el => {
       const win = window as typeof window & {

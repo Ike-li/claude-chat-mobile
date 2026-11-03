@@ -119,7 +119,7 @@ function makeEngine({
     setViewingCwd(c) { viewingCwd = c; },
     // 登记一个实例并让它成为当前查看目标
     view(id, sessionId, instCwd = cwd) {
-      const agent = { sessionId, cwd: instCwd, externalDirty: false };
+      const agent = { sessionId, cwd: instCwd, externalDirty: false, pendingPermissions: new Map(), pendingQuestions: new Map() };
       agents.set(id, agent);
       viewing = id;
       viewingCwd = instCwd;
@@ -702,6 +702,51 @@ test('等审批期间终端写入、随后 state 翻 idle 时重连 → 仍须�
   assert.equal(a.externalDirty, true, '审批窗里的终端写入必须标脏，否则下条手机消息从旧位置分叉');
 });
 
+// 2026-10-25 实证会话 342a2654：Monitor 事件触发的自动汇报轮不一定计入在途轮，引擎眼里 state 一直是 idle，
+// 上面两条靠时序的豁免都用不上。它写盘期间新设备获批触发重定基线，己方写的被判成终端写入、标脏；后台任务
+// 一直在跑，之后每次发送都回「需先吸收终端写入，但后台任务仍在运行」。transcript 逐条自报 entrypoint，
+// 增量全是 sdk-ts 就是己方写的。
+const ownEntry = e => ({ ...e, entrypoint: 'sdk-ts' });
+const autoReportRound = ts => ([
+  { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'auto-1', name: 'Bash', input: { command: 'tail pull.log' } }] }, timestamp: iso(ts) },
+  { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'auto-1', content: '[AUTO-RUN] done' }] }, timestamp: iso(ts + 500) },
+  { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '自动汇报轮写的' }] }, timestamp: iso(ts + 1_000) },
+]);
+
+test('idle 时重连、上一拍之后的增长全是 sdk-ts 自报 → 不标脏（己方自动汇报轮，不是终端写入）', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-own-auto');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-own-auto', settledTail(base).map(ownEntry));
+  await h.engine.catchUpTick();          // 切入定基线（idle）
+
+  // 上一拍之后己方又写了一轮，state 仍是 idle；下一拍之前恰好有设备获批
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-own-auto',
+    [...settledTail(base), ...autoReportRound(base + 5_000)].map(ownEntry));
+  h.engine.requestRebaseline('sock-new');
+  await h.engine.catchUpTick();
+
+  assert.equal(a.externalDirty, false, '己方写的那一轮被当成终端写入：有后台任务时之后每次发送都会被拒');
+});
+
+// 上一条的对照：同一轮里夹着一条终端写的，整段按外部走（与 catchUpStep 增长分支同口径），防修过头。
+test('idle 时重连、增长里夹着 entrypoint=cli 的条目 → 仍须标脏', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-mixed');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-mixed', settledTail(base).map(ownEntry));
+  await h.engine.catchUpTick();
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-mixed', [
+    ...[...settledTail(base), ...autoReportRound(base + 5_000)].map(ownEntry),
+    { type: 'user', entrypoint: 'cli', message: { role: 'user', content: '终端插进来问的' }, timestamp: iso(base + 8_000) },
+  ]);
+  h.engine.requestRebaseline('sock-new');
+  await h.engine.catchUpTick();
+
+  assert.equal(a.externalDirty, true, '终端写入混在己方写盘里也必须标脏，否则下条手机消息从旧位置分叉');
+});
+
 // ══════════════════════════════════════════════════════════════════════════════
 // 以下用例由 `npm run mutate -- app/src/server/mirror-engine.js` 反推补齐（2026-08-02）。
 // 上面那批用例首轮全绿，但变异检查显示 129 个变异体里存活 67 个——存活的意思是「这行被
@@ -772,6 +817,79 @@ test('permission 挂起期间磁盘长大 → 必然是终端写的，标脏防�
 
   assert.equal(a.externalDirty, true,
     '不标脏的话，下一条手机消息会送进停在 30 分钟前的 SDK 子进程、从旧 parentUuid 分叉');
+});
+
+// O122（R6 复测）：模型并行发两个要审批的 Bash，CLI 逐个问——第一个结算（过期 / 批准 / 拒绝）后 SDK 自己写下
+// 那条 tool_result，几毫秒内第二个审批又挂起。两次 tick 看到的都是 'permission'，中间的增长却是己方写的；
+// 当成终端写入标脏，下一条手机消息就被「需先吸收终端写入」拒收，随后无谓地 dispose+resume 冷重启。
+test('两次 tick 之间有审批结算、下一个审批又挂起 → 增长是己方写的，不标脏；之后同一审批窗里的增长照常标脏', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-seq');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-seq', settledTail(base));
+  await h.engine.catchUpTick();                       // 切入
+
+  h.setState('inst-A', 'permission');
+  a.pendingPermissions.set('req-a', {});
+  await h.engine.catchUpTick();                       // 第一个审批挂着：建 size 基线
+
+  const afterFirst = [
+    ...settledTail(base),
+    { type: 'user', entrypoint: 'sdk-ts', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu-a', is_error: true, content: '审批已过期' }] }, timestamp: iso(base + 5_000) },
+  ];
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-seq', afterFirst);
+  a.pendingPermissions.delete('req-a');               // 第一个结算，SDK 写下它的 tool_result
+  a.pendingPermissions.set('req-b', {});              // 紧接着第二个挂起
+  await h.engine.catchUpTick();
+  assert.equal(a.externalDirty, false, '这段增长是审批结算后 SDK 自己写的，标脏会让下一条消息被拒收并冷重启');
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-seq', [
+    ...afterFirst,
+    { type: 'user', message: { role: 'user', content: '人走到电脑前用终端继续了' }, timestamp: iso(base + 6_000) },
+  ]);
+  await h.engine.catchUpTick();                       // 还是同一个审批挂着：增长只能是终端写的
+  assert.equal(a.externalDirty, true, '基线要在结算那一拍重建，而不是作废——否则第二个审批窗里的终端写入就漏标了');
+});
+
+test('审批结算那一拍里终端也写了（entrypoint=cli）→ 照样标脏，不能被「集合变了」整段吞掉', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-mixed');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-mixed', settledTail(base));
+  await h.engine.catchUpTick();                       // 切入
+
+  h.setState('inst-A', 'permission');
+  a.pendingPermissions.set('req-a', {});
+  await h.engine.catchUpTick();                       // 第一个审批挂着：建 size 基线
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-mixed', [
+    ...settledTail(base),
+    { type: 'user', entrypoint: 'cli', message: { role: 'user', content: '终端里同时敲了一句' }, timestamp: iso(base + 4_000) },
+    { type: 'user', entrypoint: 'sdk-ts', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu-a', is_error: true, content: '审批已过期' }] }, timestamp: iso(base + 5_000) },
+  ]);
+  a.pendingPermissions.delete('req-a');
+  a.pendingPermissions.set('req-b', {});
+  await h.engine.catchUpTick();
+  assert.equal(a.externalDirty, true, '集合变了只说明己方写过，不说明这段里只有己方——漏标就从旧 parentUuid 分叉');
+});
+
+test('同一族：idle 一拍之后直接是审批挂起（发消息后首个工具就要审批，中间没赶上 busy 那拍）→ 己方写的不标脏', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-first');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-first', settledTail(base));
+  await h.engine.catchUpTick();                       // 切入
+  await h.engine.catchUpTick();                       // idle 正常 tick：记下 size
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-first', [
+    ...settledTail(base),
+    { type: 'user', entrypoint: 'sdk-ts', message: { role: 'user', content: '帮我 touch 一个文件' }, timestamp: iso(base + 5_000) },
+    { type: 'assistant', entrypoint: 'sdk-ts', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu-1', name: 'Bash', input: {} }] }, timestamp: iso(base + 6_000) },
+  ]);
+  h.setState('inst-A', 'permission');
+  a.pendingPermissions.set('req-1', {});
+  await h.engine.catchUpTick();
+  assert.equal(a.externalDirty, false, '用户消息和 tool_use 是己方这一轮写的');
 });
 
 test('busy 期间磁盘长大是己方 turn 写的 → 不得标脏（与 permission 相反）', async () => {

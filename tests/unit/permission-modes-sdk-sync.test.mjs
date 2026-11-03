@@ -12,6 +12,7 @@ import {
   isSdkPermissionMode,
   describePersistScope,
 } from '../../app/public/js/logic.js';
+import { setLang } from '../../app/public/js/i18n.js';
 
 function readSdkPermissionModes() {
   const dts = readFileSync(
@@ -62,6 +63,45 @@ test('权限档文案是 CLI/桌面英文原名，不走中文 i18n', () => {
   for (const t of permissionModeTileSpecs()) {
     assert.equal(/[\u4e00-\u9fff]/.test(t.title), false, `title 含中文: ${t.title}`);
     assert.equal(/[\u4e00-\u9fff]/.test(t.pill), false, `pill 含中文: ${t.pill}`);
+  }
+});
+
+// 验收 O43①：标题（Manual / Plan …）对齐 CLI 与桌面端菜单保持英文原名；那句说明是给人读的，跟界面语言走。
+// 此前说明也写死英文，只读中文的人看不懂「Prompts for dangerous operations」。英文界面仍是原来那句。
+test('权限档说明跟界面语言走：中文界面是中文，英文界面是原英文句子；标题两种语言都不变', () => {
+  try {
+    setLang('zh');
+    const zh = Object.fromEntries(permissionModeTileSpecs().map((t) => [t.id, t]));
+    for (const t of Object.values(zh)) assert.match(t.desc, /[\u4e00-\u9fff]/, `中文界面里说明应是中文：${t.id} → ${t.desc}`);
+    assert.equal(zh.default.title, 'Manual');
+    setLang('en');
+    const en = Object.fromEntries(permissionModeTileSpecs().map((t) => [t.id, t]));
+    assert.equal(en.default.desc, 'Prompts for dangerous operations');
+    assert.equal(en.plan.desc, 'Planning mode, no tool execution');
+    assert.equal(en.bypassPermissions.desc, 'Bypass all permission checks');
+    for (const t of Object.values(en)) assert.doesNotMatch(t.desc, /[\u4e00-\u9fff]/, `英文界面里说明不该有中文：${t.id}`);
+    assert.equal(en.default.title, 'Manual');
+  } finally {
+    setLang('zh');
+  }
+});
+
+// #461：settings 写了 disableAutoMode 时 CLI 不让切 Auto。磁贴照常列出（与终端一样看得到这一档），
+// 但不可选，说明行换成原因——只置灰不说为什么，用户会以为是前端坏了。
+test('permissionModeTileSpecs：autoModeDisabled 时只有 Auto 不可选，说明换成原因；没禁用时六档都可选', () => {
+  const on = Object.fromEntries(permissionModeTileSpecs(undefined, { autoModeDisabled: true }).map((t) => [t.id, t]));
+  assert.equal(on.auto.disabled, true);
+  assert.equal(on.auto.title, 'Auto');
+  assert.match(on.auto.desc, /disableAutoMode/);
+  for (const t of Object.values(on)) if (t.id !== 'auto') assert.equal(t.disabled, false, `${t.id} 不该跟着禁用`);
+  assert.ok(permissionModeTileSpecs().every((t) => t.disabled === false), '没禁用时六档都可选');
+  try {
+    setLang('en');
+    const en = permissionModeTileSpecs(undefined, { autoModeDisabled: true }).find((t) => t.id === 'auto');
+    assert.match(en.desc, /disableAutoMode/);
+    assert.doesNotMatch(en.desc, /[一-鿿]/, `英文界面里原因不该有中文：${en.desc}`);
+  } finally {
+    setLang('zh');
   }
 });
 

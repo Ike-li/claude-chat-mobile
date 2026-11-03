@@ -244,6 +244,33 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
+  // show_widget 的 inputSummary 只剩半截 SVG，图要靠 widget 字段带完整源码；主链与子 agent 两个发射点各接一次，
+  // 漏接哪一个都只有这里会红（E2E 的 mock 是平行实现，不经过 map()）。
+  test('show_widget → payload.widget 带完整 SVG；inputSummary 照旧截断；别的工具没有 widget', () => {
+    const { s, events } = makeSession();
+    const svg = `<svg viewBox="0 0 680 100">${'<rect width="1" height="1"/>'.repeat(60)}</svg>`;
+    s.map({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'w1', name: 'mcp__visualize__show_widget', input: { title: 'arch', loading_messages: [], widget_code: svg } },
+      { type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: '/a.txt' } },
+    ] } });
+    const [w, r] = events.filter(e => e.type === 'tool_use').map(e => e.payload);
+    assert.deepEqual(w.widget, { title: 'arch', kind: 'svg', code: svg }, '主链 show_widget 必须带完整源码');
+    assert.match(w.inputSummary, /已截断/, 'inputSummary 口径不变');
+    assert.equal('widget' in r, false, '非 show_widget 工具不得多出 widget 字段');
+    s.dispose();
+  });
+
+  test('子 agent 里的 show_widget 同样带 widget', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'assistant', parent_tool_use_id: 'parent-1', message: { content: [
+      { type: 'tool_use', id: 'w2', name: 'mcp__visualize__show_widget', input: { title: 'sub', widget_code: '<svg viewBox="0 0 1 1"></svg>' } },
+    ] } });
+    const tu = events.find(e => e.type === 'tool_use');
+    assert.equal(tu.payload.parentToolUseId, 'parent-1');
+    assert.deepEqual(tu.payload.widget, { title: 'sub', kind: 'svg', code: '<svg viewBox="0 0 1 1"></svg>' });
+    s.dispose();
+  });
+
   test('文件类工具 tool_use → payload.file{path,changeKind}；非文件工具无 file（③）', () => {
     const { s, events } = makeSession();
     s.map({ type: 'assistant', message: { content: [
@@ -321,6 +348,48 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     assert.ok(tu.payload.inputSummary.includes('file_path')); // 正常字段仍可见，未被挤没
     assert.ok(!tu.payload.inputSummary.includes(bigBase64.slice(0, 300))); // 原始 base64 未原样吐出
     assert.match(tu.payload.inputSummary, /已省略/);
+    s.dispose();
+  });
+
+  // 验收 O116：Bash 的 tool_use_result 是 {stdout,stderr,interrupted,…}。卡片和「展开全文」要的是终端里那份纯文本
+  // （与历史折叠态同取 block.content），不是这个对象的 JSON——那样换行成了字面 \n、整段挤成一行
+  test('tool_result：Bash 的结构化结果 → 摘要与全文都是纯文本，不是 JSON', () => {
+    const { s, events } = makeSession();
+    const text = 'line one\nline two';
+    s.map({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-bash', name: 'Bash', input: { command: 'ls' } }] } });
+    s.map({ type: 'user', tool_use_result: { stdout: text, stderr: '', interrupted: false, isImage: false },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tool-bash', is_error: false, content: text }] } });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload.toolUseId === 'tool-bash');
+    assert.equal(tr.payload.outputSummary, text);
+    assert.equal(s.getToolOutput('tool-bash'), text);
+    s.dispose();
+  });
+
+  // #455 作答走 allow 后，AskUserQuestion 的 tool_use_result 是 {questions, answers}（CLI 2.1.309 + Sonnet 5.5 冒烟实测）。
+  // 卡片要的是 CLI 写给模型的那句话（与历史回放同取 block.content）：取结构化结果的话直播卡显示整段 JSON，
+  // 「不回答」也会因为认不出 "The user did not answer" 而被显成已回答
+  test('tool_result：AskUserQuestion 的结构化结果 → 摘要与全文是 CLI 回给模型的文本，不是 JSON', () => {
+    const { s, events } = makeSession();
+    const q = '请选择一个代号:FALCON 还是 PENGUIN?';
+    const text = `Your questions have been answered: "${q}"="FALCON". You can now continue with these answers in mind.`;
+    s.map({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-ask', name: 'AskUserQuestion', input: { questions: [{ question: q }] } }] } });
+    s.map({ type: 'user', tool_use_result: { questions: [{ question: q, header: '代号', options: [{ label: 'FALCON' }, { label: 'PENGUIN' }], multiSelect: false }], answers: { [q]: 'FALCON' } },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tool-ask', content: text }] } });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload.toolUseId === 'tool-ask');
+    assert.equal(tr.payload.outputSummary, text);
+    assert.equal(s.getToolOutput('tool-ask'), text);
+    s.dispose();
+  });
+
+  // PR #332 review：MCP / 动态工具可以返回任意结构，带个字符串 stdout 不等于它是 Bash——照旧展示整个结构化结果
+  test('tool_result：别的工具的结构化结果碰巧带 stdout → 仍展示结构化结果，不丢字段', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-mcp', name: 'mcp__ci__run', input: {} }] } });
+    s.map({ type: 'user', tool_use_result: { stdout: 'log', result: { passed: 3 } },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tool-mcp', is_error: false, content: 'log' }] } });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload.toolUseId === 'tool-mcp');
+    assert.match(tr.payload.outputSummary, /"passed":3/, 'MCP 工具的 result 字段被丢了');
+    assert.match(s.getToolOutput('tool-mcp'), /"passed":3/);
     s.dispose();
   });
 

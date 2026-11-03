@@ -12,10 +12,10 @@
 // mock 侧固定返回 branches=['dev','main','feature/login'] / current='dev'。
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
-  test('P0-40 新会话 worktree：源分支可换、勾选不发请求、意图随第一条消息发出', async ({ page }) => {
+  test('P0-40 新会话 worktree：勾选不发请求、勾上后源分支可换、意图随第一条消息发出', async ({ page }) => {
     await gotoMock(page);
     await waitForIdle(page);
 
@@ -31,7 +31,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 缺省不勾：勾选是对"这一个新会话"的显式决定，绝不能默认开着
     await expect(wtToggle).toHaveAttribute('aria-pressed', 'false');
 
-    // ② 换源分支：点开是自绘按钮组（不是原生 select——移动端上那个会把弹层渲染到页面另一头）
+    // ② 勾选只改本地状态：副标题说清落点，但**此刻磁盘上什么都还没建**（懒创建）
+    await wtToggle.click();
+    await expect(wtToggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(surface).toContainText('不动当前工作树');
+
+    // ③ 勾上之后才能换源分支（没勾时胶囊锁定，见 P0-40d）。点开是自绘按钮组（不是原生
+    //    select——移动端上那个会把弹层渲染到页面另一头）
     await branchChip.click();
     const list = surface.locator('[data-testid="compose-branch-list"]');
     await expect(list).toBeVisible();
@@ -39,18 +45,38 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await list.locator('button', { hasText: 'main' }).click();
     await expect(list).toHaveCount(0);
     await expect(branchChip).toContainText('main');
-
-    // ③ 勾选只改本地状态：副标题说清落点，但**此刻磁盘上什么都还没建**（懒创建）
-    await wtToggle.click();
-    await expect(wtToggle).toHaveAttribute('aria-pressed', 'true');
-    await expect(surface).toContainText('不动当前工作树');
-    await expect(surface).toContainText('main');
+    // 断言副标题本身：整块 surface 的文本里胶囊已经写着 main，比它恒真
+    await expect(surface.locator('[data-compose-sub]')).toContainText('main');
 
     // ④ 发出第一条消息 → 意图跟着这条消息一起到服务端。
     //    这条断言是整个 spec 的核心：勾选框亮着但 payload 里没带字段时，只有它会红。
     await page.locator('#input').fill('改点东西');
     await page.locator('#btnSend').click();
     await expect(page.locator('#messages')).toContainText('worktree requested from main');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 在线发送没被确认（服务端临时失败 / 半开连接超时）时，这条消息转进 outbox 自动重发。worktree 意图与
+  // text 同属「发出那一刻的快照」，重发必须带着它——漏了，消息照样送达、会话照样开，只是开在父仓里，
+  // 用户勾的「新 worktree」静默失效。离线入队那条路一直带着，在线转入这条曾经漏了。
+  test('P0-40c 首条消息在线发送失败、转入重发：重发仍带着 worktree 意图', async ({ page }) => {
+    await gotoMock(page);
+    await waitForIdle(page);
+    await sendChatMessage(page, 'test:arm-send-transient-fail');
+
+    await page.locator('#btnNew').click();
+    const surface = page.locator('[data-testid="compose-surface"]');
+    await expect(surface).toBeVisible();
+    const wtToggle = surface.locator('[data-testid="compose-worktree-toggle"]');
+    await wtToggle.click();
+    await expect(wtToggle).toHaveAttribute('aria-pressed', 'true');
+
+    await page.locator('#input').fill('在新 worktree 里干活');
+    await page.locator('#btnSend').click();
+    // 第一次被 mock 以可重试的负 ack 拒掉 → 进 outbox → 重发送达；只有重发带着意图，mock 才回这一行
+    await expect(page.locator('#messages')).toContainText('worktree requested from dev', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('在新 worktree 里干活');
 
     await expectNoBrowserErrors(page);
   });
@@ -74,6 +100,68 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#input').fill('普通消息');
     await page.locator('#btnSend').click();
     await expect(page.locator('#messages')).toContainText('普通消息');
+    await expect(page.locator('#messages')).not.toContainText('worktree requested');
+
+    await expectNoBrowserErrors(page);
+  });
+  // 2026-10-10 真机：没勾 worktree 时也能点胶囊选 feat，胶囊一直写 feat，会话却开在 main 的主工作树，
+  // 没有任何提示。源分支只对新 worktree 有意义（桌面端同样只在 useWorktree 为真时才传 sourceBranch），
+  // 所以没勾时胶囊锁定、如实显示仓库当前分支；勾上→换分支→取消，也要退回当前分支。
+  // 验收 O54（AC-05-03）：锁定原因「勾选『在新 worktree 里开』后可换源分支」只放在 title（悬停提示）里，手机上点了
+  // 没有任何反应、也看不到原因，像是选分支坏了。点一下就把原因写出来。
+  test('P0-40e 没勾 worktree 时点分支胶囊：当场说清为什么选不了', async ({ page }) => {
+    await gotoMock(page);
+    await waitForIdle(page);
+    await page.locator('#btnNew').click();
+    const surface = page.locator('[data-testid="compose-surface"]');
+    const branchChip = surface.locator('[data-testid="compose-source-branch"]');
+    await expect(branchChip).toBeDisabled();
+    await branchChip.click({ force: true });
+    await expect(surface.locator('[data-testid="compose-branch-locked-hint"]'), '点了没有任何反应').toHaveText('勾选「在新 worktree 里开」后可换源分支');
+    await expect(surface.locator('[data-testid="compose-branch-list"]')).toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-40d 没勾 worktree 时分支胶囊锁定在当前分支：选不了，取消勾选也退回', async ({ page }) => {
+    await gotoMock(page);
+    await waitForIdle(page);
+
+    await page.locator('#btnNew').click();
+    const surface = page.locator('[data-testid="compose-surface"]');
+    await expect(surface).toBeVisible();
+    const branchChip = surface.locator('[data-testid="compose-source-branch"]');
+    const wtToggle = surface.locator('[data-testid="compose-worktree-toggle"]');
+    const list = surface.locator('[data-testid="compose-branch-list"]');
+
+    // ① 没勾：胶囊显示当前分支且点不开。force 绕过 Playwright 的可点检查，模拟手指照样点上去
+    await expect(branchChip).toContainText('dev');
+    await expect(branchChip).toBeDisabled();
+    await branchChip.click({ force: true });
+    await expect(list).toHaveCount(0);
+
+    // ② 勾上→换到 main→取消：胶囊退回 dev 并重新锁定，不留一个不会生效的分支挂在那里
+    await wtToggle.click();
+    await expect(branchChip).toBeEnabled();
+    await branchChip.click();
+    await list.locator('button', { hasText: 'main' }).click();
+    await expect(branchChip).toContainText('main');
+    await wtToggle.click();
+    await expect(wtToggle).toHaveAttribute('aria-pressed', 'false');
+    await expect(branchChip).toContainText('dev');
+    await expect(branchChip).toBeDisabled();
+
+    // ③ 勾上、点开列表不选，直接回新会话：勾选被 reset，开着的列表不得挂在锁定的胶囊下面
+    await wtToggle.click();
+    await branchChip.click();
+    await expect(list).toBeVisible();
+    await page.locator('#btnNew').click();
+    await expect(wtToggle).toHaveAttribute('aria-pressed', 'false');
+    await expect(list).toHaveCount(0);
+
+    // ④ 发出去的和胶囊写的一致：会话开在主工作树，不带 worktree 意图
+    await page.locator('#input').fill('就在当前分支上干');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#messages')).toContainText('就在当前分支上干');
     await expect(page.locator('#messages')).not.toContainText('worktree requested');
 
     await expectNoBrowserErrors(page);

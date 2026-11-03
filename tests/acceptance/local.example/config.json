@@ -1,0 +1,32 @@
+{
+  "artifactUrl": "<填写：私有清单 artifact 的链接（结果、观察项写回这里）>",
+  "gateway": {
+    "baseUrl": "<填写：宿主机上机主网关的地址，如 http://127.0.0.1:<端口>；E3 容器里会自动改成 host.docker.internal>",
+    "models": {
+      "sonnet": "<填写：sonnet 档映射到网关上的哪个模型>",
+      "opus": "<填写：opus 档>",
+      "fable": "<填写：fable 档>",
+      "haiku": "<填写：haiku 档>",
+      "subagent": "<填写：子代理用的模型>"
+    },
+    "extraEnv": {}
+  },
+  "e3": {
+    "hostIp": "<填写：宿主机的局域网 IP（newuser 容器拿它拼 PUBLIC_URL）>",
+    "claudeCodeVersion": "<填写：与宿主机 claude --version 一致的版本号>"
+  },
+  "ports": {
+    "E1": 13100,
+    "E2": 13000,
+    "E2反代": 18080,
+    "E3": 13001,
+    "E3proxy": 13003,
+    "E3cf": 13004
+  },
+  "device": {
+    "phone": "<填写：真机型号（E 档用）>",
+    "os": "<填写：系统版本>",
+    "browser": "<填写：Safari / PWA / 其它>",
+    "desktopApp": "<填写：CCM.app 版本，没有就写「无」>"
+  }
+}

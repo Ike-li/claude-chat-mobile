@@ -16,26 +16,29 @@
 （加同档的 `npm run test:invariants`、分片并行的 `npm run test:e2e:parallel`，以及若干同源别名，
 名单在 `tests/gates/guard-host-tests.js`）。
 **其余一切会跑测试的命令一律进容器。**
+验收编排器 `node tests/acceptance/run.mjs` 与 `tests/acceptance/env/up.mjs` 是宿主机侧调度，不是这条的例外：
+A 档重放只连 127.0.0.1 上的 E1/E2 容器、零 token；真模型只在 E3 容器里（起 E3 那一步钩子走 `ask`，见下）。
 
 这是白名单不是黑名单。黑名单要求「每遇到一个新命令都正确归类」，而那正是 2026-08-02 失败的那一步——
 `npm run mutate` 没被归类成破坏性操作，它把用户 `~/.claude/projects` 整棵树删光了（70 个项目 / 291 memory / 2990 transcript）。
 白名单反过来：不在名单上的默认进容器，判断错了顶多多跑一次容器，代价不对称地小。
 
 > ⚠ **`guard-host-tests.js` 不是安全网。** 它是 PreToolUse 钩子，**只在 agent 走 Bash 工具时
-> 触发——人在终端手敲命令它一次都不会响**，判据又是命令文本（`sh -c "$CMD"`、`$(...)`、别名一概看不见）。
+> 触发——人在终端手敲命令它一次都不会响**，判据又是命令文本（`sh -c "$CMD"`、`bash -c`、`docker exec`
+> 里套的命令、`$(...)`、别名一概看不见）。
 >
 > 它的决策分两档（`decideRoute`）：**有等价容器跑法的一律 `deny` 并指出改跑哪条**，agent 自己换命令
-> 继续，不打断人；只有真 agent turn 与 smoke 是 `ask`——那两档要真凭据、容器里跑不了，
-> 要不要花那笔额度只有人能决定。**别把 deny 当保护**：它防的是手滑，不是对抗。
+> 继续，不打断人；只有三类是 `ask`：真 agent turn、smoke、起验收的 E3 环境
+> （`node tests/acceptance/env/up.mjs --env <含 E3 / E3proxy / E3cf，或 all> --yes`）。
+> 前两类要真凭据、容器里跑不了；第三类的真模型虽在容器里跑，机主网关凭据会复制进容器，此后每个回合
+> 都花真额度——要不要花那笔额度只有人能决定。验收入口 `run.mjs` 只调度、列清单（`--tier C` 也只列不跑），
+> 额度闸不在它上面。一条命令有多段时逐段判：有一段该 `deny` 整条就 `deny`，触发的段全属这三类才 `ask`。
+> **别把 deny 当保护**：它防的是手滑，不是对抗。
 >
 > 2026-09-11 起，`invariants/env`、`invariants/server`、`integration` 三个目录的测试文件与
 > `mutate` 自带**进程级**执行位守卫（`tests/setup/require-disposable-env.mjs`）：不在一次性环境里
 > 跑就直接 exit 1，对所有调用路径生效（npm 脚本、裸 node、IDE run、CI、别的 agent）。
 > 它同样不是物理隔离——同一个仓库里的一行 import，删得掉；真正的隔离仍然来自容器边界。
->
-> （那句「2026-09-05 实测 `test:invariants:server` 在宿主机上照跑不误」**已作废**：现在它跑不起来。
-> 当时没有污染，是因为那些用例各自注入了一次性 `CCM_DATA_DIR`，不是因为钩子拦住了——
-> 而「靠每个用例自己记得」正是后来把这道隔离下沉成机制的理由。）
 
 **② 变异（`mutate`）无例外进容器。** 它故意把源码改坏再跑测试，而被改坏的**可能恰恰是算删除路径的代码**——
 上面那次事故里 `getProjectDir` 被改成恒返回 `''`，`join(真实根, '')` 塌成真实根本身，测试的 `rmSync` 就打上去了。
@@ -72,7 +75,7 @@
 | **找不到，但它确实是一条红线** | 先把它写进编号表，再按第一行走 | 同第一行 |
 
 这不是风格建议，是 `npm run check` 里 `check-invariant-ids.js` 的硬判定：
-`invariants/` 下缺「守护：」行、守护行里没编号、编号在表里查不到、表里登记了却整棵 `tests/` 树无人提及——四种都红。
+`invariants/` 下缺「守护：」行、守护行里没编号、编号在表里查不到、表里登记了却整棵 `tests/` 树没有一处文件头（前 12 行）的「守护：」行声明它——四种都红。
 
 **第三行要谨慎。** 编号表是产品红线的枚举，不是"我需要一个编号所以加一个"。
 判据是：**这条跨版本必须成立吗？违反了会伤到用户吗？**
@@ -158,8 +161,8 @@ gitignored 草稿，草稿没了，编号就成了只有当时在场的人能解
 
 假 CLI 有两档（`tests/fixtures/fake-claude.sh`）：不设 `CCM_FAKE_CLAUDE_MODE` 时吞 stdin、不产出任何输出；
 设了才走可驱动的 Node 实现（应答 initialize、吐 `system/init`，`turn` 档还吐 `result` 让回合收尾）。
-**默认行为是显式 opt-in 保护的**——9 个 S2 文件与 24 个集成文件建在「stub 永不产出、实例恒 busy」这个前提上
-（S2 侧复算：`grep -L CCM_FAKE_CLAUDE_MODE tests/invariants/server/*.test.mjs | wc -l`）。
+**默认行为是显式 opt-in 保护的**——不设 `CCM_FAKE_CLAUDE_MODE` 的 S2 文件与集成文件都建在「stub 永不产出、实例恒 busy」这个前提上
+（数量复算：`grep -L CCM_FAKE_CLAUDE_MODE tests/invariants/server/*.test.mjs tests/integration/*.test.mjs | wc -l`）。
 
 ### 维护者 playground：容器里那张干净的 Web UI
 
@@ -287,6 +290,37 @@ done | sort -rn | head
   不要指望每个调用点记得传。这和 `HOST_ALLOWED_SCRIPTS` 用白名单而不用黑名单是同一条理由，
   也和 `gate-wiring.test.mjs` 列例外而不是逐个加断言是同一条：**默认安全，例外显式**。
 
+### 跑哪条命令：`npm test`、集成门控与 E2E
+
+- `npm test` = 单测 + `tests/integration/*.test.mjs` 全部，带 `--test-force-exit`。**CI 不跑它**
+  （force-exit 会腰斩异步单测），拆成 `npm run test:unit` 与 `npm run test:integration` 两步。
+- 需要真 agent turn 的集成文件由 `RUN_CLAUDE_INTEGRATION` 门控。列清单用
+  `grep -rl 'process\.env\.RUN_CLAUDE_INTEGRATION' tests/integration/`，**必须带 `process.env` 前缀**：
+  有几个文件的注释里写着「不挂 RUN_CLAUDE_INTEGRATION」，裸词 grep 会把零 token 的用例误判成要真凭据的。
+- 这批文件**只能在宿主机真跑**。容器（`test:docker*`）和 CI 都设了 `CI=true`，门控判的是
+  `CI || !RUN_CLAUDE_INTEGRATION`，在那里带上变量也是全部 skip、照样报绿；容器里也只有假 CLI。
+  宿主机上它们顶部的 `require-disposable-env.mjs` 会拒跑，要同时设后门变量，一次只跑一个文件：
+  `CLI_HOOKS_BRIDGE=off CLI_STATUSLINE_BRIDGE=off CCM_ALLOW_HOST_DESTRUCTIVE_TESTS=1 RUN_CLAUDE_INTEGRATION=1 node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/integration/<文件>`。
+  两个桥要关：测试起的 server 默认监听与生产共用的 `~/.claude/ccm/` 投递箱，读完即删，会抢走生产 server 的事件。
+  后门开着时真实家目录对测试可写，**不要**配 `npm test` / `npm run test:integration` 全量跑
+  （`session-delete` 在真实 `~/.claude/projects` 下做 recursive 删除）。这属于要机主单独授权的那一类，先问。
+- `npm run test:e2e` 是 `workers:1` 串行，全量十几分钟；开发循环只跑相关的那几条：
+  `-- tests/e2e/specs/xxx.spec.ts` 或 `-- --grep "P0-08 …"`。本机必带 `NO_PROXY=127.0.0.1,localhost`，
+  否则就绪探针走代理，恒 30s 假红。两个漏跑表现为全绿的坑：
+  - **`--grep` 的模式带空格必须加引号**。不加会被 shell 拆成「第一个词 + 若干位置参数」，而它照样打印
+    「Running 1 test … passed」——2026-09-18 据此得出过「单跑绿、整份跑红」的假对照。
+  - **`--only-changed` 在本仓不可用**。spec 经浏览器访问页面、不 import `app/public`，Playwright 的依赖图
+    看不见产品代码：改 `app.js` 时它选出 0 个测试然后报绿。只有改 spec 自身时才有意义。
+- 全量用 `npm run test:e2e:parallel`：按实测时长 LPT 分片，缺省 `min(8, 核数-2)` 片，`CCM_E2E_SHARDS=N`
+  覆盖；地板约等于最大那个 spec 文件自己的耗时。分片原理、CI 横向分片（`CCM_E2E_SHARD_INDEX`）与
+  `--merge-durations` 并集校验（TEST-02）的来龙去脉和实测数字在 `tests/infra/e2e-parallel.js` 头注释。
+- **CI 上的地板提醒**：e2e 汇总 job 每轮把总时长、平均每片和最大的几个 spec 写进 run 摘要页；最大的
+  单个文件超过「总时长 ÷ 分片数」时出一条点名它的 `::warning`——这时墙钟由它决定，加分片没用，
+  **按主题拆开它**（拆法同 §5「大模块按主题拆」，2026-10-25 拆 `workspace-sessions-sidebar` 是先例）。
+  加 e2e 用例时也别往已经最大的那个文件里堆。
+- 遇到疑似时序假红（并行度越高，「等固定时间窗」的用例越容易超时），先用 `CCM_E2E_SHARDS=4` 重跑对照。
+  `P0-SYNC-ACK-TIMEOUT` 记过「4 片下偶发红」，根因未定。
+
 ### 不做：测试时长门禁
 
 阈值必然漂移，且慢不等于错（见 §9）。这一维靠上面那条判据人工判，不进必绿闸。
@@ -303,7 +337,7 @@ done | sort -rn | head
 文件名与生产文件同名：`file-browse.js` → `file-browse.test.mjs`。
 **这不只是美观**——`mutate` 默认自动查找「提到该生产文件的测试」，同名让自动匹配生效，省掉每次手写 `--tests=`。
 
-大模块按主题拆，拆的轴是主题不是行数：`agent.js` 一个生产文件拆成 15 个 `agent-*.test.mjs`。
+大模块按主题拆，拆的轴是主题不是行数：`agent.js` 一个生产文件拆成十几个 `agent-*.test.mjs`。
 
 ### 文件头
 
@@ -409,7 +443,7 @@ done | sort -rn | head
 
 ### 交付前：把验证过程写进 commit，不要只说"测了"
 
-项目的 commit 约定里有 `Tested:` / `Not-tested:` trailer（见根 `CLAUDE.md`）。
+项目的 commit 约定里有 `Tested:` / `Not-tested:` trailer（见 `.claude/rules/tests.md`）。
 **两侧验收的证据就写在那里**，一条测试一行，形如：
 
 ```
@@ -466,7 +500,7 @@ PR 默认只跑 S0–S3。S5 不是「在 PR 上持续缺席」——它本就�
 ## 8. 行业常用名怎么落到这里
 
 有人（或某个模型）说"该补集成测试了"、"要加一层安全测试"时，先把那个词翻译过来。
-**它们在本项目不是并列的十五层，而是槽或问法。**
+**它们在本项目不是并列的十六层，而是槽或问法。**
 
 | 常用名 | 落到这里 | 不要把它当成 |
 |---|---|---|
@@ -485,6 +519,7 @@ PR 默认只跑 S0–S3。S5 不是「在 PR 上持续缺席」——它本就�
 | 兼容性 | Node 声明的最低 + 当前；CLI 靠上游守望；Safari 发版手测 | 每 CLI × 每浏览器的 PR 矩阵 |
 | 安装 / 升级 / 卸载 | `DIST-01` + `tests/invariants/env/` | 只当文档附录 |
 | 冒烟与回归 | 发版横切（上一节） | 再开一个 runner |
+| 验收（acceptance） | [`tests/acceptance/`](../tests/acceptance/README.md)：机主本机跑，agent 首跑执行用例并写下判法，判法确定的之后由脚本重放 | 回归套件或 CI 必跑 |
 
 ---
 
@@ -500,7 +535,7 @@ PR 默认只跑 S0–S3。S5 不是「在 PR 上持续缺席」——它本就�
   （2026-09-04 已退役三个发假绿灯的门禁——覆盖率那个的「✅ 达标」与「11 个核心文件 0 覆盖」是同一次打印。）
 - **测试时长门禁**（超过 N 秒就红）。与覆盖率门槛同一形态：阈值必然漂移，而慢不等于错——
   真 spawn 子进程的文件跑 8 秒是合理成本。这一维靠 §4 那条「`user + sys ≪ real` 就是在空等」
-  人工判，不进必绿闸。
+  人工判，不进必绿闸。§4 的 e2e 地板提醒不是门禁：只出 warning、从不变红，判据是相对的，没有秒数阈值。
 - 24h / 72h soak 进必绿。有泄漏信号再用 N 次开合的 `RESOURCE-01`。
 - 把真 CLI 探针 / 上游 schema 嗅探排进 nightly。上游漂移靠守望开 issue。
 - 用测试去重开 `docs/hard-rules.md` 里已决的「不做」（AD-5 / SP-10 / UP-1）。
@@ -515,7 +550,7 @@ PR 默认只跑 S0–S3。S5 不是「在 PR 上持续缺席」——它本就�
 能写成 `logic/` 或后端纯函数的，先写一条会红的 S1。
 接线（握手、ack、热加载、文件监听）走 S2。
 用户看得见且 S1/S2 看不见的，走 S3。
-假后端可能撒谎的那几条用户路径，走 S4。
+假后端可能撒谎的那几条用户路径，走 S4（`tests/playground/e2e/`，`npm run test:docker:playground`）。
 只有模型或真 CLI 进程表才能撒谎的，走 S5。
 算路径的代码改完，走变异。
 

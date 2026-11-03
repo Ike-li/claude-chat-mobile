@@ -126,7 +126,7 @@ export const ENV_SCHEMA = {
       { value: 'loopback', label: t('采信 loopback 反代追加的 X-Forwarded-For 末跳', 'Trust the last X-Forwarded-For hop appended by a loopback reverse proxy') },
     ],
     label: t('可信反代（限速来源）', 'Trusted proxy (rate-limit source)'),
-    help: t('只在反代**自己追加** X-Forwarded-For 时才能开（nginx 的 $proxy_add_x_forwarded_for；Caddy / Traefik 默认如此），且反代必须 proxy_pass 到 127.0.0.1。ssh -R、frp tcp、没配转发头的 nginx 会把客户端伪造的头原样送进来，开了等于关闭登录限速。改这项要重启。',
+    help: t('只在反代自己追加 X-Forwarded-For 时才能开（nginx 的 $proxy_add_x_forwarded_for；Caddy / Traefik 默认如此），且反代必须 proxy_pass 到 127.0.0.1。ssh -R、frp tcp、没配转发头的 nginx 会把客户端伪造的头原样送进来，开了等于关闭登录限速。改这项要重启。',
       'Enable only when the reverse proxy itself appends X-Forwarded-For (nginx $proxy_add_x_forwarded_for; Caddy / Traefik do by default) and proxies to 127.0.0.1. ssh -R, frp tcp, or nginx without a forwarding header pass a client-forged header straight through — enabling it there disables login rate limiting. Requires a restart.'),
   },
   // 设备审批的管辖面。默认下 CF Access 已验的连接**完全跳过**设备审批，于是「已受信任的
@@ -183,18 +183,20 @@ export const ENV_SCHEMA = {
     label: t('工作区列表', 'Workspaces'),
     // 文案曾写「手机面板没有数组编辑器，故此处只读」——2026-09-11 起前端有了 buildListEditor、
     // readonly 也已是 false，那句话从此在说一件代码里不成立的事（2026-09-17 安全审查 M2 顺带查出）。
-    help: t('每项是绝对路径，或 {path, sessionLimit}。**第一项就是手机端默认打开的目录**。'
+    help: t('每项是绝对路径，或 {path, sessionLimit}。第一项就是手机端默认打开的目录。'
+      + '子文件夹与所属仓库的 git worktree 直接可用，不必单独列出；手机上也能在文件夹选择器里「添加文件夹」。'
       + '改完即生效，无需重启。不能填家目录本身或 /、/Users、/home 这类过宽的根——'
       + '范围内的文件对远程入口全部可读，FILE_EDIT 缺省开着时还可直写。',
-      'Each entry is an absolute path, or {path, sessionLimit}. **The first entry is the one your '
-      + 'phone opens by default.** Hot-reloads without a restart. It cannot be your home directory '
+      'Each entry is an absolute path, or {path, sessionLimit}. The first entry is the one your '
+      + 'phone opens by default. Subfolders and the repository\'s own git worktrees are reachable '
+      + 'without their own entries, and the phone\'s folder picker can "Add folder" too. Hot-reloads without a restart. It cannot be your home directory '
       + 'itself, nor an overly broad root such as /, /Users or /home — everything in scope is readable '
       + 'by the remote entrypoint, and writable too while FILE_EDIT is on (the default).'),
   },
   WORK_DIRS_FILE: {
     group: 'runtime', kind: 'path', mustExist: true,
     label: t('多工作区配置文件（旧）', 'Workdirs file (legacy)'),
-    help: t('指向外部 workdirs.json。该文件的**内容**支持热加载，但改这个指针本身需要重启。已被上面的工作区列表取代。',
+    help: t('指向外部 workdirs.json。该文件的内容支持热加载，但改这个指针本身需要重启。已被上面的工作区列表取代。',
       'Points at an external workdirs.json. Superseded by the inline list above; kept for compatibility.'),
   },
   CLAUDE_BIN: {
@@ -426,7 +428,7 @@ function checkUrl(key, value, def) {
 // 可经文件编辑器直写、不过 Agent 审批链。把 $HOME 写进去等于把 ~/.ssh、~/.aws、浏览器 profile
 // 一并挂到远程入口上。
 //
-// 与 SCOPE-03 的分工：那条管「启动时一个都解析不出 → 拒绝启动、绝不回落家目录」，管的是**回落**；
+// 与 SCOPE-03 的分工：那条管「清单为空或一个都解析不出 → 只剩「无文件夹」、绝不回落家目录」，管的是**回落**；
 // 这里管**显式写入**。两条路不同，家目录暴露的后果相同。
 //
 // 按**路径段**比较而不是字符串前缀：`/home/tester2` 与家目录 `/home/tester` 只差一个字符，
@@ -461,7 +463,8 @@ function workdirForms(rawPath) {
   if (!path) return null;
   const lexical = resolve(path);
   let real = lexical;
-  try { real = realpathSync(lexical); } catch { /* 尚不存在 / 无权限：落点就按词法算，不因此放行 */ }
+  // .native：落到磁盘上的真实写法——macOS 不分大小写，/USERS 就是 /Users，JS 版会原样保留而漏拦
+  try { real = realpathSync.native(lexical); } catch { /* 尚不存在 / 无权限：落点就按词法算，不因此放行 */ }
   return { lexical, real };
 }
 

@@ -53,7 +53,8 @@ transcript 事实            stream / control / usage     status_line 组装    
 | **FE 标题** | 有 `resolvedModel` → **标题 = wire id**；无 → `displayName` 或 `value` |
 | **FE 副标题** | 有 wire 时用档位 id / displayName（同 wire 多卡可区分） |
 | **FE value** | 保持 SDK `value`（`default`/`opus`/…），供选中与 data-model |
-| **锚点** | `resolveModelTileDisplay` · `tests/unit/display-contracts.test.mjs` · `logic-ui-ux-remaining.test.mjs` |
+| **FE 在跑模型** | init / instances 报的多是 wire 而非档位 id：`modelTileValueFor` 映射到已有磁贴（value 精确 → 带后缀全名 → 去后缀，匹配 value 或 `resolvedModel`），「使用中」只标一张；**映射不到才**补一张「当前加载模型」卡 |
+| **锚点** | `resolveModelTileDisplay` · `modelTileValueFor` · `tests/unit/display-contracts.test.mjs` · `logic-ui-ux-remaining.test.mjs` · E2E P0-09-LOADED |
 
 ### 1.2 发送 model id
 
@@ -61,15 +62,17 @@ transcript 事实            stream / control / usage     status_line 组装    
 |----|------|
 | **意图** | 用户点的是档位；发出去的应是**网关认的 wire**，避免 alias 再被 env 映射错 |
 | **规则** | `resolveSendModel`：空/`default` → `default` 条目的 `resolvedModel`（无则 `undefined` 让 CLI 自选）；其它档位有 `resolvedModel` 则 **pin wire**；无列表则原样 |
-| **禁止** | 前端自造模型 id；把 displayName 当 send value |
-| **锚点** | `resolveSendModel` · `logic-session.test.mjs` · display-contracts |
+| **运行中未点选** | `resolveOutgoingModel`：有实例、且用户没点过磁贴 / 没用 `/model` → **原样带回服务端报的在跑模型**（含网关后缀），不从磁贴重建；也不能带空——服务端把空当「回到 spawn 时的 `defaultModel`」 |
+| **服务端兜底** | 未 pin 且本进程从没尝试过切换时，带来的等于 init 的 `reportedModel` → 不 `setModel`，只记进差分基准 |
+| **禁止** | 前端自造模型 id；把 displayName 当 send value；把「显示在跑的模型」当成用户的选择发出去 |
+| **锚点** | `resolveSendModel` · `resolveOutgoingModel` · `logic-session.test.mjs` · display-contracts · `agent-control.test.mjs` |
 
 ### 1.3 当前模型文案（底栏 pill / compose）
 
 | 项 | 契约 |
 |----|------|
 | **有选中 + 有 resolved** | 显示 **wire**（`resolveGatewayModelName` / `resolveModelPillText`） |
-| **有选中无 resolved** | 原值 + 网关后缀（如 `[1m]`） |
+| **有选中无 resolved** | 原值 + 网关后缀（如 `[1m]`）；带后缀的全名查不到 `resolvedModel` 时**先按原值查**——后缀可能是在跑模型残留的，点了 haiku 不显示 `haiku[1m]` |
 | **未选** | `default.resolvedModel` → CLI default 文案 → cwd 默认 →「默认」 |
 | **禁止** | 无 `resolvedModel` 时用 displayName **覆盖** pill（历史 P0 锁：诊断/原值语义） |
 | **锚点** | `resolveModelPillText` · `logic-session.test.mjs` · E2E P0-09\* |
@@ -103,6 +106,10 @@ transcript 事实            stream / control / usage     status_line 组装    
 
 持久化：`sessions.json` 存 SDK 档或 `'auto'` 字面量（ultracode 不落盘）。`resolveResumeEffort` 把 `'auto'` 当终值，
 把 `null` 当「没指定」继续往下兜底——auto 若存成 null，重启后会悄悄换成 settings 里存的档。
+
+恢复会话时的档位：会话自己存的 > CLI settings（`effortLevel`）> 没指定（不带 `--effort`）。**同一文件夹里别的会话的档不参与**
+——此前会继承该文件夹最后一个实例的档，临时选一次 low 就扩散到之后恢复的所有旧会话；终端 `claude --resume` 不会这样。
+新会话（FRESH）另走 `resolveFreshPrefs`：新会话页暂存 > CLI settings > 硬默认。
 | **settings.effortLevel** | 通常无 max；`normalizeEffortLevel` **不认** ultracode | L3 CLI 默认 |
 
 ### 2.2 UI → SDK 映射（硬契约）
@@ -150,12 +157,15 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 |----|------|
 | **候选来源** | 当前模型条目的 `supportedEffortLevels`；解析不到 → 全候选并集；明确不支持 → 隐藏整行 |
 | **auto** | 有档可调就在末位追加 `auto`（`withAutoTier`，顺序同 CLI usage `[…\|ultracode\|auto]`）；wire 上原样发 `'auto'` |
-| **没指定（null）** | **不高亮任何磁贴**（尤其不高亮 auto）；pill / 占位显「`<实际档> · CLI 默认`」，实际档未知时只显「CLI 默认」 |
+| **没指定（null）** | **不高亮任何磁贴**（尤其不高亮 auto）；占位与空首页摘要显「`<实际档> · CLI 默认`」，实际档未知时只显「CLI 默认」；底栏胶囊只显档名（`effortUiState().pillLabel`），完整文案放 `#pillDefaults` 的 title——后缀放进胶囊会被宽度上限截成「medium · C…」 |
+| **CLI settings 来的档** | 没在 Web 上选过档时，L3（settings 的 `effortLevel`）照常当显式档下发（`--effort`，跑起来同终端读 settings），但用户没选过它，**视同没指定**：占位与空首页摘要显「`<档> · CLI 默认`」（胶囊只显档名，同上）、不高亮磁贴。发之前（空首页）与发之后（实例）一致，不能发完一条就变成光秃的档（验收 O15）。点同一档 = 钉成用户自选：服务端只改来源与落盘，不置换实例（`user:setEffort` 的幂等闸按「档 + 来源」判） |
+| **来源字段** | `effortSource`：`user`（Web 上点的）/ `cli-settings`（L3）/ `default`（没指定）。随 instances（实例的 `effortSource`、空首页的 `defaultEffortSource`）与 `effort_mode.source` 下发，随 sessions.json 落盘。缺字段（旧回执、本字段之前落盘的会话）按 `user` 显示，与改动前一致 |
+| **续接时的来源** | `resolveResumeEffort` 随取值的那一层带出来源。存的是 `cli-settings` 来的档时，settings 此刻读得到就跟它（终端 `claude --resume` 也每次现读 settings），读不到（缓存冷 / 读失败）才沿用记下的档 |
 | **实际档来源** | 只能问 CLI：`AgentSession.refreshEffectiveEffort()` 调 `get_settings` 取 `applied.effort`（init 后、切模型后，仅在没指定时问）；server 经 `effort_mode.effective` 与 instances 的 `effortEffective` 下发。只进文案，不当成钉住的档 |
 | **未知档** | `effortUiState` **不得**把 `null` 猜成 `low` |
 | **CLI 镜像** | `mirrorReadonly` 时 null 文案为「CLI 档位未知」，不用 Web 实例的实际档补 |
 | **面板数据源** | `resolvePanelState`：镜像态**整组**只用 CLI 观察值，禁止 Web 偏好补空 |
-| **锚点** | `effortLevelsFor` `effortUiState` `withAutoTier` `resolvePanelState` · `logic-session.test.mjs` · E2E P0-09z / P0-09f |
+| **锚点** | `effortLevelsFor` `effortUiState` `withAutoTier` `resolvePanelState` `resolveFreshPrefs` `resolveResumeEffort` · `logic-session.test.mjs` · `cli-settings-defaults.test.mjs` · 集成 `effort-source.test.mjs` · E2E P0-09z / P0-09za / P0-09f |
 
 ### 2.4 Statusline 中的 effort
 
@@ -236,10 +246,10 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 | 面 | 策略摘要 | 主要代码 |
 |----|----------|----------|
 | 权限档 pill | bypass 对 SDK 映射 default，UI 仍显 bypass；不进 status_line | `agent.sdkPermissionMode` `setPermMode` |
-| 工具卡 | 截断 600/Bash 2000、脱敏 base64、标题抽 path | `agent` truncate · `formatTool*` |
+| 工具卡 | 截断 600/Bash 2000（live 与历史回放同一份 `toolResultCap`）、脱敏 base64、标题抽 path；截断的卡给「展开全文」（`tool:full`：live 先查实例内存，带会话坐标时回落读 transcript，历史卡只走后者，门同 `image:get`）；输出只有 JSON 才高亮；输入以 `{`/`[` 开头就按 JSON 高亮（截断的也算），其余不高亮，都不走自动识别 | `toolResultCap` · `formatTool*` · `toolOutputHighlightClass` · `toolInputHighlightClass` |
 | 审批 sheet | ExitPlanMode → markdown plan；input 不截断 | `formatPermInputDisplay` |
 | 历史回显 | 滤 CLI 系统行；非 jsonl 全量 | `history.js` |
-| 会话列表 | **生产走 SDK `listSessions` 快路径**（判据 `baseDir === CLAUDE_DIR`）+ 按 jsonl 存在做归属过滤 + readdir 补 SDK 漏报；隔离测试注入别的 baseDir 时回落自造扫盘。`hasMore` / `total` / 标题 `query` 搜索（搜索强制全量 readdir 绕开 SDK ~51 窗；匹配键 OR SDK `summary` 与 `ai-title` / 未截断 firstUser / 命令名，展示标题优先 summary）/ TTL 缓存由 `listSessionsPage` 维护；`excludeIds` 供删文件窗口临时过滤。readdir 成功时 `hasMore = total > limit`，不得 OR SDK 触顶 | `listSessionsPage` · `scanSessionsViaSdk` |
+| 会话列表 | **生产走 SDK `listSessions` 快路径**（判据 `baseDir === CLAUDE_DIR`）+ 按 jsonl 存在做归属过滤 + readdir 补 SDK 漏报；隔离测试注入别的 baseDir 时回落自造扫盘。`hasMore` / `total` / 标题 `query` 搜索（搜索强制全量 readdir 绕开 SDK ~51 窗；匹配键 OR SDK `summary` 与 `ai-title` / 未截断 firstUser / 命令名，展示标题优先 summary）/ 列表缓存（按目录里 jsonl 与旁路标题的 stat 指纹失效）由 `listSessionsPage` 维护；`excludeIds` 供删文件窗口临时过滤。readdir 成功时 `hasMore = total > limit`，不得 OR SDK 触顶 | `listSessionsPage` · `scanSessionsViaSdk` |
 | 系统条中文 | compacting 等 agent 写死中文 | `agent.map` system |
 
 后续若某面反复踩坑，升格进 display-contracts 测试块即可。
@@ -259,3 +269,11 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 | Statusline 双源不混拼 | `buildWeb*` `buildCli*` `selectStatusSource` | `statusline.test` · smoke statusline |
 | 折叠摘要 | `formatStatuslineCollapsedSummary` | `logic-statusline-summary` |
 | ctx 窗口只认真值 | `getContextUsageSafe` `shouldFetchContextUsage` `readCachedCtxWindow` `cacheCtxWindow` | `statusline.test` |
+
+## §6 外部迁移恢复（#473）
+
+- `instances[].cwd` 是 SDK 驾驶目录；可选 `transcriptCwd` 是已验证记录位置。历史读取优先后者，代码面板走 `panelCwd`。同一实例的位置变化也触发历史重新绑定。
+- `externalObserved` 存外部模型、权限与思考强度观察值，只在已开实例检测到搬家时写入；整组展示，不用网页偏好补空。未知思考强度显示未知，外部记录与 SDK 运行态分开，续接后以进程确认为准。发送前置换只采信其中的权限档；思考强度沿用网页的档与来源，不把外部值记成 `user`；消息里带的模型是实例自己在跑的，不是面板上显示的外部模型。
+- 位置已变时拒绝调权限档，回推 `instances` 让选择器按外部记录拨回；不回推 `permission_mode`，那是网页档。
+- 记录位置所在的 worktree 已删除时，`panelCwd` 回落父仓、`worktreeGone` 为真，面板提示条写明在看主仓；`cwd` 与 `transcriptCwd` 不动。Git 分支和文件描述目标工作树的当前状态，不恢复历史快照。
+- 侧栏点已开会话只切视图（`user:setViewing`，点正在看的那行不发请求）；未开会话走 `session:switch`，由服务端核对位置。`session:switch` 打开期间被后点的会话取代时回 `{ ok: true, superseded: true }`：不抢焦点，也不弹「打不开」。

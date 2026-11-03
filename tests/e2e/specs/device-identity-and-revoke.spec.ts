@@ -98,6 +98,33 @@ test.describe('设备身份与吊销', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O89（AC-02-24）：新部署的 Access 实例一台已信任设备都没有，整段（连同这条脚注）原来跟着空列表隐藏——
+  // 恰恰是最该看到「这张表对隧道流量失效」的时候看不到。空列表时整段照样显示，给一句空态。
+  test('CF Access bypass 生效、列表为空：整段照样显示，脚注说清这张表管不到隧道', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__access-bypass?active=1&empty=1');
+    await openGeneralSettings(page);
+
+    await expect(page.getByTestId('trusted-device-row')).toHaveCount(0);
+    const note = page.locator('#trustedDevicesNote');
+    await expect(note).toBeVisible();
+    await expect(note).toContainText('吊销对它们无效');
+    await expect(page.getByTestId('trusted-devices-empty')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('bypass 未生效、列表为空：整段不显示（没什么可说的，空框只会让人以为坏了）', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__access-bypass?active=0&empty=1');
+    await openGeneralSettings(page);
+    // 栅栏：同一面板里的本机设备卡已经画出来，说明面板渲染完了
+    await expect(page.getByTestId('device-fingerprint-full')).toBeAttached();
+    await expect(page.locator('#trustedDevicesSection')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('bypass 未生效时用常规文案（吊销确实立刻生效）', async ({ page }) => {
     await gotoMock(page);
     await openGeneralSettings(page);
@@ -138,6 +165,43 @@ test.describe('设备身份与吊销', () => {
     await input.press('Enter');
 
     await expect(page.getByTestId('trusted-device-name').nth(2)).toHaveText(/^我的 Mac · cd2760a5…ec82$/);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O106：输入框 maxLength=24 按 UTF-16 单元计，而服务端与文档按码点限长 24——emoji 占两个单元，
+  // 真键盘连打只收得下 12 个，纯 emoji 别名永远到不了 24。限长要和服务端同一个口径（码点）。
+  test('别名输入框按码点限长 24：emoji 能写满 24 个，中文同样 24 个封顶', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralSettings(page);
+
+    const row = page.getByTestId('trusted-device-row').filter({ hasText: 'cd2760a5…ec82' });
+    await row.getByTestId('trusted-device-rename').click();
+    const input = row.getByTestId('trusted-device-alias-input');
+    await input.fill('');
+    await input.pressSequentially('😀'.repeat(30));
+    expect([...await input.inputValue()].length, 'emoji 被按 UTF-16 单元截到了一半').toBe(24);
+    await input.fill('');
+    await input.pressSequentially('中'.repeat(30));
+    expect([...await input.inputValue()].length).toBe(24);
+    await input.press('Escape');
+    await expectNoBrowserErrors(page);
+  });
+
+  // #320 review（Codex P2）：中文输入法里 Enter 是「确认候选词」，keydown 带 isComposing（或 keyCode 229）。
+  // 此前它直接提交改名、整段重渲染——正在拼的字被打断，compositionend 的码点截断也来不及跑。
+  test('输入法组字中按 Enter 只是选词，不提交改名', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralSettings(page);
+
+    const row = page.getByTestId('trusted-device-row').filter({ hasText: 'cd2760a5…ec82' });
+    await row.getByTestId('trusted-device-rename').click();
+    const input = row.getByTestId('trusted-device-alias-input');
+    await input.fill('wo de');
+    for (const init of [{ isComposing: true }, { keyCode: 229 }]) {
+      await input.evaluate((el, i) => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...i })), init);
+      await expect(input, `组字中的 Enter（${JSON.stringify(init)}）把改名提交了`).toBeVisible();
+    }
+    await input.press('Escape');
     await expectNoBrowserErrors(page);
   });
 

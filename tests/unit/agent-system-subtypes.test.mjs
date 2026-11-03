@@ -413,8 +413,8 @@ test.describe('map() — 子 agent 的 API 报错', () => {
 
 // commands_changed（SDK 0.3.229 起）：CLI 中途发现新命令/skill 时的**全量**推送。
 // 上游契约原话：「Clients should REPLACE their cached command list with this payload;
-// supportedCommands() tracks the latest push」——也就是说 supportedCommands() 只在 initialize
-// 时捕获一次、拿不到中途变化，这条消息是唯一的增量来源。
+// supportedCommands() tracks the latest push」——推送是中途变化的来源，事后再拉 supportedCommands()
+// 拿到的也是这份（sdk.mjs: `return this.latestCommands ?? initialization.commands`）。
 //
 // 【为什么必须自成一型，不能并进 init】server 对 init 有两个副作用，这条一个都不该触发：
 //  ① app.js:1657 `lastInit = envelope.payload` —— 整体覆盖全局 lastInit，会把 model/cwd 冲掉；
@@ -456,6 +456,57 @@ test.describe('map() — commands_changed（slash 命令中途变化）', () => 
 
     assert.deepEqual(events.find(e => e.type === 'slash_commands').payload.slashCommands, []);
     s.dispose();
+  });
+});
+
+// supportedCommands()（#456）：走 initialize 响应，首条消息之前就拿得到，带说明 / 参数提示 / 别名。
+// init.slash_commands 只有名字、且要等首条消息之后才来，新工作区的菜单此前一直只剩本地 /model、/rewind。
+test.describe('fetchCommands() — supportedCommands() 的完整清单', () => {
+  const tick = () => new Promise(r => setImmediate(r));
+  const COMMANDS = [
+    { name: 'deploy', description: 'Deploy the app', argumentHint: '<env>' },
+    { name: 'usage', description: 'Show usage', argumentHint: '', aliases: ['cost'], builtin: true },
+  ];
+
+  test('拉到的对象原样进 slash_commands 事件（归一仍只在 server 一处）', async () => {
+    const { s, events } = makeSession();
+    s.q = { supportedCommands: async () => COMMANDS };
+    await s.fetchCommands();
+    assert.deepEqual(events.find(e => e.type === 'slash_commands')?.payload.slashCommands, COMMANDS);
+    s.dispose();
+  });
+
+  // init 只带名字：到达时再拉一次，让手机上的菜单立刻补回说明（start() 那一次可能早于 CLI 就绪）
+  test('init 到达时再拉一次', async () => {
+    const { s, events } = makeSession();
+    s.q = { supportedCommands: async () => COMMANDS };
+    s.map({ type: 'system', subtype: 'init', session_id: 'sid-cmds', model: 'm1', slash_commands: ['deploy', 'usage'] });
+    await tick();
+    assert.deepEqual(events.find(e => e.type === 'slash_commands')?.payload.slashCommands, COMMANDS);
+    s.dispose();
+  });
+
+  // 空数组发出去，前端会按 REPLACE 语义把菜单清空；拿不到（旧 CLI 没有这个方法、调用失败）就当不知道
+  test('拿到空清单、方法不存在、调用失败、已 dispose → 都不发事件', async () => {
+    for (const q of [
+      { supportedCommands: async () => [] },
+      {},
+      { supportedCommands: async () => { throw new Error('not ready'); } },
+    ]) {
+      const { s, events } = makeSession();
+      s.q = q;
+      await s.fetchCommands();
+      assert.equal(events.filter(e => e.type === 'slash_commands').length, 0);
+      s.dispose();
+    }
+    const { s, events } = makeSession();
+    let release;
+    s.q = { supportedCommands: () => new Promise(r => { release = r; }) };
+    const pending = s.fetchCommands();
+    s.dispose();
+    release(COMMANDS);
+    await pending;
+    assert.equal(events.filter(e => e.type === 'slash_commands').length, 0);
   });
 });
 
@@ -518,6 +569,37 @@ test.describe('map() — status 心跳静默吞（止住兜底日志刷屏）', 
     const [n] = notices(events);
     assert.ok(n, '压缩失败必须上屏');
     assert.match(n.payload.message, /压缩失败/);
+    s.dispose();
+  });
+});
+
+// #453：init 带 CLI 自报的协议能力（capabilities）。按能力开关的功能（如 #455 的 unanswered 标注）只能发给
+// 声明了该能力的 CLI，否则较旧的 CLI 在严格宿主下会拒收整份答案——所以不知道时必须当作不支持。
+test.describe('map() — init 的 capabilities 存下来供按能力开关', () => {
+  const init = (s, extra) => s.map({ type: 'system', subtype: 'init', session_id: 'sid-cap', model: 'm1', ...extra });
+
+  test('init 声明了的能力 → true；没声明的 → false', () => {
+    const { s } = makeSession();
+    init(s, { capabilities: ['ask_user_question_unanswered_v1', 'interrupt_receipt_v1'] });
+    assert.equal(s.hasCliCapability('ask_user_question_unanswered_v1'), true, 'CLI 声明了的能力查不到：依赖它的功能永远不会开');
+    assert.equal(s.hasCliCapability('interrupt_cancel_queued_v1'), false);
+    s.dispose();
+  });
+
+  test('旧 CLI 不带该字段、或 init 还没到 → 一律 false', () => {
+    const { s } = makeSession();
+    assert.equal(s.hasCliCapability('ask_user_question_unanswered_v1'), false, 'init 前就答「支持」：会给旧 CLI 发它不认的字段');
+    init(s, {});
+    assert.equal(s.hasCliCapability('ask_user_question_unanswered_v1'), false, '没声明却答「支持」：会给旧 CLI 发它不认的字段');
+    s.dispose();
+  });
+
+  test('再来一次 init（resume / 换会话）以新的为准，旧能力不残留', () => {
+    const { s } = makeSession();
+    init(s, { capabilities: ['ask_user_question_unanswered_v1'] });
+    init(s, { capabilities: ['interrupt_receipt_v1'] });
+    assert.equal(s.hasCliCapability('interrupt_receipt_v1'), true, '第二次 init 声明的能力查不到：resume 后能力集没更新');
+    assert.equal(s.hasCliCapability('ask_user_question_unanswered_v1'), false, '上一个 CLI 的能力残留：背后换成旧版 CLI 后仍会按新版行为发');
     s.dispose();
   });
 });

@@ -3,7 +3,8 @@
 // 裸计数器段已判定化撤除（serviceMetricsRows 删除）：原始计数留 /metrics 巡检端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatHooksBridgeRow, formatStatuslineBridgeRow, describeRateLimitSource, formatAuditEntry } from '../../app/public/js/logic.js';
+import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatServiceNoticeRows, formatHooksBridgeRow, formatStatuslineBridgeRow, describeRateLimitSource, formatAuditEntry, serviceNoticeFingerprint, undismissedServiceNotices } from '../../app/public/js/logic.js';
+import { setLang } from '../../app/public/js/i18n.js';
 import { rlSourceKey } from '../../app/src/auth/rate-limiter.js';
 
 test.describe('formatUptime：运行时长分档', () => {
@@ -109,6 +110,18 @@ test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () =
       ['🔔 推送最近失败于 1 分钟前（ntfy，累计 1 次）：连不上 ntfy 服务（ECONNREFUSED）']
     );
   });
+  // 验收 O109：ntfy 对端收下请求却不回响应、直接关连接（FIN）时，undici 报 UND_ERR_SOCKET——同样是「连不上」，
+  // 此前不在白名单里，告警只剩一个内部码。连接超时 UND_ERR_CONNECT_TIMEOUT 同理。
+  test('undici 的连接层错误码（ntfy 走 fetch）同样译成「连不上」', () => {
+    const now = 100 * 60_000;
+    for (const code of ['UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']) {
+      assert.deepEqual(
+        formatServiceNotices({ service: { deliveryFailure: { channel: 'ntfy', at: now - 60_000, count: 1, reason: code } }, now }),
+        [`🔔 推送最近失败于 1 分钟前（ntfy，累计 1 次）：连不上 ntfy 服务（${code}）`],
+        code
+      );
+    }
+  });
   test('HTTP 状态码不动：服务端答了话就不是"连不上"，混为一谈会误导排查方向', () => {
     const now = 100 * 60_000;
     for (const reason of ['HTTP 502', 'HTTP 401', 'unknown', 'socket hang up']) {
@@ -155,17 +168,33 @@ test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () =
       ['🐞 前端错误发生于 1 分钟前，详见日志面板']
     );
   });
-  test('全类命中 → 固定顺序：限速锁定 → 投递失败 → 前端错误', () => {
+  // 清单为空也能启动之后（SCOPE-03），「配置了却一个都找不到」不再拒绝启动，抽屉里只剩「无文件夹」——
+  // 没有这一行，用户看到的就是文件夹凭空消失、说不出原因。恢复路径两条都写上：抽屉里的「断开」
+  // 够不着它们（找不到的目录根本不进抽屉），只能去配置里的工作区列表删。
+  // 恢复后不必重启服务了（#301）：告警行内有「重新检查」，服务端重跑一次清单加载、重算找不到的个数。
+  test('配置的文件夹找不到 → 📁 行：个数 + 可能原因 + 怎么恢复', () => {
+    assert.deepEqual(
+      formatServiceNotices({ service: { missingFolders: 2 }, now: 1000 }),
+      ['📁 2 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理文件夹」里删掉']
+    );
+  });
+  test('missingFolders 为 0 / 缺席（旧 server）/ 脏值 → 不出这一行', () => {
+    for (const missingFolders of [0, undefined, null, -1, 'x', Number.NaN]) {
+      assert.deepEqual(formatServiceNotices({ service: { missingFolders }, now: 1000 }), [], String(missingFolders));
+    }
+  });
+  test('全类命中 → 固定顺序：限速锁定 → 投递失败 → 前端错误 → 找不到的文件夹', () => {
     const now = 100 * 60_000;
     const notices = formatServiceNotices({
       service: {
+        missingFolders: 1,
         deliveryFailure: { channel: 'ntfy', at: now - 1000, count: 1 },
         rateLimitLockout: { at: now - 2000, count: 1 },
         clientError: { at: now - 3000, count: 1 },
       },
       now,
     });
-    assert.deepEqual(notices.map(l => [...l][0]), ['⛔', '🔔', '🐞']);
+    assert.deepEqual(notices.map(l => [...l][0]), ['⛔', '🔔', '🐞', '📁']);
   });
   test('旧 server ack 无新字段 → 优雅缺席不报错', () => {
     assert.deepEqual(formatServiceNotices({ service: { deliveryFailure: null }, now: 1000 }), []);
@@ -356,6 +385,27 @@ test('formatHooksBridgeRow：读不出安装态时就地说明，不整段消失
   assert.match(unknown.hint || '', /settings\.json/, '要说得出去哪儿看');
 });
 
+// 验收 AC-16-12：读不了的是安装清单时，提示却点名 settings.json，把人引去查一个好好的文件。服务端现在说清是哪个。
+test('两种桥读不出安装态：提示点名真正读不了的那个文件', () => {
+  const hooksManifest = formatHooksBridgeRow({ state: 'unknown', unreadable: 'manifest' });
+  assert.match(hooksManifest.hint, /hooks-v1\/install-manifest\.json/);
+  assert.doesNotMatch(hooksManifest.hint, /settings\.json/);
+  assert.match(formatHooksBridgeRow({ state: 'unknown', unreadable: 'settings' }).hint, /settings\.json/);
+  const statusManifest = formatStatuslineBridgeRow({ state: 'unknown', unreadable: 'manifest' });
+  assert.match(statusManifest.hint, /statusline-v1\/install-manifest\.json/);
+  assert.doesNotMatch(statusManifest.hint, /settings\.json/);
+  assert.match(formatStatuslineBridgeRow({ state: 'unknown', unreadable: 'settings' }).hint, /settings\.json/);
+});
+
+// 验收 O62：用户原本没配 statusLine 时，「开启」点了也装不上（安装脚本要求先配），可面板照给按钮。
+test('终端状态栏：用户自己没配 statusLine 时不给「开启」，说清要先配；旧 server 不带 configured 照旧给', () => {
+  const unconfigured = formatStatuslineBridgeRow({ state: 'not-installed', configured: false });
+  assert.equal(unconfigured.action, null);
+  assert.match(unconfigured.hint, /statusLine/);
+  assert.equal(formatStatuslineBridgeRow({ state: 'not-installed', configured: true }).action, 'install');
+  assert.equal(formatStatuslineBridgeRow({ state: 'not-installed' }).action, 'install');
+});
+
 // off 由 env 直接决定、不经读盘，是比「读不出安装态」更确定也更要紧的事实：功能整体停用时，
 // 装没装都不影响它不工作。两者同时成立时先说停用，否则用户会去修一个修好了也没用的东西。
 test('formatHooksBridgeRow：env 停用压过状态读取失败', () => {
@@ -370,6 +420,25 @@ test('formatHooksBridgeRow：env 停用压过状态读取失败', () => {
 // 这条告警在手机上无从下钻：既看不到是哪个 IP，也看不到历史上发生过几次、是不是同一个来源。
 // 本函数把一条记录译成一行人话 + severity，接线层只管渲染。
 test.describe('formatAuditEntry：审计记录 → 一行人话', () => {
+  // 验收 O78（AC-17-02）：安全日志里新建文件夹那条显示原始事件码「folder_created · /home/…」，其余条目都是中文。
+  // 服务端写的审计 action 每一种都要有人话，不能落到兜底分支原样吐码。
+  test('文件夹、worktree、无文件夹目录这几类条目说人话，不原样吐事件码', () => {
+    const cases = [
+      [{ action: 'folder_created', target: '/home/me/code/new-proj', outcome: 'allowed' }, /^新建文件夹 · new-proj$/],
+      [{ action: 'folder_connected', target: '/home/me/code/app', outcome: 'allowed' }, /^连接文件夹 · app$/],
+      [{ action: 'folder_disconnected', target: '/home/me/code/app', outcome: 'allowed' }, /^断开文件夹 · app$/],
+      [{ action: 'worktree_create', target: '/home/me/code/app/.claude/worktrees/fix-x', outcome: 'ok', meta: { branch: 'fix-x' } }, /^新建 worktree · fix-x$/],
+      [{ action: 'worktree_create', target: '/home/me/code/app', outcome: 'failed', meta: { code: 'dirty' } }, /^新建 worktree 失败 · app · dirty$/],
+      [{ action: 'scratch_removed', target: '/tmp/ccm-scratch/abc', outcome: 'success' }, /^清理无文件夹目录 · abc$/],
+    ];
+    for (const [entry, re] of cases) {
+      const row = formatAuditEntry({ ts: 1, ...entry });
+      assert.match(row.text, re, `${entry.action}：${row.text}`);
+      assert.doesNotMatch(row.text, /[a-z]+_[a-z]+/, `${entry.action} 还露着事件码`);
+    }
+    assert.equal(formatAuditEntry({ ts: 1, action: 'worktree_create', target: '/x', outcome: 'failed', meta: { code: 'dirty' } }).severity, 'warning');
+  });
+
   test('限速锁定：来源画像决定措辞与 severity（公网才是真警报）', () => {
     const pub = formatAuditEntry({ ts: 1, action: 'auth_rate_limited', target: 'ip:203.0.113.7', outcome: 'locked', meta: { via: 'http' } });
     assert.equal(pub.text, '登录限速锁定 · 公网 203.0.113.7 · http');
@@ -407,6 +476,12 @@ test.describe('formatAuditEntry：审计记录 → 一行人话', () => {
     assert.equal(r.severity, 'danger');
   });
 
+  // 服务端把 60 秒内完全相同的记录合并成一条、记 repeat（audit.js）：不显示出来，刷了 5 次和 1 次长得一样
+  test('合并过的记录 → 末尾标出次数；单条不标', () => {
+    assert.equal(formatAuditEntry({ action: 'scope_violation', target: '/gone', outcome: 'denied', repeat: 5 }).text, '越界访问被拒 · /gone ×5');
+    assert.equal(formatAuditEntry({ action: 'scope_violation', target: '/gone', outcome: 'denied' }).text, '越界访问被拒 · /gone');
+  });
+
   test('审批完整性校验失败 → danger', () => {
     const r = formatAuditEntry({ action: 'approval_integrity_mismatch', target: 'req_88', outcome: 'denied', meta: { tool: 'Bash' } });
     assert.equal(r.text, '审批完整性校验失败 · req_88 · Bash');
@@ -425,6 +500,11 @@ test.describe('formatAuditEntry：审计记录 → 一行人话', () => {
     assert.equal(formatAuditEntry({ action: 'session_delete_l2', target: 'sess_1' }).text, '永久删除会话 sess_1');
     assert.equal(formatAuditEntry({ action: 'retention_cleanup' }).severity, 'neutral');
     assert.equal(formatAuditEntry({ action: 'file_write', target: '/a/b/c/notes.md' }).text, '写入文件 notes.md');
+  });
+
+  test('网页改名会话（#458）写成人话，不露事件码', () => {
+    assert.equal(formatAuditEntry({ action: 'session_rename', target: 'sess_1', outcome: 'success' }).text, '重命名会话 sess_1');
+    assert.equal(formatAuditEntry({ action: 'session_rename', target: 'sess_1', outcome: 'error' }).text, '重命名会话 sess_1（error）');
   });
 
   test('outcome 非成功 → 追加结果（同一个 action 成功与失败必须看得出区别）', () => {
@@ -509,4 +589,96 @@ test('statusline 行：配置被改动（drifted）同样不给动作，交给�
   const row = formatStatuslineBridgeRow({ state: 'drifted', off: false });
   assert.equal(row.tone, 'warn');
   assert.equal(row.action, null);
+});
+
+// 验收 O23（AC-17-03）：限速锁定的措辞早按来源分了三档（本机「多半是你自己的旧 token」、局域网、公网「在暴力尝试」），
+// 安全日志也按来源分色（公网红、本机与局域网琥珀），唯独服务状态「异常告警」那一行三档都是红色 ⛔。
+// 把自己手滑讲成红色安全告警，比不报还糟——真出事那天它已经被当成噪音了。判色与安全日志同一判据。
+test.describe('formatServiceNoticeRows：告警行判色按类别与来源', () => {
+  const now = 100 * 60_000;
+  const lockoutFrom = (source, extra = {}) => formatServiceNoticeRows({
+    service: { rateLimitLockout: { at: now - 5 * 60_000, count: 1, source }, ...extra }, now,
+  })[0];
+
+  test('本机、局域网来源的限速锁定 → warning（琥珀）', () => {
+    assert.equal(lockoutFrom('ip:127.0.0.1').tone, 'warning');
+    assert.equal(lockoutFrom('ip:192.168.1.20').tone, 'warning');
+  });
+
+  test('公网来源 → danger（红）', () => {
+    assert.equal(lockoutFrom('ip:203.0.113.7').tone, 'danger');
+  });
+
+  test('说不清来源（旧 server 不带 source）、反代后的 127.0.0.1（无法确认是否本机）→ 仍按 danger，与措辞同样保守', () => {
+    assert.equal(lockoutFrom(undefined).tone, 'danger');
+    assert.equal(lockoutFrom('ip:127.0.0.1', { proxyFronted: true }).tone, 'danger');
+  });
+
+  test('推送投递失败 → danger；前端错误、找不到文件夹 → warning；文案与 formatServiceNotices 一一对应', () => {
+    const service = {
+      deliveryFailure: { channel: 'push', at: now - 60_000, count: 1 },
+      clientError: { at: now - 60_000, count: 2 },
+      missingFolders: 1,
+    };
+    const rows = formatServiceNoticeRows({ service, now });
+    assert.deepEqual(rows.map(r => r.tone), ['danger', 'warning', 'warning']);
+    assert.deepEqual(rows.map(r => r.text), formatServiceNotices({ service, now }));
+  });
+});
+
+// #301「忽略」：按告警的稳定 id + 找不到的路径集合记指纹，不按文案。集合变了（A 回来了、B 丢了）就重新出现，
+// 个数相同也一样；切换语言不影响（文案变了，id 与路径没变）。
+test.describe('服务告警的忽略指纹', () => {
+  const rowsOf = service => formatServiceNoticeRows({ service, now: 1000 });
+  const missingRow = paths => rowsOf({ missingFolders: paths.length, missingFolderPaths: paths }).find(r => r.id === 'missing-folders');
+
+  test('四类告警都带稳定 id，抽屉行内都能忽略；找不到的文件夹另带路径', () => {
+    const row = missingRow(['/b', '/a']);
+    assert.equal(row.id, 'missing-folders');
+    assert.deepEqual(row.paths, ['/b', '/a']);
+    const others = rowsOf({ rateLimitLockout: { at: 900 }, deliveryFailure: { channel: 'push', at: 900 }, clientError: { at: 900 } });
+    assert.deepEqual(others.map(r => r.id ?? null), ['rate-limit-lockout', 'delivery-failure', 'client-error']);
+  });
+
+  // 限速锁定、推送失败、前端错误没有路径集合可比，「同一条」只能按发生时刻认：忽略的是这一次，之后再发生必须重新出现——
+  // 否则一次忽略就把此后的同类告警全藏了。宿主机连不出去时推送失败那一行是唯一的可见面，限速锁定是安全信号。
+  for (const [id, occurredAt] of [
+    ['rate-limit-lockout', at => ({ rateLimitLockout: { at, count: 1, source: 'ip:203.0.113.7' } })],
+    ['delivery-failure', at => ({ deliveryFailure: { channel: 'push', at, count: 1 } })],
+    ['client-error', at => ({ clientError: { at, count: 1 } })],
+  ]) {
+    test(`${id} 按发生时刻记指纹：同一次一直隐藏，再发生一次就重新出现`, () => {
+      const dismissed = { [id]: serviceNoticeFingerprint(rowsOf(occurredAt(900))[0]) };
+      const anHourLater = formatServiceNoticeRows({ service: occurredAt(900), now: 1000 + 3_600_000 });
+      assert.equal(undismissedServiceNotices(anHourLater, dismissed).length, 0, '同一次：文案从「刚刚」变成「1 小时前」也仍隐藏');
+      assert.equal(undismissedServiceNotices(rowsOf(occurredAt(950)), dismissed).length, 1, '又发生了一次：必须重新出现');
+    });
+  }
+
+  test('指纹只看 id 与路径集合：顺序无关，集合变了就不同', () => {
+    assert.equal(serviceNoticeFingerprint(missingRow(['/a', '/b'])), serviceNoticeFingerprint(missingRow(['/b', '/a'])));
+    assert.notEqual(serviceNoticeFingerprint(missingRow(['/a', '/b'])), serviceNoticeFingerprint(missingRow(['/a', '/c'])),
+      '个数相同但换了一个路径：必须当成新告警');
+  });
+
+  test('切换语言后指纹不变（不是按文案匹配）', () => {
+    const zh = serviceNoticeFingerprint(missingRow(['/a']));
+    setLang('en');
+    try {
+      const row = missingRow(['/a']);
+      assert.doesNotMatch(row.text, /找不到/, '前提：英文界面下文案确实换了');
+      assert.equal(serviceNoticeFingerprint(row), zh);
+    } finally {
+      setLang('zh');
+    }
+  });
+
+  test('过滤掉已忽略的：指纹对得上才隐藏，没忽略的照常显示', () => {
+    const rows = rowsOf({ clientError: { at: 900 }, missingFolders: 1, missingFolderPaths: ['/a'] });
+    const dismissed = { 'missing-folders': serviceNoticeFingerprint(missingRow(['/a'])) };
+    assert.deepEqual(undismissedServiceNotices(rows, dismissed).map(r => r.id ?? null), ['client-error']);
+    const changed = rowsOf({ missingFolders: 1, missingFolderPaths: ['/b'] });
+    assert.equal(undismissedServiceNotices(changed, dismissed).length, 1, '路径换了，旧的忽略不再生效');
+    assert.equal(undismissedServiceNotices(rows, null).length, 2);
+  });
 });

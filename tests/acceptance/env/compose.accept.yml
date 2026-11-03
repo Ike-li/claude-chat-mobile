@@ -1,0 +1,41 @@
+# tests/acceptance/env/compose.accept.yml —— 验收用覆盖层：E1 mock + E2 playground + ntfy 截获端
+#
+# 叠在被测检出的 tests/infra/docker-compose.playground.yml 之上，项目名 ccm-accept（不碰维护者自己的
+# ccm-playground 卷）。命令由 env/up.mjs 拼，不要手敲：
+#   node tests/acceptance/env/up.mjs --env E1,E2 [--target <被测检出>]        # 缺省只打印命令
+# 只改 env、端口与加一个 ntfy 截获端，不改 playground 本身。下面的 ${CCM_ACCEPT_*} 由 up.mjs
+# 从 local/config.json 与 local/secrets.json 注入进程环境（不写进命令行、不落盘），缺省值 = 首轮验收实测用的值。
+#
+#   E2      127.0.0.1:13000   真 server + fake-claude（缺省 turn 档：回「(fake-claude) 收到」）
+#   E2反代  127.0.0.1:18080   playground 的 proxy 档（nginx 与 app 同 netns，制造 loopback peer）
+#   E1      127.0.0.1:13100   tests/e2e/mock/server.js（真前端 + 脚本化假后端）
+#   sink    只在容器网络里    ntfy 截获端：app 的推送全发到这里，`docker logs ccm-accept-sink-1` 逐行一条 JSON
+services:
+  app:
+    environment:
+      # fake-claude 的档位：turn | turn-bg | turn-screenshot | turn-autoreport（见 tests/fixtures/fake-claude.mjs）
+      CCM_FAKE_CLAUDE_MODE: ${CCM_ACCEPT_FAKE_MODE:-turn}
+      NTFY_URL: http://sink:8090
+      NTFY_TOPIC: accept-probe
+      # 测试专用的一对 VAPID 密钥（local/secrets.json）。缺了 web push 订阅类用例会受阻，其余不受影响
+      VAPID_PUBLIC_KEY: ${CCM_ACCEPT_VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${CCM_ACCEPT_VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: mailto:ccm-accept@example.invalid
+    ports: !override
+      - "127.0.0.1:${CCM_ACCEPT_PORT_E2:-13000}:3000"
+      - "127.0.0.1:${CCM_ACCEPT_PORT_E2_PROXY:-18080}:8080"
+
+  mock:
+    ports: !override
+      - "127.0.0.1:${CCM_ACCEPT_PORT_E1:-13100}:3100"
+
+  # ntfy 截获端：收到什么就把方法、路径、标题、请求头和正文打成一行 JSON。
+  # 日志跨重启累积，判「推没推、推了几次」时按时间过滤（首轮误判过一次「重复推送」，就是没过滤）。
+  sink:
+    image: claude-chat-mobile-test:local
+    pull_policy: never
+    init: true
+    command:
+      - node
+      - -e
+      - "require('http').createServer((q,s)=>{let b='';q.on('data',d=>b+=d);q.on('end',()=>{console.log(JSON.stringify({t:new Date().toISOString(),m:q.method,u:q.url,title:q.headers['title']||q.headers['x-title']||null,h:q.headers,b}));s.end('ok')})}).listen(8090,()=>console.log('sink up'))"

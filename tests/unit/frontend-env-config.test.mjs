@@ -13,6 +13,7 @@ import { createEnvConfigPanel } from '../../app/public/js/app/env-config.js';
 // 测试与实现会互相印证并恒绿（这个仓库在 git fixture 上栽过一次）。
 // 前端源码不许 import app/src/，但测试不受模块边界约束（check-import-boundaries.js:13 明写）。
 import { buildEnvView } from '../../app/src/ops/env-schema.js';
+import { describeSavedKeys } from '../../app/src/ops/config-file.js';
 
 // sheets.js 的 CONFIRM_TONES 是工厂内部常量、不导出，只能在这里复述键集（app/public/js/app/sheets.js:97-101）。
 // 复述的风险是「那边加了新 tone、这边没跟上」——但那只会让本断言把一个其实有效的 tone 判红，
@@ -264,6 +265,31 @@ test.describe('env-config 保存流程 —— 重启入口取决于是否常驻�
     assert.equal(okH.saved.length, 1);
     const badH = await openAndEdit({ ackQueue: [{ ok: false, error: 'x' }] }, { PORT: '8080' });
     assert.equal(badH.saved.length, 0);
+  });
+});
+
+// 验收 AC-17-11 / O48：改了被环境变量压着的项，提示「重启后生效」，重启后其实仍是环境变量的值（hard-rules §4.6 假成功）。
+// 验收 O63：同时存了热加载项和需重启项，只笼统说一句「需要重启」。ack 的 saved 用服务端真实的 describeSavedKeys 产出。
+test.describe('env-config 保存回执 —— 逐项说清什么时候真的生效', () => {
+  test('★ 被环境变量压着：说出压着它的变量名，不说「重启后生效」，也不递重启按钮', async () => {
+    const ack = { ok: true, written: ['PORT'], results: [], restartRequired: true,
+      saved: describeSavedKeys(['PORT'], { shellEnv: { PORT: '4000' } }) };
+    const h = await openAndEdit({ ackQueue: [ack], canRestart: () => true }, { PORT: '8080' });
+    const hintText = textOf(h.dom.envConfigHint);
+    assert.match(hintText, /环境变量 PORT/);
+    assert.doesNotMatch(hintText, /重启后生效/, '重启后仍是环境变量的值——这句就是假成功');
+    assert.equal(h.dom.envConfigFooter.children.find((c) => c.id === 'envConfigRestart'), undefined,
+      '重启也不生效：递重启按钮等于诱导用户白白中断所有会话');
+  });
+
+  test('热加载项与需重启项一起存：分开说哪项已生效、哪项要重启，并给重启按钮', async () => {
+    const ack = { ok: true, written: ['WORKDIRS', 'PORT'], results: [], restartRequired: true,
+      saved: describeSavedKeys(['WORKDIRS', 'PORT'], { shellEnv: {} }) };
+    const h = await openAndEdit({ ackQueue: [ack], canRestart: () => true }, { PORT: '8080' });
+    const hintText = textOf(h.dom.envConfigHint);
+    assert.match(hintText, /已生效：WORKDIRS/);
+    assert.match(hintText, /重启后生效：PORT/);
+    assert.ok(h.dom.envConfigFooter.children.find((c) => c.id === 'envConfigRestart'), 'PORT 确实要重启，入口得在');
   });
 });
 

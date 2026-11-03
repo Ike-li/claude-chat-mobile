@@ -83,10 +83,15 @@ export function shouldSuggest({
 // 超长截断——这两个功能的契约都是「一句话」，模型跑题时不该让它占满屏幕。
 export const SIDE_ANSWER_MAX_CHARS = 400;
 
+// API 报错的原文（「API Error: 529 …」「(API error: 503 auth_unavailable: …)」）不是建议：填进输入框只会把报错发出去
+// （验收 O32）。正常情况下 CLI 会把它标成 synthetic、在 askSide 就丢掉了；这里兜住没带标志的那种。
+const API_ERROR_RE = /^\(?\s*API error\b/i;
+
 export function normalizeSideAnswer(raw, { maxChars = SIDE_ANSWER_MAX_CHARS } = {}) {
   if (typeof raw !== 'string') return null;
   let s = raw.trim();
   if (!s) return null;
+  if (API_ERROR_RE.test(s)) return null;
   if (s.length >= 2 && ((s[0] === '"' && s.at(-1) === '"') || (s[0] === '「' && s.at(-1) === '」'))) {
     s = s.slice(1, -1).trim();
   }

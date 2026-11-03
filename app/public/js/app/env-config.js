@@ -21,7 +21,7 @@ export function createEnvConfigPanel({
   $, socket, openSheet, closeSheet, appConfirm, pickText, onSaved,
   // 退出本面板后回哪：本面板是通用设置切出去的第二层，默认退回来源页而不是关到首页
   // （理由见 index.html #envConfigBack 的注释）。注入而不是在这里 import general——
-  // 本模块不认识通用设置面板，只知道「退出后该通知调用方」。
+  // 本模块不认识通用设置面板，只知道「退出后该通知调用方」，并把 open({ from }) 原样交回去。
   afterClose = () => {},
   // 「本进程停了有没有人拉起来」——由服务端经 instances 广播下发（DEV_MODE 或有进程管理器
   // 托管）。false 时不显示重启入口：停掉一个没人会拉起的进程等于让用户自断退路，
@@ -53,9 +53,17 @@ export function createEnvConfigPanel({
   }
 
   function markDirty() {
-    const dirty = [...fields.values()].some((f) => f.el.getAttribute(CHANGED_MARK) === '1');
-    saveBtn.disabled = !dirty;
-    hint.textContent = dirty ? t('保存后需重启服务才生效') : '';
+    const changed = [...fields.values()].filter((f) => f.el.getAttribute(CHANGED_MARK) === '1');
+    saveBtn.disabled = changed.length === 0;
+    // 被环境变量压着的项写进文件也不生效、重启后仍是环境变量的值（验收 O111）：保存前就说清，
+    // 不等保存后的逐项回执（describeReceipt 的 shadowed）。这里只知道「被压着」（overriddenByEnv 是布尔），
+    // 不知道是哪个变量——WORKDIRS 被 WORK_DIRS / WORK_DIRS_FILE 压着时，叫人 unset WORKDIRS 是指错路（#321 review）。
+    // 该 unset 谁由保存后的回执点名（服务端给 shadowedBy）。
+    const shadowed = changed.filter((f) => f.overriddenByEnv).map((f) => f.key);
+    const parts = [];
+    if (changed.length > shadowed.length) parts.push(t('保存后需重启服务才生效'));
+    if (shadowed.length) parts.push(t('{keys} 被环境变量压着：保存了也不生效，重启后仍是环境变量的值').replace('{keys}', shadowed.join('、')));
+    hint.textContent = parts.join('；');
   }
 
   function watch(input, field) {
@@ -238,7 +246,7 @@ export function createEnvConfigPanel({
     const add = document.createElement('button');
     add.type = 'button';
     add.className = 'w-full px-2 py-1.5 rounded-lg border border-dashed border-line text-xs text-ink-soft active:bg-sunk';
-    add.textContent = t('+ 添加工作区');
+    add.textContent = t('+ 添加文件夹');
     add.dataset.listAdd = '1';
     add.addEventListener('click', () => {
       list.append(addRow(null));
@@ -261,7 +269,8 @@ export function createEnvConfigPanel({
 
   function renderItem(item) {
     const row = el('div', 'space-y-1');
-    const field = { key: item.key, original: item.value ?? '', replacing: false, isSecret: !!item.secret };
+    row.dataset.envKey = item.key; // open({ focusKey }) 的落点（告警里的「管理工作区」直达工作区列表，#301）
+    const field = { key: item.key, original: item.value ?? '', replacing: false, isSecret: !!item.secret, overriddenByEnv: !!item.overriddenByEnv };
 
     if (item.kind === 'toggle') {
       row.append(buildToggle(item, field));
@@ -277,14 +286,14 @@ export function createEnvConfigPanel({
         // WORK_DIRS）。**提前 return，不登记进 fields** —— 留一个能点的编辑器只会让人改完看到
         // 「保存成功」，而授权的工作区一个都没变。
         row.append(el('div', 'text-[10px] text-warning leading-relaxed',
-          t('当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。')));
+          t('当前安装用的是 .env，文件夹列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。')));
         return row;
       }
       else if (item.kind === 'list' && item.locked === 'work-dirs-file') {
         // 同一族：配置里还挂着旧版 WORK_DIRS_FILE，生效的是那份外置文件，这里改了不生效（服务端写入侧也会拒）。
         // 同样提前 return、不登记进 fields。出路就在这个面板里：把 WORK_DIRS_FILE 那一项清空。
         row.append(el('div', 'text-[10px] text-warning leading-relaxed',
-          t('工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。')));
+          t('文件夹列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。')));
         return row;
       }
       else if (item.kind === 'list') row.append(buildListEditor(item, field));
@@ -370,6 +379,22 @@ export function createEnvConfigPanel({
     body.scrollTop = 0;
   }
 
+  // 逐项回执（验收 O48 / O63）：服务端按项给出 applied / restart / shadowed（describeSavedKeys）。
+  // 被环境变量压着的项写进文件也不生效，重启后仍是环境变量的值——它不算「需要重启」，单独说清要 unset 谁。
+  function describeReceipt(saved) {
+    const keysOf = (effect) => saved.filter((x) => x.effect === effect).map((x) => x.key);
+    const parts = [];
+    const applied = keysOf('applied');
+    const restart = keysOf('restart');
+    if (applied.length) parts.push(`${t('已生效：')}${applied.join('、')}`);
+    if (restart.length) parts.push(`${t('重启后生效：')}${restart.join('、')}`);
+    for (const x of saved.filter((y) => y.effect === 'shadowed')) {
+      parts.push(t('{key} 被环境变量 {vars} 压着：写进文件也不生效，重启后仍是环境变量的值，先 unset 再重启')
+        .replace('{key}', x.key).replace('{vars}', (x.shadowedBy || []).join(', ')));
+    }
+    return { text: parts.join('；'), needsRestart: restart.length > 0 };
+  }
+
   async function save() {
     const changes = collectChanges();
     if (Object.keys(changes).length === 0) return;
@@ -416,18 +441,22 @@ export function createEnvConfigPanel({
     // 会话与后台任务。同一份面板里 WORKDIRS 的说明写着「改完即生效，无需重启」，保存后却弹重启，
     // 两句话自相矛盾。
     // 严格判 `=== false`：字段缺失（旧 server）时回落到提示重启，方向保守 —— 多点一次重启无害，
-    // 漏提示则是「改了没生效还以为生效了」。
-    if (res.restartRequired === false) {
-      hint.textContent = t('已写入 N 项，已生效').replace('N', String(n));
+    // 漏提示则是「改了没生效还以为生效了」。有逐项回执（saved）时以它为准。
+    const receipt = Array.isArray(res.saved) ? describeReceipt(res.saved) : null;
+    const needsRestart = receipt ? receipt.needsRestart : res.restartRequired !== false;
+    if (!needsRestart) {
+      hint.textContent = receipt ? receipt.text : t('已写入 N 项，已生效').replace('N', String(n));
       return;
     }
 
     // 配置只写进了文件，进程里还是旧值 —— 不给重启入口的话这条路就断在最后一步。
     if (!canRestart()) {
-      hint.textContent = t('已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）').replace('N', String(n));
+      hint.textContent = receipt
+        ? `${receipt.text}${t('（本进程不是常驻托管，请到电脑上重启）')}`
+        : t('已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）').replace('N', String(n));
       return;
     }
-    hint.textContent = t('已写入 N 项，重启后生效').replace('N', String(n));
+    hint.textContent = receipt ? receipt.text : t('已写入 N 项，重启后生效').replace('N', String(n));
     const btn = el('button', 'hit-44 px-3 py-2 rounded-xl border border-line text-xs text-ink active:bg-sunk', t('立即重启'));
     btn.type = 'button';
     btn.id = 'envConfigRestart';
@@ -456,8 +485,11 @@ export function createEnvConfigPanel({
     footer.insertBefore(btn, saveBtn);
   }
 
-  function open() {
+  // from：从哪打开（退出时原样交给 afterClose，由调用方决定退回哪）；focusKey：读完后滚到哪一项。
+  let openedFrom = null;
+  function open({ from = null, focusKey = null } = {}) {
     if (!modal || loading) return;
+    openedFrom = from;
     beforeOpen?.();
     loading = true;
     body.replaceChildren(el('div', 'text-xs text-ink-soft', t('读取中…')));
@@ -470,17 +502,18 @@ export function createEnvConfigPanel({
         return;
       }
       render(res);
+      if (focusKey) body.querySelector(`[data-env-key="${focusKey}"]`)?.scrollIntoView({ block: 'start' });
     });
   }
 
   function close() {
     if (modal) closeSheet(modal);
-    afterClose();
+    afterClose(openedFrom);
   }
 
   function bind() {
     const trigger = $('btnEnvConfig');
-    if (trigger) trigger.onclick = open;
+    if (trigger) trigger.onclick = () => open();
     // 点 ← 与点遮罩同义（都是「退回上一级」）：同一张面板两种关法落到两个地方会再坑一次。
     const backBtn = $('envConfigBack');
     if (backBtn) backBtn.onclick = close;

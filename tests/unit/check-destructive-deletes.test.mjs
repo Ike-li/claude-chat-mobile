@@ -5,10 +5,11 @@
 // 正向（安全写法不许误报）保证它不会被嫌吵而绕过；反向（危险写法必须报）保证它真的在工作。
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkFile, collectFiles } from '../../tests/gates/check-destructive-deletes.js';
+import { checkFile, collectFiles, collectScanFiles } from '../../tests/gates/check-destructive-deletes.js';
 
 const check = src => checkFile(src, 'x.test.mjs');
 
@@ -344,4 +345,28 @@ test('扫描面: collectFiles 认 .ts 文件（此前只认 .js/.mjs，整棵 sp
   assert.ok(found.some(f => f.endsWith('a.test.mjs')));
   assert.ok(found.some(f => f.endsWith('b.spec.ts')));
   assert.ok(found.some(f => f.endsWith('c.config.ts')));
+});
+
+// ── 扫描面：被 .gitignore 忽略的本地产物不在扫描面内 ──────────────────────────
+// 2026-10-22：机主本机跑验收后，tests/acceptance/local/runs/<时间戳>/ 下留了一份产物脚本
+// （.gitignore 的 /tests/acceptance/local/），门禁照扫不误，本机 check 恒红、CI 干净检出恒绿。
+// 未跟踪但【没被忽略】的新文件必须照扫——那正是还没提交的新测试，漏掉它等于提交前门禁失明。
+test('扫描面: 被 gitignore 的文件不扫，未跟踪但未忽略的照扫', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-destructive-ignored-'));
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  const danger = "rmSync(join(REAL_ROOT, name), { recursive: true });\n";
+  const files = {
+    '.gitignore': '/tests/acceptance/local/\n',
+    'tests/tracked.test.mjs': '',
+    'tests/acceptance/local/runs/r1/harness.mjs': danger,
+    'tests/new-untracked.test.mjs': danger,
+  };
+  for (const [rel, body] of Object.entries(files)) {
+    mkdirSync(join(root, rel, '..'), { recursive: true });
+    writeFileSync(join(root, rel), body);
+  }
+  execFileSync('git', ['add', '.gitignore', 'tests/tracked.test.mjs'], { cwd: root });
+  const rels = collectScanFiles(root).testFiles.map(f => f.slice(root.length + 1)).sort();
+  assert.deepEqual(rels, ['tests/new-untracked.test.mjs', 'tests/tracked.test.mjs'],
+    `被忽略的本地产物不该进扫描面，未跟踪的新文件不该漏：${JSON.stringify(rels)}`);
 });

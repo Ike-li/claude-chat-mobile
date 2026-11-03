@@ -57,7 +57,7 @@ test('wasViewingInstanceDestroyed: prevViewingInstanceId 不在 prevIds 快照�
   }), false);
 });
 
-// 用户显式关闭当前正在查看的唯一会话（抽屉「关闭」/侧滑 ✕）：无其它存活实例可回退时，服务端
+// 用户显式关闭当前正在查看的唯一会话（抽屉会话行「⋯」→ 关闭会话）：无其它存活实例可回退时，服务端
 // disposeInstance 同样会让 viewingInstanceId 变 null 且该实例从列表消失——广播形态与「被摧毁」
 // 完全相同，但这是用户自己确认过的主动操作，不该被误判成"意外中断"。调用方在关闭动作发生时
 // 记录 explicitCloseInstanceId，供本函数排除；不匹配（关的是别的实例）时不受影响。

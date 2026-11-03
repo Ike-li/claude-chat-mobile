@@ -19,7 +19,7 @@ import { join, resolve, sep } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { getProjectDir } from '../../app/src/sessions/history.js';
-import { reserveFreePort, waitForServerReady } from './_spawn-server.mjs';
+import { importServerInProcess, waitForServerReady } from './_spawn-server.mjs';
 
 const PROJECTS_ROOT = join(homedir(), '.claude', 'projects'); // 真实 CLI transcript 根（SDK deleteSession 与 history 同源）
 // 显式测试专用 token（客户端握手带上它）：不能用 delete AUTH_TOKEN 假装无鉴权——dotenv 在 import
@@ -63,13 +63,12 @@ async function startServer() {
   for (const k of ['PORT', 'AUTH_TOKEN', 'IDLE_TIMEOUT_MS', 'WORK_DIR', 'CCM_DATA_DIR', 'SESSION_DELETE_QUIET_MS',
     'CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   process.env.CCM_DATA_DIR = dataDir;
-  process.env.PORT = String(await reserveFreePort());
   process.env.IDLE_TIMEOUT_MS = '10000';
   process.env.WORK_DIR = workDir;
   process.env.AUTH_TOKEN = TOKEN; // 显式设，dotenv config 时已存在→不覆盖，server 用本值
   process.env.SESSION_DELETE_QUIET_MS = '1000'; // 1s：测试用短阈值，避免真等 5 分钟
 
-  const serverModule = await import('../../app/server.js');
+  const serverModule = await importServerInProcess();
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;

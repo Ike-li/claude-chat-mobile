@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { captureBrowserErrors, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -38,6 +38,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await fullOutputButton.click();
     await expect(page.locator('details.toolcard').last()).toContainText('extra full lines from tool:full mock');
 
+    await expectNoBrowserErrors(page);
+  });
+
+  // PR #250 review：全文超过服务端上限（512KiB）时 tool:full 只回开头并带 truncated。此前只渲染 res.text、随即
+  // 撤掉按钮，用户看到的是一段不完整的输出，却没有任何标记，也没有别的办法拿到其余部分。
+  test('P0-05-FULL-TRUNC 展开全文超过上限：说清只显示了开头和原长', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__arm-tool-full-truncated');
+    await sendChatMessage(page, 'test:tool');
+    await expect(page.locator('details.toolcard')).toHaveCount(3, { timeout: 15_000 });
+    await waitForIdle(page);
+    await page.locator('details.toolcard summary').last().click();
+    await page.locator('[data-testid="tool-expand-full"]').click();
+    const card = page.locator('details.toolcard').last();
+    await expect(card).toContainText('HEAD_OF_HUGE_OUTPUT');
+    const note = card.locator('[data-testid="tool-full-truncated"]');
+    await expect(note, '拿到的只是开头，不说清楚就像已经完整了').toBeVisible();
+    await expect(note).toContainText('700000');
     await expectNoBrowserErrors(page);
   });
 
@@ -287,6 +305,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 性能改造 1a：输入块直接按 json 高亮，不交给 hljs 自动识别（每块把 36 种语法试一遍，还常认错）。
+  // 历史路径由 P0-05-HIST-FULL 守，这条守 live 路径。
+  test('P0-05-IN-HL live 工具卡的输入块按 JSON 上色，不走自动识别', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:file-changes');
+    await waitForIdle(page);
+
+    // Write 的输入排成多行 JSON，自动识别会认成 swift
+    const inCode = page.locator('[data-tool-name="Write"] .t-in code');
+    await expect(inCode).toHaveClass(/\bhljs\b/);
+    await expect(inCode).toHaveClass(/\blanguage-json\b/);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // P0-05h（2026-09-09）：历史回放路径的工具卡状态色。
   // live 路径在 tool_result 里换图标【并且】加 text-success；历史回放路径（renderHistoryBubbles）
   // 此前只调 setStatusIcon 换图标，模板里那个表示「进行中」的 text-warning 原样留着——
@@ -342,6 +376,186 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(st).toHaveAttribute('aria-label', '成功');
     await expect(st).toHaveClass(/text-success/);
     await expect(st).not.toHaveClass(/text-warning/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O55：从历史打开的会话，Bash 输出原来只给 600 字（契约写 2000，服务端那半由 display-contracts 守），
+  // 并且历史卡片没有「展开全文」——那个按钮只挂在 live 卡片上、从实例内存取全文，刷新或换台设备就没了。
+  // 历史卡片截断时同样挂按钮，请求带上会话坐标，服务端回落去 transcript 取（mock 只在带坐标时给全文）。
+  // 附带：纯文本输出不再被 hljs 自动认成 css / vbnet 上色；输入块直接按 json 高亮，不再交给自动识别（性能改造 1a）。
+  test('P0-05-HIST-FULL 历史回放里被截断的 Bash 卡：有「展开全文」，点开从记录取回全文；输入按 JSON 上色、纯文本输出不上色', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:arm-history-long-tool');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Timeline Session');
+    await expect(page.locator('#messages')).toContainText('Timeline today follow-up', { timeout: 10_000 });
+
+    const card = page.locator('details.toolcard[data-tool-name="Bash"]');
+    await expect(card).toHaveCount(1);
+    await card.locator('summary').click();
+    const out = card.locator('.t-out code');
+    await expect(out).toContainText('Compiling module 0: auth');
+    await expect(out).not.toContainText('BUILD DONE');
+    // 栅栏：历史里的代码块是空闲时一批高亮的；同一张卡的输入块（JSON）已高亮 ⇒ 输出块也已轮到过
+    await expect(card.locator('.t-in code')).toHaveClass(/\bhljs\b/, { timeout: 5_000 });
+    await expect(card.locator('.t-in code')).toHaveClass(/\blanguage-json\b/);   // 这条多行命令自动识别会认成 swift
+    await expect(out.locator('[class^="hljs-"]')).toHaveCount(0);
+
+    const expand = card.locator('[data-testid="tool-expand-full"]');
+    await expect(expand).toBeVisible();
+    await expand.click();
+    await expect(out).toContainText('BUILD DONE');
+    await expect(expand).toHaveCount(0);
+    await expect(out.locator('[class^="hljs-"]')).toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O131（R9 AC-06-06）：英文界面里截断尾巴仍是服务端写的「…（已截断）」，同一张卡的按钮却已是「Show full text」。
+  // 顺带补上 #288 只有单测的那半：英文界面下历史卡照样给「展开全文」（嗅探认服务端原文，不随界面语言变）。
+  test('P0-05-HIST-FULL-EN 英文界面的历史 Bash 卡：截断尾巴显示成英文，照样有「展开全文」', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('ccm_lang', 'en'));
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:arm-history-long-tool');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Timeline Session');
+    await expect(page.locator('#messages')).toContainText('Timeline today follow-up', { timeout: 10_000 });
+
+    const card = page.locator('details.toolcard[data-tool-name="Bash"]');
+    await card.locator('summary').click();
+    const out = card.locator('.t-out code');
+    await expect(out).toContainText('…(truncated)');
+    await expect(out, '英文界面里冒出服务端写的中文尾巴').not.toContainText('已截断');
+    await expect(card.locator('[data-testid="tool-expand-full"]')).toHaveText('Show full text');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 桌面端 show_widget：SVG 必须作为 data URI 图片显示（不进页面 DOM、不执行脚本），颜色随主题；
+  // HTML 组件只给提示；源码残缺 / XML 解析失败退回一行工具调用。
+  const decodeSvgSrc = (src: string | null) => decodeURIComponent(String(src).replace(/^data:image\/svg\+xml;charset=utf-8,/, ''));
+
+  test('P0-05w 桌面端 show_widget：SVG 画成图片且按主题上色，HTML 不执行，残缺/坏 XML 退回工具卡', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:widget');
+    // 5 张工具卡一张不少：第 5 张是孤立代理字符，编码抛错的话连工具卡都插不进去
+    await expect(page.locator('details.toolcard[data-tool-name="mcp__visualize__show_widget"]')).toHaveCount(5, { timeout: 10_000 });
+    await waitForIdle(page);
+
+    // ① SVG → 一张已解码成功的图片（naturalWidth 来自按 viewBox 补的固有尺寸；缺 xmlns 时根本解不出来）
+    const svgFig = page.locator('figure.widget-card[data-widget-kind="svg"]');
+    await expect(svgFig).toHaveCount(1);
+    const img = svgFig.locator('img.widget-svg');
+    await expect(img).toHaveAttribute('src', /^data:image\/svg\+xml/);
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBe(680);
+    expect(await svgFig.locator('svg, script, iframe').count(), 'SVG 源码不得进页面 DOM').toBe(0);
+    // 浅色：c-purple 用 50 填充 / 600 描边（read_me quick pick）
+    expect(decodeSvgSrc(await img.getAttribute('src'))).toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#EEEDFE;stroke:#534AB7}');
+
+    // ② HTML 组件：只有标题与提示，带来的 code 不进 DOM
+    const htmlFig = page.locator('figure.widget-card[data-widget-kind="html"]');
+    await expect(htmlFig).toHaveCount(1);
+    await expect(htmlFig).toContainText('mock calculator');
+    await expect(htmlFig).toContainText('交互图表，请在桌面端查看');
+    expect(await htmlFig.locator('img, script, iframe').count(), 'HTML 组件源码不得进页面 DOM').toBe(0);
+
+    // ③④⑤ 半截 SVG、坏 XML、孤立代理字符：只剩一行工具卡（坏 XML 要等图片解码失败后撤掉，故 poll）
+    await expect(page.locator('figure.widget-card')).toHaveCount(2);
+    expect(await page.evaluate(() => (window as unknown as { __widgetRan?: string }).__widgetRan ?? null), '组件里的脚本/事件处理器不得执行').toBeNull();
+
+    // 系统切深色：已显示的图按深色重算（800 填充 / 200 描边）
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await expect.poll(async () => decodeSvgSrc(await img.getAttribute('src')))
+      .toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#3C3489;stroke:#AFA9EC}');
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBe(680);
+
+    // #385 手动档压过系统：系统深色 + 手动浅色 → 已显示的图按浅色重算；改回跟随系统又回到深色。
+    // （theme.js 的 applyThemeToDocument 就是写 / 清 <html data-theme>）
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+    await expect.poll(async () => decodeSvgSrc(await img.getAttribute('src')))
+      .toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#EEEDFE;stroke:#534AB7}');
+    // 原生控件（滚动条、复选框、select 弹层）也要跟手动档，不跟系统
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('light');
+    await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
+    await expect.poll(async () => decodeSvgSrc(await img.getAttribute('src')))
+      .toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#3C3489;stroke:#AFA9EC}');
+
+    // 点开看大图：复用附件灯箱
+    await img.click();
+    await expect(page.locator('#attachPreviewModal')).not.toHaveClass(/\bhidden\b/);
+    await expect(page.locator('#attachPreviewImg')).toHaveAttribute('src', /^data:image\/svg\+xml/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-05x 桌面端会话的 show_widget 经历史追平同样画成图片', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:widget-history');
+    await expect(page.locator('#messages')).toContainText('Draw the architecture', { timeout: 10_000 });
+    const img = page.locator('figure.widget-card[data-widget-kind="svg"] img.widget-svg');
+    await expect(img).toHaveCount(1);
+    await expect(img).toHaveAttribute('src', /^data:image\/svg\+xml/);
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBe(680);
+    expect(decodeSvgSrc(await img.getAttribute('src'))).toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#3C3489;stroke:#AFA9EC}');
+    // 图紧跟在自己的工具卡后面，工具卡仍在（一行工具调用 + 图）
+    // 两张工具卡都在（孤立代理字符那张退回一行工具调用，且没中断这批历史的渲染）；图紧跟在自己的工具卡后面
+    const cards = page.locator('details.toolcard[data-tool-name="mcp__visualize__show_widget"]');
+    await expect(cards).toHaveCount(2);
+    expect(await cards.nth(0).evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(false);
+    expect(await cards.nth(1).evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(true);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 AC-09-12 / O30：重启后过期的审批，transcript 里留下一条没配上 tool_result 的 tool_use；历史渲染恒把它画成
+  // 「进行中」，而这个会话根本没在跑——那一行永远转着。没有在途轮时，没配上结果的历史工具卡应是「已中止」。
+  test('P0-05-UNPAIRED 历史里没配上结果的工具卡：会话没在跑时显示「已中止」，不是一直「进行中」', async ({ page }) => {
+    captureBrowserErrors(page);
+    // 同 gotoMock：mock 与真 server 一样拒绝无令牌握手，先预置令牌再开页。
+    await page.addInitScript(() => localStorage.setItem('auth_token', 'mock-token'));
+    await page.request.post('/__reset');
+    await page.request.post('/__arm-unpaired-tool-session');
+    await page.goto('/');
+    await waitUntilConnected(page);
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Unpaired Tool Session');
+    await expect(page.locator('#messages')).toContainText('Push the release branch');
+    const status = page.locator('details.toolcard .t-status').last();
+    await expect(status).toHaveAttribute('aria-label', '已中止');
+
+    await expectNoBrowserErrors(page);
+  });
+  // PR #233 review：重载与在途轮重叠——读盘时 tool_use 已写、tool_result 未写，回包前那一轮跑完。收尾时按「此刻没在跑」
+  // 把这张卡判成「已中止」是错的（它真跑完了）；随后实时到达的结果也只在 live 表里找卡，修不回来。
+  test('P0-05-UNPAIRED2 重载期间那一轮跑完：没配上结果的卡不判「已中止」，随后到的结果照常落上', async ({ page }) => {
+    captureBrowserErrors(page);
+    // 同 gotoMock：mock 与真 server 一样拒绝无令牌握手，先预置令牌再开页。
+    await page.addInitScript(() => localStorage.setItem('auth_token', 'mock-token'));
+    await page.request.post('/__reset');
+    await page.request.post('/__arm-unpaired-tool-session?running=1');
+    await page.goto('/');
+    await waitUntilConnected(page);
+    // 「已中止」只要出现过一次就记下：收尾判错之后被实时结果盖回来，最终态看不出来
+    await page.evaluate(() => {
+      (window as unknown as { __abortedSeen: number }).__abortedSeen = 0;
+      new MutationObserver(records => {
+        for (const r of records) {
+          if ((r.target as Element).getAttribute?.('aria-label') === '已中止') (window as unknown as { __abortedSeen: number }).__abortedSeen += 1;
+        }
+      }).observe(document.getElementById('messages')!, { subtree: true, attributes: true, attributeFilter: ['aria-label'] });
+    });
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Unpaired Tool Session');
+    await expect(page.locator('#messages')).toContainText('Push the release branch');
+    const status = page.locator('details.toolcard .t-status').last();
+    await expect(status, '实时到达的结果没落到历史里的那张卡上').toHaveAttribute('aria-label', '成功');
+    expect(await page.evaluate(() => (window as unknown as { __abortedSeen: number }).__abortedSeen),
+      '请求历史时那一轮还在跑：没配上结果不等于中止').toBe(0);
 
     await expectNoBrowserErrors(page);
   });

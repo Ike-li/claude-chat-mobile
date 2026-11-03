@@ -1,8 +1,16 @@
+import { randomBytes } from 'node:crypto';
+
 export function createInstanceManager() {
   let counter = 0;
+  // instanceId 活得比进程久：手机离线队列（localStorage）、通知深链、断线续传都拿着它。只靠进程内计数的话，
+  // 重启后又从 1 发号，旧句柄会命中一个恰好同号、跑的却是别的会话（甚至别的项目）的新实例——
+  // 离线消息就投进去执行了（2026-10-16 云端 review P0-2，MSG-02）。每次启动带一段随机段，跨重启不复用。
+  const bootTag = randomBytes(6).toString('hex');
   const agents = new Map();
   const permissionModes = new Map();
   const efforts = new Map();
+  // 档位从哪来（'user' | 'cli-settings' | 'default'）：只管显示与落盘，CLI 怎么跑只看 efforts
+  const effortSources = new Map();
   const done = new Set();
   const errors = new Set();
   const aborted = new Set();
@@ -14,9 +22,10 @@ export function createInstanceManager() {
   // 空闲回收中的实例不在这里：它们带着 terminating 留在 agents 里，直到 consume 走完才被 onExit 清表。
   const exiting = new Set();
 
-  const nextId = () => `inst_${++counter}`;
+  const nextId = () => `inst_${bootTag}_${++counter}`;
   const permissionModeOf = id => permissionModes.get(id) ?? 'default';
   const effortOf = id => efforts.get(id) ?? null;
+  const effortSourceOf = id => effortSources.get(id) ?? null;
 
   function forSession(sessionId) {
     if (!sessionId) return null;
@@ -32,18 +41,16 @@ export function createInstanceManager() {
     return null;
   }
 
-  function inheritedEffort(cwd) {
-    let effort = null;
-    for (const agent of agents.values()) {
-      if (agent.cwd === cwd) effort = agent.effortAuto ? 'auto' : agent.effort;
-    }
-    return effort;
+  // 按 instanceId 问「能不能往它投消息」，口径同 forSession：正在终止 / 已 dispose 的不算（PR #328 review）
+  function isRoutable(id) {
+    const agent = agents.get(id);
+    return Boolean(agent && !agent.terminating && !agent.disposed);
   }
 
   function stateOf(id) {
     const agent = agents.get(id);
     if (!agent) return 'idle';
-    if (agent.pendingPermissions.size > 0 || agent.pendingQuestions.size > 0) return 'permission';
+    if (agent.pendingPermissions.size > 0 || agent.pendingQuestions.size > 0 || agent.pendingElicitations?.size > 0) return 'permission';
     if (agent.pendingTurns > 0 || agent.hasBgTasks?.()) return 'busy';
     if (aborted.has(id)) return 'aborted';
     if (errors.has(id)) return 'error';
@@ -78,6 +85,7 @@ export function createInstanceManager() {
     agents.delete(id);
     permissionModes.delete(id);
     efforts.delete(id);
+    effortSources.delete(id);
     done.delete(id);
     errors.delete(id);
     aborted.delete(id);
@@ -106,6 +114,19 @@ export function createInstanceManager() {
       if (agent.sessionId === sessionId) pending.push(agent.exitPromise);
     }
     return pending;
+  }
+
+  // 该会话名下所有还没退完的实例的退出确认，活实例也算。网页改名的退出补写（sessions/session-rename.js）
+  // 挂在这上面：活的、正在回收的、已移出表的，退出前都会把 CLI 内存里的标题写回 transcript。
+  function sessionExitPromises(sessionId) {
+    const all = [];
+    for (const agent of agents.values()) {
+      if (agent.sessionId === sessionId) all.push(agent.exitPromise);
+    }
+    for (const agent of exiting) {
+      if (agent.sessionId === sessionId) all.push(agent.exitPromise);
+    }
+    return all;
   }
 
   // 等它们全部退出，最多等 timeoutMs；返回是否在上限内等到。
@@ -143,6 +164,7 @@ export function createInstanceManager() {
     agents,
     permissionModes,
     efforts,
+    effortSources,
     done,
     errors,
     aborted,
@@ -152,8 +174,9 @@ export function createInstanceManager() {
     nextId,
     permissionModeOf,
     effortOf,
+    effortSourceOf,
     forSession,
-    inheritedEffort,
+    isRoutable,
     stateOf,
     driverStateOf,
     anyTurnRunning,
@@ -161,5 +184,6 @@ export function createInstanceManager() {
     clearTables,
     remove,
     waitForSessionExits,
+    sessionExitPromises,
   };
 }

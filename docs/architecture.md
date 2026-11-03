@@ -64,7 +64,7 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 1. 用户在电脑终端直接运行 `claude`。这个进程不经过 Claude Chat Mobile 的 Agent SDK 子进程。
 2. CLI 把已经完成的消息写入 `~/.claude/projects/` 下的 transcript。
 3. server 的 `catchUpTick` 常态每 2.5 秒检查当前会话的磁盘变化（进入只读镜像后收紧到 1 秒，解锁前的静默判定按约 12.5 秒墙钟折算），并把新增的落盘消息推给 Web。**文件变长不等于历史变长**：`/rewind` 之后终端发出的下一条消息会挂到回退锚点上，废弃的那一段就此脱链，于是行数在涨而有效历史在缩（实测 2251→2268 行，回显 607→579 项）。所以追平不能只认增长，收缩与「前缀被重写」都要走全量重推 + 标脏。
-4. 回显跟随 CLI 的**当前链**而不是文件的物理行序：哪些 uuid 还在链上由 SDK 的 `getSessionMessages` 给（并行工具调用的合法分叉自己回溯 `parentUuid` 会漏掉那一支）。取不到时 fail-open 回落全量——少显示历史是静默的，多显示几条废弃分支是看得见的。
+4. 回显跟随 CLI 的**当前链**而不是文件的物理行序：哪些 uuid 还在链上由 SDK 的 `getSessionMessages` 给（并行工具调用的合法分叉自己回溯 `parentUuid` 会漏掉那一支）。取不到时 fail-open 回落全量——少显示历史是静默的，多显示几条废弃分支是看得见的。**SDK 给的链不含物理上最新的那条主链 user/assistant 时同样回落全量**：那说明它选错了叶子。SDK 0.3.283 起把 system 行也算分支末端，闲置的终端 CLI 会把 `away_summary` 挂在它记得的旧叶子下，「终端停下、手机接着聊」的那段就被判成撤销分支；旧规则在会话以 isMeta 行收尾时也会落回压缩前的叶子（实测数字见 `history.js` 里那道保护的注释）。
    **但那个集合只用来剪「当前链开始之后」的分支**：它表达的是「还在模型上下文里的消息」，而 `/compact` 把边界之前的整段移出上下文时**一行都没删**，那段记录仍属于这个会话。2026-09-22 之前按它整体过滤，真机 349 个会话里 16 个压缩过、13 个丢了开头，最狠的主链 1284 条只回显 3 条——而抽屉里那条会话的标题恰恰取自开头那句话。这里原本写着「代价是 compact 过的会话在 Web 上同样只剩压缩点之后的内容，与终端一致」，**该取舍已撤销**：同句前半段「它同时算对了 `/compact` 脱链」实测是错的（同一个会话换官方算法只从 3 条变成 4 条），「与终端一致」那半句也从未被验证过。现在的代价换成两条：边界之前若也 rewind 过，那段废弃分支会重新露面；`compactMetadata` 点名保留的 uuid 物理上位于边界之前，会让「链已开始」提前成立，于是它到边界之间那一小段仍按当前链剪（实测 16 个压缩会话共 3 条，全部是触发压缩的 `/compact` 命令行本身）。
 5. 可选 hooks bridge（`npm run hooks:install`）把 Stop / Notification 写入 `~/.claude/ccm/hooks-v1/` 文件投递箱，server 用 `fs.watch` 消费，把「回合结束/需要你」从轮询变成即时信号；未安装则回落轮询。`fs.watch` 只是加速触发器，磁盘 transcript 仍是真相源。
 6. 可选 statusline bridge 给 CLI 会话写入模型、effort、上下文、成本和额度快照。
@@ -80,6 +80,15 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 
 > Web 端自己也有回退（同样输入 `/rewind`，两步面板与终端的三个模式一一对应），但动到对话的两种模式走的是 `forkSession` 到**新会话**、原会话一个字节不动，与终端的原地回退是两套语义；「只恢复代码」不分叉。判据与取舍见 `app/src/sessions/rewind-plan.js` 头注。
 
+### 外部会话迁移
+
+Desktop / CLI 在 CCM 之外进入或退出 worktree 时，记录位置可能与已有 SDK 的进程目录不同。
+服务端保留 `cwd` 表达 SDK 驾驶目录，用可选 `transcriptCwd` 表达经验证的记录位置；历史、图片、工具全文、子代理与镜像共用该位置，`panelCwd` 指向实际代码目录。
+已开实例的位置在读历史、镜像 tick 和发送前核对时被动恢复；侧栏点已开会话只切视图（`user:setViewing`），不重走 `session:switch`——它的聚焦收尾会清镜像锁。原位置失效时，只在同一项目的授权成员中找有明确归属证据的唯一候选；多份有效记录不按时间戳猜测，原有严格文件归属检查保持不变。
+恢复位置先标记旧 SDK 已过期，再刷新历史和镜像基线；发送前按原有忙碌保护与单飞流程在新目录续接同一 ID。
+点击会话不 checkout 分支，也不搬动 transcript。记录位置所在的 worktree 被删除时，代码面板沿用原有回落：`panelCwd` 改指父仓、`worktreeGone` 置真，提示条写明在看主仓；`cwd` 与 `transcriptCwd` 不动。
+已开实例检测到搬家时，外部模型和权限取最近可验证记录，思考强度只取新鲜桥接快照，无证据时显示未知；这组值只做展示。发送前置换只采信其中的权限档，模型和思考强度沿用网页自己的档。冷续接和没搬家的会话不采信外部记录，按原有续接优先级（末条模型只做展示回落）。实际生效值在 SDK 续接后由进程确认。
+
 ## 单驾驶员模型
 
 共享 transcript 不等于允许两端同时写。并发启动两个独立 Claude turn 可能造成上下文分叉、文件竞争和错误的结束状态。
@@ -93,6 +102,7 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
    （transcript 逐条自报写入方：CLI 写 `cli`，本项目 SDK 写 `sdk-ts`）——己方 SDK 留下的未完结尾部撑不住锁，
    否则 Web 等一条审批时就会自锁：尾部恒未完结 ⇒ 锁恒维持 ⇒ 手机只读 ⇒ 点不到「批准」⇒ 审批永远等下去。
 5. **Web 接管发送前**，若 transcript 相对现有 SDK 实例有外部增长，server 先 dispose 旧实例并 resume 吸收，再发送新消息。
+   吸收的前提是终端写在同一条链上。终端在旧叶子下另起一支（分叉）时，resume 只能接上其中一支，见下节「续接锚点」。
 
 **这五条是默认路径，不是硬约束。** 项目管得住自己的 SDK 实例，管不住终端里那个独立进程：镜像锁只作用于 Web 端的输入，
 用户仍可在只读态下点「强制立即续接」/「仍要续接」显式解锁（`app/public/js/app.js` 的 `requestMirrorResume` /
@@ -100,6 +110,25 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 若终端此后继续写同一会话，仍会形成两条 transcript 分支。这个逃生口是有意保留的：用户常常比判定链更早知道终端已经关掉。
 
 轮询意味着存在最多一个检查周期的观察窗口。切换会话、手动刷新镜像与 hooks 信号会主动插队触发检查，但它们仍不能证明对另一个活进程拥有控制权。
+
+## 续接锚点
+
+transcript 是一棵树（每行带 `parentUuid`），CLI 每次 `--resume` 只把其中一条链放进模型上下文。本项目自己的续接（懒开、切会话、规则 5 置换、切 effort、空闲回收后续聊）走的是同一个加载器：CLI 选哪条链，模型就只看得见哪条。
+
+**选链规则**（CLI 2.1.281–2.1.301 零 token 实测一致，2026-10-16）：取物理上最后一条 `last-prompt` 行的 `leafUuid` 记作 Kn，物理上最后一条非 sidechain 的消息记作 In。Kn 存在、且既不是 In 也不是 In 的祖先时接 Kn，否则接 In。每个 CLI 进程都会把 `last-prompt` 重贴成**它自己**最后写的那行（退出时、resume 后、写入过阈值时；2.1.301 起每轮结束也贴），所以**谁最后重贴，谁说了算**。这条规则不是公开契约，CLI 改了它，`app/src/sessions/resume-anchor.js` 要跟着改。
+
+**会丢什么**：电脑上开着的终端，内存里停在旧叶子上。你在手机上接着聊的时候，那个终端只要在旧叶子下写过任何一行（离开摘要、Remote Control 断开提示、本地命令、新的一轮），之后又比手机侧进程晚重贴（最常见的是回到电脑后退出终端），此后所有续接都接回终端那一支，终端的和本项目的都一样。手机上那段不进模型上下文，回显却照样画出来。反过来，终端在旧叶子下真打过一轮时，规则 5 置换让旧 SDK 进程最后重贴，接上的是手机那支，终端那一轮进不了上下文。还有一个丢失口：SDK 子进程被 SIGKILL，来不及重贴。这只影响 2.1.284，2.1.301 每轮结束时已经贴过。
+
+本项目自己的 dispose → resume 不会丢：旧进程在 dispose 后 4–14ms 就把 `last-prompt` 重贴到手机末条，新进程 spawn 后约 210–255ms 才读盘。resume 前还会先等同一会话的旧进程退出（上限 1.5s），把这段余量变成确定的先后。
+
+**守卫**（`SESSION-04`）：
+
+1. **resume 时预测**：按上面的规则算出 CLI 会接上哪条链（`resume-anchor.js`）。物理上最新的那条对话消息不在链上，就把结论挂在实例上。最后那条 `last-prompt` 是显式的（`/rewind` 等用户刻意选分支时 CLI 写 `explicit:true`）不报；读不动 transcript 时也不报，fail-open，等于改动前的行为。判定要读整份 transcript，所以不挡切换回执：spawn 前记下文件的 `{size, ino}`，后台只读这段字节——新 CLI resume 后会自己重贴 `last-prompt`，读进来会把分叉抹掉。快照之后文件变小或换了 inode，按读不动处理；同尺寸原地改写认不出来（CLI 只追加写）。下面 2、3 用结论前先等它落定，上限 10s，超时按读不动放行，迟到的结论作废。
+2. **发送闸**：在带结论的实例上发消息，server 以 `resume_divergent` 拒收，不记去重。前端把话放回输入框，弹出面板，说清模型会从哪一端接上、哪一端最近几条会被丢，给两个选项。「分叉到新会话」从最新那条 `forkSession` 出一个新会话，把话挪进它的输入框，原会话不动。「仍然发送」带上确认的是哪一段（最新那条的 uuid）重发，server 放行并清掉结论。两支各有对方没有的对话时，面板会写明分叉会少掉另一支的几条。
+3. **额度墙自动继续**同样不代发，转 stale（`diverged`），由用户在横幅上点「继续」。
+4. **接管提醒**：Web 在一个会话上发出第一条消息时，如果会话注册表显示终端或桌面端还开着它，提醒一次：那个进程之后再写东西或退出，下次续接会接回它那一支。
+
+**用法上的根治**：离开电脑前在终端里 `/exit`，回到电脑时用 `claude -c` 或 `claude --resume` 重新打开。任一时刻只有一个活进程在写这个会话，树就不会分叉。
 
 ## 额度墙到点自动继续
 
@@ -134,7 +163,7 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 ```
 
 - `type` 是闭合事件集合，由 `tests/gates/contract-check.js` 对**后端发送方**（递归扫 `app/src/`）与 **mock server** 做一致性校验；入向 socket 事件另查前端 emit 是否都在契约内。
-  出向另有一道**前端接收面覆盖**检查：`app/public/js/app.js` 的 `handle` 表 + `outOfBand` 表键并集必须精确等于 `AGENT_EVENT_TYPES`（少一个＝事件到达浏览器后静默丢弃，多一个＝死键），同一 type 落进两表也拦（`outOfBand` 在派发时优先，`handle` 那条会变成死代码）。`event-dispatch.js` 的 `DEFAULT_REPLAY_OOB_TYPES` 是 `outOfBand` 的平行副本，同样被钉成逐字一致——漏改它会让新的 OOB 类型被 replay buffer 误入队，在 `resolve('reload')` 时永久丢失。
+  出向另有一道**前端接收面覆盖**检查（实现在 `tests/gates/agent-event-contract.js`，由 `contract-check.js` 调用）：`app/public/js/app.js` 的 `handle` 表 + `outOfBand` 表键并集必须精确等于 `AGENT_EVENT_TYPES`（少一个＝事件到达浏览器后静默丢弃，多一个＝死键），同一 type 落进两表也拦（`outOfBand` 在派发时优先，`handle` 那条会变成死代码）。`event-dispatch.js` 的 `DEFAULT_REPLAY_OOB_TYPES` 是 `outOfBand` 的平行副本，同样被钉成逐字一致——漏改它会让新的 OOB 类型被 replay buffer 误入队，在 `resolve('reload')` 时永久丢失。
 - `replay: true` 标记这批是 `sync:since` 补发而非实时到达。**它只补渲染内容，对运行态完全中性**——既不点亮也不清除。运行态的真相源是 `instances` 广播，而那里**两个字段各管一件事，不可混用**：
   - `state`（`idle`/`busy`/`permission`/…）驱动**运行条**与抽屉角标。它是粗粒度的——服务端 `stateOf()` 把 `hasBgTasks()` 也折进 `busy`，**所以不能只看它**。带上 `bgActive` 与 `turnRunning` 才是完整判据，三者的组合只有两条规则：
     - `turnRunning === true` → **一定显示运行条**，哪怕同时挂着后台任务（`bgActive` 与 `turnRunning` 可以并存）。
@@ -147,9 +176,18 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 - `seq` 在一个 `AgentSession` 内递增，前端据此去重。
 - `epoch` 标识服务端/实例世代；变化时客户端重置旧的去重基线。
 - `sessionId` 与 `instanceId` 分开，避免同一 CLI 会话的逻辑身份和当前 Web 进程实例混淆。
+- `instanceId` 每次启动带一段随机段，**跨重启不复用**。它活得比 server 进程久：离线队列存在 localStorage 里，通知深链和断线续传也都拿着它。进程内计数从 1 重新发号时，旧句柄会命中恰好同号、跑的却是别的会话（甚至别的项目）的新实例，排着的离线消息就投进去执行了（`MSG-02`）。现在旧句柄在新进程里对不上任何实例：`user:message` 按 stale 拒收，`sync:since` 回 `found:false`。离线重放另带入队时的 `sessionId`，对重放来说会话才是身份：句柄失效（同一批的第 1 条触发了规则 5 置换、切 effort 都会换号）或命中的实例此刻跑的不是那个会话时，改投那个会话此刻的活实例，之后照常过规则 5 置换、续接分叉闸与在途轮闸（撞上前一条刚开跑的回合，落「未发送 + 重发」）；那个会话此刻正在续接（另一台设备触发的置换进行到一半、别处正在打开它）就先等它落定再判；既没有活实例、也没有在续接（空闲回收了、关掉了）才按 stale 拒收，不替用户把它重新拉起来。
 - 每个 AgentSession 保留有界环形缓冲；客户端以 `sync:since` 请求仍在缓冲中的缺口。
 
 环形缓冲不是永久历史。缺口超出缓冲或服务重启时，客户端回退到鉴权的 `session:history`，从 CLI transcript 重建稳定消息。高频瞬态状态不会全部进入永久历史。
+
+会话里的图片（工具截图、用户贴进对话的图）**不内联进 `agent:event` 也不内联进 `session:history`**：两边都只带引用 `images:[{ref, mediaType, bytes, tooLarge?}]`，前端在格子进入可视区时经鉴权的 `image:get` 按需取。截图常有几百 KB，内联会撑爆环形缓冲与手机上的历史加载。取图先过与 `session:history` 同款的范围门与会话归属（越界 cwd 拒绝并记审计，带着有效实例 id 也一样），再查发出它的实例内存（live 截图到达时 transcript 未必已写到这一条），最后读 transcript；只认 png / jpeg / gif / webp，单张有上限，超限只显示占位。判据在 `app/src/shared/transcript-image.js`。
+
+Claude 官方桌面端（不是本项目的 CCM.app）给会话挂了 visualize MCP，模型用 `mcp__visualize__show_widget` 在聊天里画 SVG 图或交互组件；终端 CLI 没有这个工具。图的源码在工具 input 的 `widget_code` 里，走普通工具摘要会被截到 600 字、只剩半截，所以**只对这一个工具名**，`tool_use` 事件与 `session:history` 的工具条目多带一个 `widget: {title, kind, code?}` 字段，live 与历史两路共用 `app/src/shared/tool-summary.js` 的 `widgetPayload`。不新增事件 type，其他工具的事件形状一个字节不变。
+
+- **SVG 源码内联，所以有单条上限。** 与上面的图片相反，`code` 随事件下发；超过 64K 字符就整个不带，前端退回一行工具调用。上限按常驻内存定：带 widget 的事件住在两处按条数封顶的缓存里（每实例 2000 条的环形缓冲、每会话 2000 条 × LRU 10 的历史缓存），256K 时一个满缓冲就能留下约 512MB 源码，而真实的图约 4.5KB。前后端互不 import，64K 两边各守一道。
+- **只当图片显示，不执行任何模型生成的代码。** SVG 只经 `data:image/svg+xml` 的 `<img>` 显示，图片文档不执行脚本、不加载外部资源，现有 CSP（`img-src 'self' data:`）不用改。交互 HTML（`kind: 'html'`）不带源码，前端只显示标题和「交互图表，请在桌面端查看」。
+- **主题由前端补。** 原样的 SVG 依赖官方桌面端宿主样式表里的 class 与变量，直接当图片会变成黑方块；`app/public/js/logic/widget.js` 按 visualize 工具公开的色板补一段 `<style>`、`xmlns` 与固有尺寸，系统深浅色切换时重算，渲染在 `app/public/js/app/widget-render.js`。XML 解析失败、源码含孤立代理字符时同样退回一行工具调用，不留裂图。
 
 ## 鉴权与范围边界
 
@@ -159,7 +197,7 @@ AUTH_TOKEN（必备，无它不启动） ‖ 公网 IdP 策略（可选，当前
         ↓
 设备信任（真·本机直连豁免；经 IdP 进来的连接默认也豁免，DEVICE_APPROVAL_SCOPE=all 时不豁免）
         ↓
-WORKDIRS 范围门
+已连接文件夹范围门（WORKDIRS）
         ↓
 CLI permissions.allow + Web 当前权限档
         ↓
@@ -178,9 +216,14 @@ IdP 管的公网 Host 上是「对方已过 IdP」，其余入口上是「对方
 
 - `AUTH_TOKEN` 证明请求持有实例密钥，不代表设备已经获准。
 - Cloudflare Access 是**可选的**公网身份层，不扩大工作区。开着时在它管的公网 Host 上**替代 token**（那条路只认 JWT），默认还**替代**设备审批（第二因子）；LAN / 本机入口不受影响，仍只认 token。关着时设备审批自动顶上——`AUTH_TOKEN` + 设备审批就是所有拓扑共同的公网基线。
-  - ⚠ 「替代」是字面意义上的：经 Access 进来的连接**完全不查** `trusted-devices.json`，于是「已受信任的设备」那张表**管不到它们**——吊销一台经隧道进来的手机既不会断线也不会被拦（2026-09-10 实测确认）。判据在 `shouldBypassDeviceApproval` 的第一行。
+  - ⚠ 「替代」是字面意义上的：经 Access 进来的连接**完全不查** `trusted-devices.json`，于是「已受信任的设备」那张表**管不到它们**——吊销一台经隧道进来的手机既不会断线也不会被拦（2026-09-10 实测确认）。判据在 `shouldBypassDeviceApproval` 的 `if (accessEnabled) return true`（紧跟在 `DEVICE_APPROVAL_SCOPE` 判断之后）。
   - 想让那张表对所有路径生效，把 `DEVICE_APPROVAL_SCOPE` 设为 `all` 并重启。它是**覆盖全部路径的总开关**：经 Access 进来的新设备要批准一次，本机样 Host 那条也一并关掉。后半条是必须的——那条判据读 Host，而 **Host 是客户端填的头**，纯 TCP 转发（`ssh -R`、frp tcp）不按 Host 路由，远程来客自填 `Host: localhost` 就满足「peer 本机 + Host 本机」（peer 本来就是 loopback）。TCP 层面区分不了真本机与隧道转发，加判据也挡不住（转发头纯转发不加，`localAddress` 两者相同），所以交给知道自己拓扑的人决定（2026-09-17 安全审查 H1）。开了之后自救通道是 `node scripts/device.js approve`、菜单栏、跑 `npm start` 那个终端里按回车——都不读网络判据。缺省保持「Access 替代审批」且本机样放行，因为翻默认会让既有安装升级后一重启就把所有在用设备打回待审，而那时信任表里没有任何一台能用来批准。
-- `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（**首项即主工作目录**，手机端默认打开它；旧版外置 `workdirs.json` 仍受支持，经 `WORK_DIRS_FILE`；shell env 压过配置文件内联 `WORKDIRS`）。
+- `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（**首项即主工作目录**，手机端默认打开它；旧版外置 `workdirs.json` 仍受支持，经 `WORK_DIRS_FILE`；shell env 压过配置文件内联 `WORKDIRS`）。清单可以为空：一个文件夹都没连（或配置的全都找不到）时照常启动、只剩「无文件夹」，**绝不回落家目录**；找不到的个数进服务告警（SCOPE-03）。外置清单文件（`WORK_DIRS_FILE`）读不出来则拒绝启动并点名那个文件：那是配置坏了，不是「还没连」。清单不来自配置文件内联 `WORKDIRS`、或没有配置文件时，手机上改不了它：instances 广播的 `foldersReadonly` 带上原因，首页零文件夹引导据此不给「选择文件夹」。
+  - 范围按官方桌面端「已连接的文件夹」语义，判据只有一份：`app/src/sessions/folder-access.js` 的 `resolveAuthorizedCwd`，一律 realpath 后比较。已连接文件夹的子目录直接可达（嵌套时归最深的根）；连接范围里的 git linked worktree 归所属仓库，归属从仓库一侧双向回验、**全程不执行 git**（`.git/config` 模型可写）；范围外的（如仓库外的平级目录）不凭 worktree 身份授权，要显式连接，照官方桌面端（SCOPE-04）；「无文件夹」会话跑在应用数据目录下的 scratch 根里，只认 app 自己建的 `scratch-YYYY-MM-DD-xxxxxx` 子目录（SCRATCH-01）。`~/.claude` 与 CCM 数据目录整棵是禁区。
+  - **显式传入越界 cwd 一律拒绝**（`routeCwd` 返回 null 并记 `scope_violation` 审计），不回落到当前查看目录——抽屉按项目请求列表、离线队列带着入队时的 cwd 重发，回落会把 A 的会话画到 B 下、把消息投进别的工作区（SCOPE-05）。只有读类请求额外放行正在跑的实例自己的 cwd，保住「热移除后已开会话继续用」。已连接、但已从磁盘消失的目录（连接根或其下 worktree 被删）照样拒绝，但不记越界：配置要到重启才剔掉它，其间抽屉每 12 秒轮询一次。
+  - 手机上添加文件夹（`folders:add`）只浏览家目录内的目录名（不跟随 symlink、隐藏点目录），家目录本身、磁盘根、禁区、仓库里 Claude Code 建的 worktree 不能添加（FOLDER-01）；只写配置文件内联 `WORKDIRS` 并同步热加载，来源是环境变量或旧外置文件、或配置文件不存在时拒绝。已经是连接根时不重复写，回 `added:false`。
+  - 断开（`folders:remove`）是它的对称面：只认与当前清单精确相等的连接根（绝对路径——连接根可以在家目录之外），子文件夹小节、「无文件夹」一律拒；删掉配置里 realpath 指向它的条目，其余条目连同 `sessionLimit` 原样保留。热加载强制生效：剩下的条目全都找不到时，「保留旧清单」那道防编辑器写到一半的保护不能把这次断开吞掉。开在里面的会话照常跑、只拒新开，与在配置里删掉一项相同。
+  - 告警里一键移除缺失项（`folders:removeMissing`，#355）：按配置文件**原始 WORKDIRS 条目**删；提交时重读并复核仍找不到才动手，保留其余条目与 `sessionLimit`；退役的 `WORK_DIR` 不给自动移除；只读来源与设备信任闸在服务端执行。
 - Agent 的 `canUseTool` 审批只管理 Agent 自主行为；用户在文件编辑器中点击保存属于直接写入，走独立的范围、大小、哈希与审计防线。
 
 安全摘要见 [README 安全边界](../README.md#安全边界)，部署拓扑见[部署与运维](deployment.md)。
@@ -219,7 +262,7 @@ IdP 管的公网 Host 上是「对方已过 IdP」，其余入口上是「对方
 
 `Sec-CH-UA-Model`（UA Client Hints）是 Chromium 系拿真实机型的唯一途径，但它要求**安全上下文**——局域网 `http://` 入口下不可用，恰好是最需要分辨的那一档。故本产品不走这条路。
 
-**别名是唯一对所有平台都成立的分辨手段**：用户在列表里点 ✎ 就地起名，存进 `device-profiles.json` 的 `alias`，设了就压过所有自动信息。归一在 `normalizeDeviceAlias`（剥控制字符 → 折叠空白 → 按**码点**限长 24；空白等于清除）。改名走 `user:renameTrustedDevice`，寻址同吊销用 `shortId`，但**没有自改守卫**——给自己这台起名不像吊销那样会把自己踢下线。
+**别名是唯一对所有平台都成立的分辨手段**：用户在列表里点 ✎ 就地起名，存进 `device-profiles.json` 的 `alias`，设了就压过所有自动信息。归一在 `normalizeDeviceAlias`（控制字符与格式字符换成空格 → 折叠空白 → 按**码点**限长 24；空白等于清除）。换成空格而不是删掉：删掉会把用户分开写的两段拼成一个词。改名走 `user:renameTrustedDevice`，寻址同吊销用 `shortId`，但**没有自改守卫**——给自己这台起名不像吊销那样会把自己踢下线。
 
 Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里没有任何全量 token**，只有 `shortId`（前 8…后 4）+ `kind`/`browser`/`model`/`alias`/`ua`/`ip`/`approvedAt`/`isCurrent`，顶层另带 `accessBypassActive`（告诉界面这张表此刻对隧道流量是否失效）；吊销走 `user:revokeTrustedDevice` 并按 `shortId` 反查，0 命中或多命中一律拒绝、绝不任选一条。这条红线守的不是「防局域网窃听」（该广播只发给已批准连接），而是**让吊销真的能吊销**：一台拿到过全量信任表的设备，日后被吊销时手里仍握着其余设备的 token。同理，当前这台设备在 Web 上不给吊销按钮（服务端也拦），否则一键就能把自己踢下线，若那是唯一在线的可信端就只能回到电脑前才能重批。
 
@@ -229,7 +272,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 
 抑制策略按「用户是否可能看不到」分档，而不是按事件重要性：
 
-- **审批、提问、后台任务完成：无条件推。** 这三类都意味着有人在等一个动作，而用户此刻可能锁屏或在别的 app 里。
+- **审批、提问、MCP 表单 / 授权（elicitation）、后台任务完成：无条件推。** 这几类都意味着有人在等一个动作，而用户此刻可能锁屏或在别的 app 里。
 - **回合完成的 `result`、模型静默告警 `gateway_stall`：仅当 approved 房间存在前台可见连接、且那个连接正看着这条会话时才抑制。** 前台判据是客户端主动上报的 `client:presence`，**不是 socket 是否连着**——手机切后台时 socket 常常还活着，拿连接状态当判据会让用户收不到本该收到的完成通知。
 
 能产出推送的只有下面这些，其余一概不推：
@@ -238,6 +281,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 |---|---|---|
 | `permission_request` | ⚠️ Claude 请求许可 | 无条件 |
 | `question` | ❓ Claude 有问题 | 无条件 |
+| `elicitation` | 🔐 MCP 需要你 | 无条件 |
 | `task_notification` | ✅ / ⚠️ 后台任务完成 / 失败 | 无条件 |
 | `result` | ✅ / ⚠️ / ⏹ 任务完成 / 出错 / 已中止 | 前台可见则抑制 |
 | `system` 且 `notice=gateway_stall` | ⏳ 模型长时间无响应 | 前台可见则抑制 |
@@ -245,7 +289,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 | CLI hooks 的 `Stop` / `Notification` | ✅ 终端会话完成一轮 / ⚠️ 终端会话需要你 | 不走 `agent:event` |
 | presence 跳变为「无前台」且此刻有实例在跑 | ⏳ 任务仍在后台运行 | 不走 `agent:event` |
 
-`agent:event` 的 31 种 type（`AGENT_EVENT_TYPES`）里只有前五种命中，其余全部落 `default → null`——工具调用、流式文本、模型切换、压缩边界、`api_retry`、普通 system notice 一条都不推。后三条不属于任何 envelope type，**刻意拆成独立函数而非塞进那个 switch**：`NOTIFY_CATEGORY` 的节流键也按 type 建，混进去会让「type 对应真实 envelope 类型」这条隐含契约失效。
+`agent:event` 的 type（`AGENT_EVENT_TYPES`）里只有前六种命中，其余全部落 `default → null`——工具调用、流式文本、模型切换、压缩边界、`api_retry`、普通 system notice 一条都不推。后三条不属于任何 envelope type，**刻意拆成独立函数而非塞进那个 switch**：`NOTIFY_CATEGORY` 的节流键也按 type 建，混进去会让「type 对应真实 envelope 类型」这条隐含契约失效。
 
 `task_notification` 只认**真后台任务**。CLI 把跑得久的前台 Bash 也建模成 task（`task_type: local_bash`、`is_backgrounded: false`），完成时走同一条通道且全程不发 `background_tasks_changed`——所以「不在 `bgTasks` 里」不能当判据，唯一可靠的是 `task_started` 上的 `is_backgrounded`（`task_notification` 自己不带这个字段）。不过滤的话，每条跑过几秒的前台命令都会被播报成「后台任务完成」并打到锁屏手机上。
 
@@ -260,7 +304,8 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 | Claude 对话 | `~/.claude/projects/` transcript | CLI/Web 续接与稳定历史 |
 | Web 实例运行态 | 内存中的 `AgentSession` | 流式 turn、审批、事件缓冲 |
 | CCM 控制面 | `CCM_DATA_DIR` | 会话指针、设备、审批、审计、推送、已读位点与缓存 |
-| 工作区白名单 | `WORKDIRS` | 限定可见与可操作目录（首项 = 主工作目录） |
+| 已连接的文件夹 | `WORKDIRS` | 限定可见与可操作目录（含子目录与所属 worktree；首项 = 主工作目录） |
+| 无文件夹会话的目录 | 应用数据目录下的 `scratch-workspaces/` | 一次性 cwd；删会话时一并删除，卸载 `--purge` 只报不删 |
 | Web 驾驶状态栏 | SDK 事件 | 当前模型、上下文、成本、effort |
 | CLI 驾驶状态栏 | 可选 statusline 快照 | 终端会话的只读状态展示 |
 | CLI 即时信号 | 可选 hooks 投递箱 | Stop / Notification 加速与通知 |
@@ -306,6 +351,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 - `app/src/server/mirror-engine.js`：catchUp 追平调度与镜像状态机（状态自持）。
 - `app/src/server/auto-continue.js` / `app/src/agent/quota-auto-continue.js`：额度墙到点自动继续的调度（状态自持）与判定纯函数。
 - `app/src/sessions/history.js`：transcript 读取、历史重建与镜像判定纯函数。
+- `app/src/sessions/resume-anchor.js`：预测 CLI 续接会接上哪条链，以及「续接会丢掉一段对话」的发送闸。
 - `app/src/ops/cli-hooks-bridge.js` / `app/src/ops/cli-statusline-bridge.js`：CLI 侧信号与快照消费。
 - `app/public/js/app.js` 与 `app/public/js/app/`：客户端状态、事件派发与交互模块。
 - `tests/gates/contract-check.js`：双向 Socket.io 事件契约门禁。

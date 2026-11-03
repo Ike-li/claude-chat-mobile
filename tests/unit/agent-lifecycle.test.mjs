@@ -66,6 +66,20 @@ test.describe('formatLifecycle*', () => {
     // 截断只对超长生效：正常长度的原因必须逐字保留，否则排障信息被闸吃掉
     assert.equal(formatLifecycleSessionError('spawn ENOENT'), '进程异常：spawn ENOENT');
   });
+  // 验收 O132（R9 AC-13-15）：进程被 kill 后中断面上的原因带着 CLI 的 stderr——「…terminated by signal SIGKILL. stderr:
+  // [claude-code:unrecognized_model] …」，后半句是 CLI 每次启动都写的告警，读起来像「模型不认识」才是死因。信号来自进程外，
+  // stderr 尾巴说的不是它；非零退出码的 stderr 才是原因，照留。完整 stderr 仍走 LOG_STDERR。
+  test('sessionError：被信号终止时不带 stderr 尾巴；非零退出码照带', () => {
+    assert.equal(
+      formatLifecycleSessionError('Claude Code process terminated by signal SIGKILL. stderr: [claude-code:unrecognized_model] {"model":"grok-4.7[1m]"}'),
+      '进程异常：Claude Code process terminated by signal SIGKILL',
+    );
+    assert.equal(formatLifecycleSessionError('Claude Code process terminated by signal SIGTERM'), '进程异常：Claude Code process terminated by signal SIGTERM');
+    assert.equal(
+      formatLifecycleSessionError('Claude Code process exited with code 1. stderr: Error: ENOSPC'),
+      '进程异常：Claude Code process exited with code 1. stderr: Error: ENOSPC',
+    );
+  });
   // 同一个 0.3.211 变更的第二处后果：resume 失败文案的字符预算只有 120，而上游前缀就占掉约 47，
   // 只剩 72 个字符留给 CLI 真正说的那句话。剥掉前缀，把预算全给真实原因。
   test('stripProcessExitPrefix：剥掉 SDK 拼的 process-exit 前缀，保留 CLI 原文', () => {
@@ -953,6 +967,26 @@ test.describe('consume() 退出路径', () => {
     s.dispose();
   });
 
+  // 验收 O60：前端按 processExited 记住这条提示，切回该会话、历史重画完再补出来。只认结构化字段，不认文案。
+  // resume 失败不带：那是「这次没打开」，重开时会重新尝试、重新报，不需要记。
+  test('进程中途退出（消息流结束 / 抛错）→ error 带 processExited；resume 失败不带', async () => {
+    const errorOf = async ({ sawInit, resumeId = null }, next) => {
+      const { s, events } = makeSession({ resumeId });
+      s.sawInit = sawInit;
+      await s.consume({ [Symbol.asyncIterator]() { return { next }; } });
+      s.dispose();
+      return events.find(e => e.type === 'error').payload;
+    };
+    const exited = await errorOf({ sawInit: true }, () => Promise.resolve({ done: true }));
+    assert.equal(exited.processExited, true);
+    const killed = await errorOf({ sawInit: true }, () => Promise.reject(new Error('Claude Code process terminated by signal SIGKILL')));
+    assert.match(killed.message, /^进程异常：/);
+    assert.equal(killed.processExited, true);
+    const resumeFailed = await errorOf({ sawInit: false, resumeId: 'bad-id' }, () => Promise.resolve({ done: true }));
+    assert.equal(resumeFailed.recoverable, false, '前提：走的是 resume 失败分支');
+    assert.equal(resumeFailed.processExited, undefined);
+  });
+
   // 彻底删除靠它判断「CLI 退完了没有」（app.js deletePermanent）：dispose 只是让 SDK 关 stdin，
   // CLI 读到 EOF 后还要往 transcript 追加收尾元数据才退。在 dispose 时就结算，删除会落在那几行之前。
   test('exitPromise 在 SDK 消息流结束时才结算，不是 dispose 那一刻', async () => {
@@ -1172,9 +1206,9 @@ test.describe('lastActivity 刷新', () => {
 // 或切视图时被前端分流丢弃，pendingPermissions/pendingQuestions 才是权威真相。payload 必须与
 // askPermission 的 emit('permission_request')、handleQuestion 的 emit('question') 逐字段一致。
 test.describe('pendingRequestsSnapshot()', () => {
-  test('全空 → { permissions:[], questions:[] }', () => {
+  test('全空 → { permissions:[], questions:[], elicitations:[] }', () => {
     const { s } = makeSession();
-    assert.deepEqual(s.pendingRequestsSnapshot(), { permissions: [], questions: [] });
+    assert.deepEqual(s.pendingRequestsSnapshot(), { permissions: [], questions: [], elicitations: [] });
   });
 
   test('permission：requestId/name/input/cwd/fp/createdAt/expiresAt 与 emit(permission_request) 一致', () => {
@@ -1202,9 +1236,11 @@ test.describe('pendingRequestsSnapshot()', () => {
     const snap = s.pendingRequestsSnapshot();
     // 对齐 CLI rich options：字符串选项也会归一成 {label}；multiSelect 缺省 false
     // AG-NEW-001：createdAt/expiresAt 与 live emit('question') 对称
+    // questionIndex / questionCount 按整组算（已答的那题不补发，但仍计入 questionCount）
     assert.deepEqual(snap.questions, [{
       requestId: 'tool_1#0', text: 'Q0?', header: undefined, multiSelect: false,
       options: [{ label: 'A' }, { label: 'B' }],
+      questionIndex: 0, questionCount: 2, openQuestionIndexes: [0],
       createdAt: 111, expiresAt: 222,
     }]);
     assert.deepEqual(snap.permissions, []);

@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, isBlockedSurfaceTarget, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, resolveRowTerminalState, mirrorRowLockChanged, isBlockedSurfaceTarget, formatSessionRowSubtitle, mergeOrphanRowsByTime, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -99,6 +99,42 @@ test('resolveDrawerStatusChip: CLI 正在跑（纯终端 / Web 只读镜像 / We
   assert.deepEqual(resolveDrawerStatusChip({ liveState: 'idle', terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
   assert.deepEqual(resolveDrawerStatusChip({ liveState: 'done', terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
   assert.deepEqual(resolveDrawerStatusChip({ liveState: 'aborted', terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
+});
+
+// O86：注册表没自报时，被镜像锁住的那一行也要看得出终端在驾驶。
+test('resolveRowTerminalState: 注册表自报优先；否则只给镜像锁住的那一行补终端态', () => {
+  const mirror = { sessionId: 's1', stale: false, waiting: false };
+  assert.equal(resolveRowTerminalState({ registryState: 'alive', sessionId: 's1', mirror }), 'alive', '注册表是终端进程自己说的，压过推断');
+  assert.equal(resolveRowTerminalState({ registryState: null, sessionId: 's1', mirror }), 'busy');
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, waiting: true } }), 'waiting');
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, stale: true } }), null, '疑似中断时没人在驾驶，不补');
+  assert.equal(resolveRowTerminalState({ sessionId: 's2', mirror }), null, '锁只属于被锁的那个会话');
+  assert.equal(resolveRowTerminalState({ sessionId: null, mirror }), null, '没有 id 的新会话行不认领');
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: null }), null);
+  assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's2', mirror: null }), 'busy');
+  assert.equal(resolveRowTerminalState(), null);
+});
+
+test('resolveRowTerminalState: 本会话自主循环（ScheduleWakeup/CronCreate）造成的镜像锁不冒充终端驾驶', () => {
+  // 那时没有终端在驾驶，是会话自己被定时唤起写了 transcript；composer 会单独说明这个来源，抽屉行不该写「终端运行中」。
+  const mirror = { sessionId: 's1', stale: false, waiting: false, autonomous: true };
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror }), null);
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, waiting: true } }), null);
+  assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's1', mirror }), 'busy', '注册表自报仍然优先');
+});
+
+// 方案 F（#289）：行上快照优先，镜像锁真正转变时由 applyMirror 立刻 revalidate 那一行所在目录。
+// 「真正转变」只看行能读到的那几个字段；倒计时之类的重复广播不该每次都打一轮 session:list。
+test('mirrorRowLockChanged: 只有锁出现/消失或 sessionId/stale/waiting/autonomous 翻转才算转变', () => {
+  const lock = { sessionId: 's1', stale: false, waiting: false, autonomous: false };
+  assert.equal(mirrorRowLockChanged(lock, { ...lock }), false, '字段相同的重复广播不算');
+  assert.equal(mirrorRowLockChanged(null, null), false);
+  assert.equal(mirrorRowLockChanged(null, lock), true, '锁出现');
+  assert.equal(mirrorRowLockChanged(lock, null), true, '锁消失（含已接管导致 effective=false）');
+  assert.equal(mirrorRowLockChanged(lock, { ...lock, sessionId: 's2' }), true);
+  assert.equal(mirrorRowLockChanged(lock, { ...lock, stale: true }), true);
+  assert.equal(mirrorRowLockChanged(lock, { ...lock, waiting: true }), true);
+  assert.equal(mirrorRowLockChanged(lock, { ...lock, autonomous: true }), true);
 });
 
 test('resolveDrawerStatusChip: Web 与 CLI 同时 busy（续接重叠 / 双写窗口）仍标终端运行中', () => {
@@ -372,18 +408,21 @@ test('presentTurnResult: interrupted=true 压过 isError/ede_diagnostic，不画
   });
   assert.equal(ui.kind, 'aborted');
   assert.equal(ui.errorBar, null, 'CLI 不对用户暴露 interrupt 伴随的 is_error 诊断');
-  assert.match(ui.statusBar.text, /^已中止 · 249\.4s · \$18\.6533$/);
+  // costUsd 是 CLI 的累计费用，不是这一轮花的（验收 O57）——收尾行不挂，累计成本在状态栏
+  assert.match(ui.statusBar.text, /^已中止 · 249\.4s$/);
   assert.equal(ui.statusBar.cls, 'text-ink-faint');
   assert.equal(ui.notify.title, '⏹ 任务已中止');
   assert.equal(ui.failToolsMessage, '已中止');
   assert.equal(ui.haptic, 'warning');
 });
 
-// 出错分支有意不改 CLI 化：出错时更需要显式秒数+成本，保留中文灰条+红色错误条（用户确认「出错分支不变」）。
-test('presentTurnResult: 真错误仍中文灰条 + 红条（不 CLI 化）', () => {
+// 出错分支有意不改 CLI 化：出错时更需要显式秒数，保留中文灰条+红色错误条（用户确认「出错分支不变」）。
+// 2026-10-19 验收 O57：原来那行还挂着「· $成本」，可 costUsd 是 CLI 的累计费用（恢复的会话里网关 503、一个 token
+// 没用，也显示 $0.38），读起来像这条失败的消息花了这么多钱；标签还写着「完成」。去掉成本、标签改「出错」，秒数照留。
+test('presentTurnResult: 真错误仍中文灰条 + 红条（不 CLI 化）；灰条写「出错」、不挂累计成本', () => {
   const err = presentTurnResult({ isError: true, errors: ['boom'], durationMs: 1200, costUsd: 0.1 });
   assert.equal(err.kind, 'error');
-  assert.match(err.statusBar.text, /^完成 · 1\.2s · \$0\.1000$/);
+  assert.match(err.statusBar.text, /^出错 · 1\.2s$/);
   assert.equal(err.errorBar.text, '出错：boom');
   assert.equal(err.errorBar.cls, 'text-danger');
   assert.equal(err.notify.title, '⚠️ 任务出错');
@@ -484,6 +523,19 @@ test('shouldShowTopContextPill: 真实会话恒显；compose 有 cwd 即显；�
   assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: null, cwd: '/repo' }), false);
 });
 
+// 「无文件夹」新会话页的 cwd 是 scratch 根：它只是启动键，首条消息才建目录，服务端不让浏览它（范围门只放行
+// 根下的 scratch 目录）。显示出来就是一个点开必报「不在已连接的文件夹里」的入口（2026-10-16 真机）。
+test('shouldShowTopContextPill: 要打开的是 scratch 根时隐藏；会话自己的 scratch 目录照常显示', () => {
+  const scratchRoot = '/data/scratch-workspaces';
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null, composeReady: true, cwd: scratchRoot, scratchRoot }), false);
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: 'abc', cwd: `${scratchRoot}/scratch-2026-10-16-abc123`, scratchRoot }), true);
+  // 首发在途：实例已懒开、目录已建，compose 表面还在——指向的是那个目录，照常显示
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: null, composeReady: true, cwd: `${scratchRoot}/scratch-2026-10-16-abc123`, scratchRoot }), true);
+  // 普通文件夹的新会话页不受影响；scratchRoot 未知（旧服务端）时与改动前同形
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null, composeReady: true, cwd: '/repo', scratchRoot }), true);
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null, composeReady: true, cwd: scratchRoot, scratchRoot: null }), true);
+});
+
 // 空首页枢纽不展示底部输入条：须先选会话或点 ＋ 进入 compose 就绪态。
 test('shouldShowComposer: 空首页隐藏；composeReady/有 session/首发在途显示', () => {
   assert.equal(shouldShowComposer({ viewingInstanceId: null, sessionId: null }), false);
@@ -540,8 +592,8 @@ test('formatComposeDefaultsSummary: 拼装工作区新会话默认档文案', ()
     formatComposeDefaultsSummary({ modelLabel: 'opus', modeLabel: '', effortLabel: 'high' }),
     'opus · high',
   );
-  assert.equal(formatComposeDefaultsSummary({}), '使用工作区默认配置');
-  assert.equal(formatComposeDefaultsSummary({ modelLabel: '  ', modeLabel: null }), '使用工作区默认配置');
+  assert.equal(formatComposeDefaultsSummary({}), '使用此文件夹的默认配置');
+  assert.equal(formatComposeDefaultsSummary({ modelLabel: '  ', modeLabel: null }), '使用此文件夹的默认配置');
 });
 
 // 新会话首发的乐观 busy（"正在执行任务"）在服务端懒开实例并广播 instances 后，会被 setInstances→bindView→
@@ -943,6 +995,7 @@ test('effortUiState: CLI 镜像档位未知时保持未知，不得从候选列�
       level: null,
       selected: '',
       label: 'CLI 档位未知',
+      pillLabel: 'CLI 档位未知',
       placeholder: 'CLI 当前档未知',
     },
   );
@@ -987,8 +1040,7 @@ test('resolvePanelState: 接管后整组恢复 Web 偏好，不把 CLI 观察值
   });
 });
 
-// detectAtMentionQuery/applyAtMentionPick → logic-composer-mention.test.mjs；resolveForkAnchorUuid →
-// logic-history-fork.test.mjs（按行为域拆分惯例，见 source-layout.test.mjs）。
+// detectAtMentionQuery/applyAtMentionPick → logic-composer-mention.test.mjs（按行为域拆分惯例，见 source-layout.test.mjs）。
 
 // 7febabc 回归：resolveSendModel 改成返回 wire（entry.resolvedModel）后，app.js 的后缀守卫仍比 m.value，
 // 而 wire 按设计不等于任何条目的 value → 守卫恒失效 → 每次显式选模型都送出重复后缀的非法模型名。
@@ -1202,4 +1254,26 @@ test('draftKeyFor: 有 sessionId 用它，没有才退回 new:<cwd>，两者都�
   assert.equal(draftKeyFor({ sessionId: null, cwd: '/w/x' }), 'new:/w/x');
   assert.equal(draftKeyFor({ sessionId: null, cwd: null }), null);
   assert.equal(draftKeyFor(), null);
+});
+
+// 2026-10-31 真机：收起列表后两条 10 月 28 日的已开会话顶在今天的会话上面，点「显示更多」又排回原位。
+// 它们只是被分页挤出了这一页，按时间该接在页尾，而不是插到最前。
+test('mergeOrphanRowsByTime: 补画的已开会话按时间插回列表，不顶到最前', () => {
+  const page = [{ id: 'a', lastUsedAt: 500 }, { id: 'b', lastUsedAt: 300 }, { id: 'c', lastUsedAt: 100 }];
+  const orphans = [{ id: 'old2', lastUsedAt: 40 }, { id: 'old1', lastUsedAt: 80 }, { id: 'moved', lastUsedAt: 400 }];
+  assert.deepEqual(
+    mergeOrphanRowsByTime(page, orphans).map(s => s.id),
+    ['a', 'moved', 'b', 'c', 'old1', 'old2'],
+    '被挤出页的旧会话应接在页尾、按时间排；比页内某些行新的（transcript 迁走的）插到它的时间位置',
+  );
+});
+
+test('mergeOrphanRowsByTime: 没有时间的已开会话排最前，列表本身的顺序不动', () => {
+  const page = [{ id: 'a', lastUsedAt: 500 }, { id: 'b', lastUsedAt: 300 }];
+  assert.deepEqual(
+    mergeOrphanRowsByTime(page, [{ id: 'gone', lastUsedAt: null }]).map(s => s.id),
+    ['gone', 'a', 'b'],
+    'transcript 找不到的会话没有时间可排，放最前才看得见它开着',
+  );
+  assert.deepEqual(mergeOrphanRowsByTime(page, []).map(s => s.id), ['a', 'b']);
 });

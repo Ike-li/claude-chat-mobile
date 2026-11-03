@@ -202,6 +202,38 @@ test.describe('事件流 — 新连接重放', () => {
     assert.equal(inst.payload.autoContinue.length, 0);
     s.disconnect();
   });
+
+  // 项目清单（2026-09-24「已连接的文件夹」）。前端对「缺这个字段」的约定是回落到 dirs（兼容 E2E mock 与
+  // 演示站的旧载荷），所以真 server 漏发不报错，只会让抽屉永远按旧的目录列表画——E2E 打的是 mock，守不住。
+  test('instances 广播带项目清单与 scratch 根；「无文件夹」没在用时不占一节，但列得出（根还没建也不越界拒绝）', async () => {
+    const events = [];
+    const s = connectSocket();
+    s.on('agent:event', e => events.push(e));
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 5000);
+    });
+    await new Promise(resolve => setTimeout(resolve, 800));
+    const inst = events.find(e => e.type === 'instances');
+    assert.ok(inst, `连接后应收到 instances，实际：${events.map(e => e.type).join(', ')}`);
+    const { projects, scratchRoot } = inst.payload;
+    assert.equal(typeof scratchRoot, 'string', `scratchRoot 缺席：${JSON.stringify(inst.payload).slice(0, 300)}`);
+    assert.ok(Array.isArray(projects) && projects.length >= 1, `projects 必须是数组，实际 ${JSON.stringify(projects)}`);
+    assert.equal(projects[0].kind, 'connected');
+    // 从没用过无文件夹会话：抽屉里不该平白多一节空的（官方侧栏同样只列有会话的项目）
+    assert.ok(!projects.some(p => p.kind === 'scratch'), `没在用的「无文件夹」占了一节：${JSON.stringify(projects)}`);
+    for (const p of projects) assert.deepEqual(Object.keys(p).sort(), ['key', 'kind', 'label', 'root']);
+
+    const ack = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('session:list 超时')), 3000);
+      s.emit('session:list', { cwd: scratchRoot }, res => { clearTimeout(t); resolve(res); });
+    });
+    assertAckShape(ack, { required: ['currentSessionId', 'sessions', 'pinned', 'open', 'terminalBusy', 'terminalWaiting', 'hasMore', 'moreCount', 'total', 'readState'] },
+      'session:list（无文件夹，scratch 根尚未建）');
+    assert.deepEqual(ack.sessions, []);
+    s.disconnect();
+  });
 });
 
 test.describe('session:list — 空工作目录', () => {
@@ -420,6 +452,10 @@ test.describe('dev:restart — DEV_MODE 关闭时拒绝', () => {
     });
     assert.equal(ack.ok, false);
     assert.ok(ack.error);
+    // 验收 O133（R9 AC-16-15）：被拒提示要让用户认出自己的起法。终端里起 server 的两种前台形态都不被托管，
+    // 只点名 npm start 时，用 npm run dev 起的人会以为说的不是自己。
+    assert.match(ack.error, /npm start/);
+    assert.match(ack.error, /npm run dev/);
     s.disconnect();
   });
 });
@@ -549,10 +585,11 @@ const ACK_SHAPES = [
     check: ack => assert.ok(Array.isArray(ack.messages), 'messages 必须是数组——前端无条件对它做 .length/遍历') },
 
   { event: 'sync:since', branch: '冷连接', payload: () => ({}),
-    required: ['found', 'gap', 'replayed', 'diskLen', 'diskExternalLen', 'pending', 'unreadOnEntry'],
+    required: ['found', 'gap', 'replayed', 'diskLen', 'diskTotal', 'diskExternalLen', 'pending', 'unreadOnEntry'],
     // diskLen 是历史教训：mock 从不返回它，于是 shouldReloadOnEnter 的「磁盘 ahead → 全量 reload」
     // 整条分支在 E2E 里够不着，2026-08-27 的「同一条消息两颗气泡」就漏在那里。
     // diskExternalLen 是 replayed>0 时对账外部写入的唯一依据（那时 diskLen 恒空，2026-09-22）。
+    // diskTotal 是截顶会话核对点击预取的唯一依据（diskLen 恒为 2000）：删了它，长会话的预取一律作废、再拉一遍。
     check: ack => assert.equal(typeof ack.found, 'boolean') },
 
   { event: 'session:switch', branch: '拒绝支', payload: () => ({ sessionId: 'nope', cwd: tmpDir }), required: ['ok', 'error'] },
@@ -563,11 +600,29 @@ const ACK_SHAPES = [
   // 不是拒绝支的一条。pinned（手动标「稍后再看」但被 limit 挤出本页的会话）尤其需要它：E2E 的 mock
   // 是平行实现，真 server 把这个字段删掉，抽屉那一组只是静默变空，E2E 与前端单测都不会红。
   { event: 'session:list', branch: '空工作区', payload: () => ({ cwd: tmpDir }),
-    required: ['currentSessionId', 'sessions', 'pinned', 'terminalBusy', 'terminalWaiting', 'hasMore', 'total', 'readState'],
+    required: ['currentSessionId', 'sessions', 'pinned', 'open', 'terminalBusy', 'terminalWaiting', 'hasMore', 'moreCount', 'total', 'readState'],
     check: ack => {
       assert.ok(Array.isArray(ack.pinned), 'pinned 必须是数组——前端无条件对它做 .length/展开');
+      // open（验收 O46）：开着、被分页挤出本页的会话的元数据。缺了它抽屉那几行静默回落成没有时间的「新会话」
+      assert.ok(Array.isArray(ack.open), 'open 必须是数组——前端对它做 .map');
       assert.ok(Array.isArray(ack.sessions), 'sessions 必须是数组');
     } },
+  // 显式越界支（SCOPE-05，2026-09-24）：拒绝时键集与正常回执一致、外加 error——前端按字段取，
+  // 不能因为被拒就换一个形状；而此前这一支根本不存在（越界静默回落成别的目录的列表）。
+  { event: 'session:list', branch: '越界 cwd', payload: () => ({ cwd: '/definitely/not/connected' }),
+    required: ['currentSessionId', 'sessions', 'pinned', 'open', 'terminalBusy', 'terminalWaiting', 'hasMore', 'moreCount', 'total', 'readState', 'error'],
+    check: ack => assert.deepEqual(ack.sessions, [], '拒绝支不得带任何会话——回落成别的目录的会话就是错数据') },
+  { event: 'permissions:rules', branch: '越界 cwd', payload: () => ({ cwd: '/definitely/not/connected' }), required: ['ok', 'cwd', 'rules', 'error'] },
+  { event: 'browse:list', branch: '越界 cwd', payload: () => ({ cwd: '/definitely/not/connected', path: '.' }), required: ['ok', 'error'] },
+  // 手机上添加 / 新建文件夹（FOLDER-01，2026-09-24）。浏览的成功支免夹具：家目录本身照样返回完整键集。
+  { event: 'folders:browse', branch: '家目录', payload: () => ({ path: '' }),
+    required: ['ok', 'home', 'path', 'reason', 'entries', 'truncated'],
+    check: ack => assert.ok(Array.isArray(ack.entries), 'entries 必须是数组——前端无条件遍历') },
+  { event: 'folders:browse', branch: '越界', payload: () => ({ path: '..' }), required: ['ok', 'error'] },
+  { event: 'folders:mkdir', branch: '名字不合法', payload: () => ({ path: '', name: '..' }), required: ['ok', 'error'] },
+  { event: 'folders:add', branch: '家目录不能加', payload: () => ({ path: '' }), required: ['ok', 'error'] },
+  // 断开（2026-10-15）：成功支要先连上一个文件夹再断，归 S2 tests/invariants/server/folders.test.mjs；这里只登记免夹具的拒绝支。
+  { event: 'folders:remove', branch: '不在清单里', payload: () => ({ path: '/definitely/not/connected' }), required: ['ok', 'error'] },
   { event: 'read:sync', payload: () => ({ seen: {}, manual: {} }), required: ['ok', 'state'] },
   { event: 'env:get', payload: () => ({}), required: ['ok', 'groups', 'configFile', 'envFileExists', 'readonlyDiagnostics'] },
   { event: 'env:set', branch: '缺 changes', payload: () => ({}), required: ['ok', 'results'] },
@@ -585,8 +640,16 @@ const ACK_SHAPES = [
   { event: 'connect:qr', branch: '非法 target', payload: () => ({ target: '__bogus__' }), required: ['ok', 'error'] },
   // statuslineBridge 与 hooksBridge 并列：两个 CLI 桥的安装态都要下发，少一个就是面板上少一整段。
   // 这里是唯一咬得住的地方——E2E 打的是 mock，删掉真 server 的字段那边照样全绿（2026-09-07 实证）。
+  // missingFolders 同理：抽屉吃 instances 广播里的那份，面板吃这条 ack，少了它两处对同一件事说法不一。
   { event: 'service:status', payload: () => ({}),
-    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'proxyFronted', 'hooksBridge', 'statuslineBridge', 'logging', 'versions'] },
+    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'proxyFronted', 'hooksBridge', 'statuslineBridge', 'logging', 'versions', 'missingFolders', 'missingFolderPaths'] },
+  // #301 告警里的「重新检查」：前端拿回执里的个数当场说「还有 N 个找不到」，路径用来刷新「忽略」的指纹
+  { event: 'folders:recheck', payload: () => ({}), required: ['ok', 'missingFolders', 'missingFolderPaths'] },
+  { event: 'folders:removeMissing', payload: () => ({ paths: [] }), required: ['ok', 'error'] },
+  // 设置「关于」页（#303）。版本号不在这里——前端复用上面 service:status 的 versions。
+  { event: 'about:get', payload: () => ({}),
+    required: ['ok', 'author', 'repository', 'license', 'notice', 'thirdPartyNotices', 'components'],
+    check: ack => assert.ok(Array.isArray(ack.components), 'components 必须是数组——前端无条件遍历') },
 
   { event: 'browse:list', branch: '空目录', payload: () => ({ cwd: tmpDir, path: '.' }), required: ['ok', 'entries', 'totalCount', 'truncated'] },
   { event: 'browse:read', branch: '文件不存在', payload: () => ({ cwd: tmpDir, path: 'nope.txt' }), required: ['ok', 'error'] },
@@ -624,6 +687,7 @@ const ACK_SHAPES = [
 // 未纳入（各有理由，不是遗漏）：
 //   dev:restart —— 本文件另有专测（DEV_MODE=0 拒绝支）；合法路径会杀掉被测 server。
 //   files:write —— 会真写文件；push:test —— 会真发推送；doctor:run / config:refresh —— 会 spawn，慢且与形状无关。
+//   about:checkUpdate —— 会真打 GitHub；三种比较结果、超时、缓存、并发合并在 tests/unit/update-check.test.mjs 用假 fetch 钉住。
 //   各事件的【成功支】—— 要先造实例 / 会话 jsonl / git 仓库，成本另计；本表只覆盖免夹具那一档。
 test.describe('ack 形状守卫 —— 守键集而非键值', () => {
   for (const spec of ACK_SHAPES) {
@@ -644,6 +708,41 @@ test.describe('ack 形状守卫 —— 守键集而非键值', () => {
       s.disconnect();
     });
   }
+});
+
+// 设置「关于」页（#303）的验收：许可证接口返回的原始响应体与仓库根文件逐字节相等——比的是 ack 里的字符串，
+// 不是页面 innerText（DOM 会折叠空白，那样比「看起来一样」就绿了）。未鉴权拒绝那条在 auth-token.test.mjs：
+// 本文件共用一台 server，一次失败鉴权就把 127.0.0.1 锁 500ms，后面的用例全被挡在握手外（见那个文件头注）。
+test.describe('about:get —— 许可证原文逐字节 (#303)', () => {
+  async function connected(opts) {
+    const s = connectSocket({ reconnection: false, ...opts });
+    const outcome = await new Promise(resolve => {
+      s.on('connect', () => resolve('connected'));
+      s.on('connect_error', () => resolve('rejected'));
+      setTimeout(() => resolve('timeout'), 3000);
+    });
+    return { s, outcome };
+  }
+
+  test('LICENSE / NOTICE / vendor 声明逐字节相等；组件清单含浏览器端 Socket.IO 客户端、不含 dev 依赖', async () => {
+    const { s, outcome } = await connected();
+    assert.equal(outcome, 'connected');
+    const ack = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('about:get ack 超时')), 3000);
+      s.emit('about:get', {}, res => { clearTimeout(t); resolve(res); });
+    });
+    s.disconnect();
+    for (const [field, rel] of [['license', 'LICENSE'], ['notice', 'NOTICE'], ['thirdPartyNotices', 'app/public/vendor/THIRD-PARTY-NOTICES.md']]) {
+      const onDisk = readFileSync(new URL(`../../${rel}`, import.meta.url));
+      assert.ok(Buffer.from(ack[field] ?? '', 'utf8').equals(onDisk), `${field} 与仓库根 ${rel} 不是逐字节相等`);
+    }
+    const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+    assert.ok(ack.components.some(c => c.name === 'socket.io-client' && c.scope === 'browser'), '浏览器端 Socket.IO 客户端没列');
+    // 只看服务端那部分：socket.io-client 也是 devDependency（测试用它连 server），与浏览器端那一条同名不同物
+    const names = new Set(ack.components.filter(c => c.scope === 'server').map(c => c.name));
+    for (const dep of Object.keys(pkg.dependencies)) assert.ok(names.has(dep), `直接依赖 ${dep} 没列`);
+    for (const dep of Object.keys(pkg.devDependencies)) assert.ok(!names.has(dep), `dev 依赖 ${dep} 不随 npm ci --omit=dev 分发，却列进来了`);
+  });
 });
 
 // CLAUDE.md「读写必须同源」的核心代码（CONFIG_FILE_PATH/ENV_FILE_PATH 与 usingConfigJson 的分流）
@@ -672,6 +771,7 @@ test.describe('env:set — 写入→读回全链路 (S2)：面板写的必须是
       });
       assert.equal(ack.ok, true, `env:set 应成功：${JSON.stringify(ack)}`);
       assert.ok(ack.written?.includes('SESSION_DELETE_QUIET_MS'), `written 应含该键：${JSON.stringify(ack.written)}`);
+      assert.deepEqual(ack.saved, [{ key: 'SESSION_DELETE_QUIET_MS', effect: 'restart' }], '没被环境变量压着的需重启项：回执说重启后生效');
 
       // 直接读磁盘上的写入目标（ENV_FILE_PATH 的隔离覆盖，指向 tmpDir/.env），
       // 而不是通过另一次 socket 事件——这样断言的是【文件内容】，不是「server 内存里还记得」。
@@ -683,8 +783,29 @@ test.describe('env:set — 写入→读回全链路 (S2)：面板写的必须是
     }
   });
 
+  // 验收 AC-17-11 / O48：本 server 子进程是带着 shell 变量 PORT 起的，PORT 写进文件也不生效。回执说「重启后生效」
+  // 就是 hard-rules §4.6 的假成功——重启后仍是环境变量的值。快照必须是投影之前的那份（getShellEnvSnapshot）。
+  test('被 shell 环境变量压着的项：回执说 shadowed 并点名要 unset 的变量，不说重启后生效', async () => {
+    const s = connectSocket();
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('connect timeout')), 3000);
+    });
+    try {
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('env:set ack 超时（3s）')), 3000);
+        s.emit('env:set', { changes: { PORT: String(PORT + 101) } }, res => { clearTimeout(t); resolve(res); });
+      });
+      assert.equal(ack.ok, true, `env:set 应成功：${JSON.stringify(ack)}`);
+      assert.deepEqual(ack.saved, [{ key: 'PORT', effect: 'shadowed', shadowedBy: ['PORT'] }]);
+    } finally {
+      s.disconnect();
+    }
+  });
+
   // 2026-09-22 review P1：ccm.config.json 读不动时，写盘路径曾「从 {} 长出来」——只写回这次改的几项，
-  // AUTH_TOKEN / WORKDIRS 等其余配置一起被抹掉，下次启动直接起不来（token_required / SCOPE-03）。
+  // AUTH_TOKEN / WORKDIRS 等其余配置一起被抹掉，下次启动直接起不来（token_required），连好的文件夹也全丢了。
   // CLI 的 config set 同场景一直是拒写的。坏文件用尾逗号造：手改 JSON 最常见的那种笔误。
   test('ccm.config.json 损坏时拒绝写入，原文件一字不动（不从空配置重建）', async () => {
     const cfg = join(tmpDir, 'ccm.config.json');

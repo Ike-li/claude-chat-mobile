@@ -37,9 +37,10 @@ jobs:
       # 会被 skip；而被 skip 的 job 若列进分支保护的 required checks，PR 会永久停在 pending。
       # 塞进一个本来就恒跑的 required job 里就没有这个坑。
       #
-      # 【这道闸挡的是什么】2026-09-12 之前 dependabot 的 PR 默认开到 master（#23 就是），合进去
+      # 【这道闸挡的是什么】dependabot 的安全更新 PR 永远开到默认分支 master（#23 就是），合进去
       # master 立刻带上未发版提交，那一刻拉归档的人拿到的代码与版本号对不上、且没有任何地方报错。
-      # 根因已由 .github/dependabot.yml 的 target-branch 修掉，这里是第二道——它管所有来源，
+      # .github/dependabot.yml 的 target-branch 只管版本更新、管不到安全更新，所以对安全更新这里
+      # 是唯一一道（2026-09-29 的 #184 就是被它拦下的），对版本更新是第二道——它管所有来源，
       # 包括人手开的 PR。
       - name: 只有 dev → master 的发版 PR 能进 master
         if: github.event_name == 'pull_request' && github.base_ref == 'master'
@@ -89,6 +90,12 @@ jobs:
       # 不变量树的 S2 层（tests/invariants/server/）：起真 app/server.js 子进程，宿主机上不允许跑
       # （不在 guard-host-tests 白名单里），但 CI runner 本身是一次性的，隔离强于本机容器。
       # CLAUDE_BIN 指向 stub 让 preflight 过关；需要真 agent turn 的断言不在这一层。
+      #
+      # 脚本里的 --test-concurrency=6：这一层大半时间在等子进程，默认并发（核数 - 1 = 3）下 4 核
+      # 只用掉约 1 核。2026-10-25 在钉 4 核的容器里量：并发 3/6/8 的 real 是 37.0/23.2/22.5s，
+      # user+sys 基本不变——6 是拐点，再高只多烧 CPU。真 server 一律 listen(0) 现要端口，不怕并发撞端口。
+      # test:integration 没跟着改：它在并发 6 时要吃掉约 3 核，CI 的核更慢，容易压满 CPU 撞出时序假红，
+      # 而这个 job 加速后已经短于 e2e 那条线，省下的几秒不在关键路径上。
       - run: npm run test:invariants:server
         env:
           CLAUDE_BIN: ${{ github.workspace }}/tests/fixtures/fake-claude.sh
@@ -109,7 +116,31 @@ jobs:
   #   由下面那个汇总 job 提供。matrix job 的名字必然带参数（`e2e (1)`…），直接把 e2e 改成 matrix
   #   会让 `e2e` 这个 context 再也不出现，PR 永久停在 pending —— 与本文件上面记的
   #   「被 skip 的 job 若列进 required checks 会永久 pending」是同一个坑的另一种形态。
+  # 各分片各自排队起跑，前后能差十分钟；这期间 dev 上一次合并的汇总 job 会存一份更新的时长缓存。
+  # 分片若各自按前缀取「最近一份」，同一个 run 里就会有的拿旧表、有的拿新表，算出两套 LPT 分组，
+  # 于是有 spec 谁都没跑（TEST-02 报漏跑，2026-10-22 连续两个 PR 都是这样红的）。
+  # 所以只在这里查一次键，分片按这个确切的键恢复，同一 run 必然共用同一份表。
+  e2e-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      durations-key: ${{ steps.lookup.outputs.cache-matched-key }}
+    steps:
+      - name: Look up E2E duration cache
+        id: lookup
+        uses: actions/cache/restore@v6
+        with:
+          path: tests/infra/.e2e-durations.json
+          key: e2e-durations-${{ github.run_id }}
+          lookup-only: true
+          # ★ 值必须留在下一行（actions/cache 官方支持的多行列表形式）。把前缀写回与键名同一行
+          # 会被 gitleaks 的 generic-api-key 规则命中：键名含 keys、值的熵 3.52 刚过阈值，
+          # 于是一个 cache 前缀被当成泄漏的密钥，pre-commit 当场拦下 commit。
+          restore-keys: |
+            e2e-durations-
+
   e2e-shard:
+    needs: e2e-plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -124,21 +155,16 @@ jobs:
         #   matrix 多于 SHARDS ⇒ 多出来的 SHARD_INDEX 非法，脚本回落成「跑全部分片」，
         #     结果正确但慢几倍。GitHub Actions 的 matrix 引用不了 env，只能靠这两行对齐。
         #
-        # 【为什么是 8 —— 以下全是横向分片下的实测，不是推算】
-        # 各片【净测试时长】（不含 33-41s 的固定开销）：
-        #   run 34743727175  等权重  57 / 83 / 95 / 105 / 162 / 213s     合计 715s
-        #   run 34743993695  等权重  58 / 84 / 98 /  99 / 145 / 209s     合计 693s
-        #   run 34744216219  LPT    106 /108 /113 /114 /116 /131s        合计 688s  ← 均衡后
-        # CI 真实串行基线 ~690s，不是本文件下面那个同机时代的 632s。
+        # 【为什么是 14】2026-09-13 定 8 片时串行基线 ~690s、地板（最大单文件
+        # workspace-sessions-sidebar）约 92s，8 片墙钟 140s（run 34744392463）。到 2026-10-25 用例
+        # 涨到净时长约 1090s、地板 105s，先加到 12 片（#396，墙钟 142s），同日把地板文件和第二大的
+        # task-progress 按主题各拆成两份，最大单文件降到约 54s（permission-allow-deny），地板不再卡人。
+        # 此后分片数只受并发预算限制。按拆分后的时长表模拟 LPT：
+        #   12 片最慢 86s · 13 片 79s · 14 片 73s · 15 片 68s · 16 片 64s
         #
-        # 【整个 workflow 的墙钟，实测】改造前 296s → 6 片 178s → **8 片 140s**
-        #   （run 34744392463：各分片 109/111/117/119/124/124/126/129s，323 条用例全绿、零 flaky）
-        # 墙钟比最慢那片多约 11s，是汇总 job 串在分片之后的必然代价（它要等 needs 全部完成）。
-        #
-        # 【为什么停在 8】8 片理想值 690/8 ≈ 86s，但**地板**——最大单文件
-        # workspace-sessions-sidebar，CI 上约 92s——此时已经高于理想值。再加片一秒都省不到：
-        # 10 片理想 69s，仍被同一个 92s 的地板卡住，却要多摊两份 33-41s 的固定开销。
-        # 想再快只能拆那个 spec 文件，那是重组测试内容，不是调这里的参数。
+        # 【并发预算】每轮峰值 job 数 = 分片数 + quality + 2 个 unit-test + 2 个 CodeQL。GitHub Free
+        # 账号全账号同时最多 20 个 job：14 片时 19 个，留一个空位给同账号别的仓库。15 片恰好顶满，
+        # 一旦有一片排队，它要等 quality 跑完（约 30s）才起跑，比少一片亏得多。
         #
         # 【首次 run 会慢，这是预期】缓存为空时 LPT 退化成按文件数轮转，两个大文件撞进同一片，
         # 最慢片 209-213s（前两轮都是）。仍快于改造前的 255s——横向消除的 CPU 争抢盖过了
@@ -148,7 +174,7 @@ jobs:
         # 【要改这个数之前先确认】分片数变化会重排「哪些 spec 共用一个 mock server 进程、按什么
         # 顺序跑」，而 mock server 用模块级全局变量存状态 ⇒ 可能照出新的隐藏耦合。由 retries:1 兜，
         # 但改完要看一眼有没有新的 flaky。
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     steps:
       - uses: actions/checkout@v7
 
@@ -162,31 +188,67 @@ jobs:
       # 时长缓存决定 LPT 分配。它不进版本库（本机测量值，进了就是会漂移的第二真相），
       # 所以 CI 上只能靠 cache 跨 run 复用 —— 在建这道 cache 之前，CI 日志里【每一次】
       # 都打的是「首次运行（无时长数据，等权重分配）」，LPT 从上线起在 CI 上一次都没生效过。
-      # restore-keys 前缀匹配取最近一份：PR 继承 base 分支（dev）的缓存，dev 每次 push 刷新。
+      # 键由 e2e-plan 前缀匹配取最近一份（PR 继承 base 分支 dev 的缓存，dev 每次 push 刷新），
+      # 这里只按那个确切的键恢复。没有任何缓存时键为空、整步跳过，所有分片一致地等权重分配。
       - name: Restore E2E duration cache
+        if: needs.e2e-plan.outputs.durations-key != ''
         uses: actions/cache/restore@v6
         with:
           path: tests/infra/.e2e-durations.json
-          key: e2e-durations-${{ github.run_id }}
-          # ★ 值必须留在下一行（actions/cache 官方支持的多行列表形式）。把前缀写回与键名同一行
-          # 会被 gitleaks 的 generic-api-key 规则命中：键名含 keys、值的熵 3.52 刚过阈值，
-          # 于是一个 cache 前缀被当成泄漏的密钥，pre-commit 当场拦下 commit。
-          restore-keys: |
-            e2e-durations-
+          key: ${{ needs.e2e-plan.outputs.durations-key }}
 
-      # 浏览器二进制单独缓存（~170MB）。key 跟 package-lock 走：Playwright 一升版就自然换 key，
-      # 不会拿旧浏览器配新 driver。`install-deps` 装的是系统 apt 依赖、不属于这个缓存，仍要跑，
-      # 但它比下载浏览器快得多。实测这一步从 25s（改造前 `--with-deps` 连下带装）降到 12-17s。
+      # 下面两份缓存的键都跟 Playwright 版本走，不跟整个 package-lock：Playwright 一升版就自然换键，
+      # 不会拿旧浏览器配新 driver；别的依赖升级则不该让它们失效——字体那份每失效一次，就要重走一遍
+      # 下面说的慢 apt。镜像大版本（ImageOS，如 ubuntu26）进字体的键：换大版本后镜像缺哪些字体会变。
+      - name: Resolve cache keys
+        id: keys
+        run: |
+          echo "playwright=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS}" >> "$GITHUB_OUTPUT"
+
+      # 只装 headless shell：playwright.config.ts 是 headless 且不指定 channel，这时 Playwright 启动的
+      # 就是 chromium-headless-shell，完整版 Chromium 从来用不上，却占了缓存的大半（两样都装时
+      # ~280MB，恢复约 10s）。键前缀改成 playwright-shell-：沿用旧前缀会命中旧的两件套缓存，
+      # 而命中之后不再保存，缓存永远瘦不下来。
       - name: Cache Playwright browsers
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          key: playwright-shell-${{ runner.os }}-${{ steps.keys.outputs.playwright }}
 
-      - name: Install Playwright Chromium
+      # 【为什么缓存字体】runner 镜像里 Chromium 要的库本来就有，`install-deps` 只是升级它们，
+      # 真正新装的 9 个包全是字体（wqy-zenhei、ipafont、freefont、unifont、xfonts-* 等，约 25MB）。
+      # 可它们要从 azure.archive.ubuntu.com 现下，那个源时常掉到 ~70 kB/s：2026-10-23 至 25 的 49 次
+      # 成功 run 里有 35 次是某一片卡在这一步 4-11 分钟（测试本体一直是 130-155s），整轮墙钟从
+      # ~200s 拖到 400-870s。分片越多越容易有一片撞上，所以加片之前先把它移出热路径。
+      #
+      # 字体是纯数据文件：命中时直接解包、刷新 fontconfig，不碰 apt；未命中才走 install-deps，并把
+      # 它新增的字体文件（装前装后两次快照之差）打包存下来。命中时也就跳过了 install-deps 顺带做的
+      # 库升级（libnss3 等），用的是镜像自带的版本——镜像里的 Chrome 用的也是那份。
+      # 不直接删掉 install-deps、改用镜像自带字体：那样中文全渲染成方块，失败截图和 trace 就没法看了。
+      - name: Cache Playwright fonts
+        id: fonts
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccm-pw-fonts
+          key: playwright-fonts-${{ steps.keys.outputs.image }}-${{ steps.keys.outputs.playwright }}
+
+      # 末尾的 fc-match 只打一行日志：命中与未命中两条路径装出来的中文字体应当一致，对照日志即可。
+      - name: Install Playwright headless shell
         run: |
-          npx playwright install-deps chromium
-          npx playwright install chromium
+          if [ "${{ steps.fonts.outputs.cache-hit }}" = 'true' ]; then
+            sudo tar -xzf ~/.cache/ccm-pw-fonts/fonts.tgz -C /
+            sudo fc-cache
+          else
+            find /usr/share/fonts /etc/fonts \( -type f -o -type l \) | sort > "$RUNNER_TEMP/fonts-before"
+            npx playwright install-deps chromium
+            find /usr/share/fonts /etc/fonts \( -type f -o -type l \) | sort > "$RUNNER_TEMP/fonts-after"
+            mkdir -p ~/.cache/ccm-pw-fonts
+            comm -13 "$RUNNER_TEMP/fonts-before" "$RUNNER_TEMP/fonts-after" \
+              | tar -czf ~/.cache/ccm-pw-fonts/fonts.tgz -T -
+          fi
+          npx playwright install --only-shell chromium
+          fc-match 'sans-serif:lang=zh-cn'
 
       # 分片并行（tests/infra/e2e-parallel.js）：N 个独立进程各起自己的 mock server 跑一组 spec。
       # playwright.config.ts 的 workers:1 不能动（mock server 用模块级全局变量当状态存储，多 worker
@@ -212,12 +274,13 @@ jobs:
       # 同理「别用串行时长 ÷ 分片数估耗时」（实测偏乐观 57%）——那个偏差的成因是 CPU 供给不足，
       # 独占 runner 后成因消失。但**它仍然只是推算，以真 run 为准**。
       #
-      # 【地板 85s】同一个 spec 文件不跨分片，workspace-sessions-sidebar 单文件就要 85s，任何分片数
-      # 都突破不了。再要快只能拆那个文件——那是重组测试内容，不是调这里的参数。
-      - name: Run Playwright E2E (shard ${{ matrix.shard }}/8)
+      # 【地板】同一个 spec 文件不跨分片，最大那个文件自己的耗时任何分片数都突破不了。2026-10-25 拆分
+      # 之后是 permission-allow-deny，CI 上约 54s，低于 14 片的理想值。等理想值跌到它附近再拆它——
+      # 那是重组测试内容，不是调这里的参数。
+      - name: Run Playwright E2E (shard ${{ matrix.shard }}/14)
         run: npm run test:e2e:parallel
         env:
-          CCM_E2E_SHARDS: '8'   # ★ 必须等于上面 matrix.shard 列表的长度，理由见那里
+          CCM_E2E_SHARDS: '14'   # ★ 必须等于上面 matrix.shard 列表的长度，理由见那里
           CCM_E2E_SHARD_INDEX: ${{ matrix.shard }}
 
       # 本片实测到的每个 spec 的时长。汇总 job 拿它做两件事：并集校验（TEST-02，少一个就红）
@@ -227,7 +290,7 @@ jobs:
       # ★ if-no-files-found: error（不是默认的 warn）。这里捞空【永远不正常】：分片只要跑到
       # 最后就一定写出片段。默认的 warn 会让上传出一个空 artifact 而 job 照样绿，错误一路
       # 推迟到汇总 job 炸在 readdir 上——报错指向 fs，不指向真正的原因。
-      # 注意这跟下面 test-results 那个不同：那边捞空是正常的（全绿时没有失败产物），所以留 warn。
+      # 注意这跟下面 test-results 那个不同：那边捞空是正常的（全绿时没有失败产物），所以用 ignore。
       - name: Upload shard durations
         if: always()
         uses: actions/upload-artifact@v7
@@ -248,10 +311,11 @@ jobs:
       # ——job 结论是 success，failure() 根本抓不到，trace 当场丢掉，flaky 就又变回查不动的了，
       # 那等于只拿了 retries 的「不阻塞」，丢掉了它的「可诊断」。
       #
-      # 全绿那一轮这一步会打一条 `No files were found ... test-results*/` 的 warning
-      # （实测 run 34713413770）：Playwright 没有失败产物时压根不建 outputDir。这是预期噪音，
-      # 不是配错了。仍保留默认的 if-no-files-found: warn 而不改成 ignore——**路径写错导致的
-      # 捞空必须留得下痕迹**，那正是这次改 path 之前的形态，静音掉就再也发现不了。
+      # ★ if-no-files-found: ignore（2026-10-25 起；此前是默认的 warn）。全绿时 Playwright 压根不建
+      # outputDir，这一步捞空是常态（实测 run 34713413770）。warn 会让每片每轮各出一条
+      # 「No files were found ... test-results*/」——14 片就是 14 条，汇总 job 的地板提醒
+      # （e2e-parallel.js 的 reportFloor）会淹在里面，大家也会被训练成对 warning 视而不见。
+      # 当初留 warn 是怕路径写错了没痕迹；但这种失效自己会暴露：有用例失败、人去下载截图时就是空的。
       #
       # ★ 名字带 shard 号：upload-artifact v4 起同名 artifact 直接报错（不再像 v3 那样合并），
       # matrix 下六个 job 同时上传同一个名字会让整个 job 红，且红在与测试无关的地方。
@@ -261,6 +325,7 @@ jobs:
         with:
           name: playwright-e2e-artifacts-shard-${{ matrix.shard }}
           path: test-results*/
+          if-no-files-found: ignore
           retention-days: 7
 
   # ★ 这个 job 必须叫 `e2e`：它是分支保护里那个 required context（dev 与 master 都要求
@@ -286,12 +351,14 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: e2e-durations-shard-*
           path: e2e-durations
           merge-multiple: true
 
+      # 同一步顺带写 run 摘要页（总时长、平均每片、最大的几个 spec），并在最大的单个文件超过
+      # 平均每片时出一条点名它的 ::warning——只提醒、不红，理由见 e2e-parallel.js 的 reportFloor。
       - name: 并集校验 + 合并时长
         run: node tests/infra/e2e-parallel.js --merge-durations e2e-durations
 

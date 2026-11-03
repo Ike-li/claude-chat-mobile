@@ -121,17 +121,12 @@ test.describe('Rewind 拒绝档（真 server，零 token）', () => {
     // 实例，夹具会话的实例根本没忙，G1 自然不触发（第一版就是这么写的，轮询 40 次全落空）。
     const sw = await emit('session:switch', { cwd: workDir, sessionId: SESSION_ID });
     assert.equal(sw.ok, true, `切到夹具会话失败：${sw.error}`);
-    socket.emit('user:message', { text: '让实例进入在途轮' });
-    // 等实例真的忙起来：轮询 preview 直到它改口说"正在执行中"，避免固定 sleep（那是缺陷窗口的负片）。
-    // 【探针必须用 u-1】它是会话第一轮，未 busy 时 planRewind 立刻返回 first-turn——快、且不碰
-    // rewindFiles。换成 u-2 的话，未 busy 那几次会一路走到 rewindFiles，而 fake-claude 永不响应，
-    // 探针自己先挂满 20s 超时（第一版就是这么写的，两条用例一起超时）。
-    let res = null;
-    for (let i = 0; i < 40; i++) {
-      res = await emit('session:rewind:preview', { cwd: workDir, sessionId: SESSION_ID, promptUuid: 'u-1' });
-      if (res.ok === false && /正在执行中/.test(res.error || '')) break;
-      await new Promise(r => setTimeout(r, 250));
-    }
+    // 成功 ack 在 send() 入队、pendingTurns 增加后返回；位置核对等异步步骤完成前不发回退探针。
+    // 首轮现在允许只恢复代码，不能再拿 preview 当 busy 轮询：它若先于发送到达，便会进入
+    // fake-claude 不应答的 rewindFiles 控制请求，等满 20s（#473 CI 在 Node 20/24 均复现）。
+    const sent = await emit('user:message', { text: '让实例进入在途轮' });
+    assert.equal(sent.ok, true, `消息未成功入队：${sent.error}`);
+    const res = await emit('session:rewind:preview', { cwd: workDir, sessionId: SESSION_ID, promptUuid: 'u-1' });
     assert.equal(res.ok, false, '实例在跑回合时回退必发写锁抢占——模型随时可能正在写同一批文件');
     assert.match(res.error, /正在执行中/, `实际拒绝理由：${res.error}`);
 

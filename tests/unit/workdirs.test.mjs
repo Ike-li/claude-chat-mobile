@@ -8,9 +8,10 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
-  normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
+  normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs,
   findProjectDirCollisions, resolveWorkdirsFilePath, pickWorkdirSource, resolveWorkdirSource,
-  foldPrimaryWorkdir, pickPrimaryWorkdir, resolveEnvPrimaryWorkdir,
+  foldPrimaryWorkdir, pickPrimaryWorkdir, resolveEnvPrimaryWorkdir, planRemoveMissingWorkdirEntries,
+  BROWSE_HARD_LIMIT, SEARCH_RESULT_LIMIT, sessionListWindow, fitSessionPage, showMoreCount,
 } from '../../app/src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -141,36 +142,28 @@ test.describe('resolveWorkdirs', () => {
     const { dirs } = resolveWorkdirs([{ path: real, sessionLimit: 6 }, { path: join(real, '.'), sessionLimit: 9 }]);
     assert.equal(dirs.length, 1);
   });
+
+  // 服务告警按它报「有几个已连接的文件夹找不到」：清单为空也能启动之后，全部失效不再以拒绝启动示警。
+  test('找不到的与不是目录的条目按原样路径进 missing；重复项不算找不到', () => {
+    const real = join(base, 'proj3');
+    mkdirSync(real);
+    const ghost = join(base, 'ghost3');
+    const file = join(base, 'afile3');
+    writeFileSync(file, 'x');
+    const { dirs, missing } = resolveWorkdirs([
+      { path: real, sessionLimit: 6 }, { path: ghost, sessionLimit: 6 },
+      { path: file, sessionLimit: 6 }, { path: join(real, '.'), sessionLimit: 6 },
+    ]);
+    assert.deepEqual(dirs, [realpathSync(real)]);
+    assert.deepEqual(missing, [ghost, file]);
+  });
 });
 
-// ── ensureWhitelisted（纯函数）───────────────────────────────────────────
-// 背景：routeCwd 类回退逻辑可能落到「仍有 live 实例挂着、因此未被 reloadWorkdirs 归位」的已移除目录
-// （该目录不在当前 workDirs 里）。新开会话前必须再夯一次白名单，否则「热移除目录仅拒新开」的不变量
-// 会被绕过——同 session:new(#8) 的归位逻辑，抽成共享纯函数防各 handler 各自为政再漂移。
-test.describe('ensureWhitelisted', () => {
-  test('cwd 在白名单内 → 原样放行', () => {
-    assert.equal(ensureWhitelisted('/a', ['/a', '/b']), '/a');
-  });
-
-  test('cwd 不在白名单内（已被热移除）→ 归位到白名单首位', () => {
-    assert.equal(ensureWhitelisted('/removed', ['/a', '/b']), '/a');
-  });
-});
-
-// ── isWhitelisted（纯函数：越界检测，不做归位；供 routeCwd 记审计信号 FR-23）────
-test.describe('isWhitelisted', () => {
-  test('白名单内 → true', () => {
-    assert.equal(isWhitelisted('/a', ['/a', '/b']), true);
-  });
-  test('显式越界（不在白名单）→ false', () => {
-    assert.equal(isWhitelisted('/evil', ['/a', '/b']), false);
-  });
-  test('空串 / 非字符串 → false（无 cwd 回退场景，非越界尝试）', () => {
-    assert.equal(isWhitelisted('', ['/a']), false);
-    assert.equal(isWhitelisted(undefined, ['/a']), false);
-    assert.equal(isWhitelisted(null, ['/a']), false);
-  });
-});
+// ── cwd 授权判据已迁出（2026-09-24「已连接的文件夹」）──────────────────────
+// ensureWhitelisted / isWhitelisted 连同「只认白名单本身、worktree 须显式列入」的语义一起退役：
+// cwd 授权统一由 sessions/folder-access.js 的 resolveAuthorizedCwd 判（子目录可达、worktree 随仓库），
+// 用例在 tests/invariants/folder-access.test.mjs 与 worktree-ownership.test.mjs。「在册放行 / 越界拒」
+// 由那两份覆盖；「热移除目录上的新开归位到首项」是 server 接线（app.js 的 ensureAuthorized），由 S2 覆盖。
 
 test.describe('findProjectDirCollisions（SS-004）', () => {
   test('无碰撞 → []', () => {
@@ -182,25 +175,6 @@ test.describe('findProjectDirCollisions（SS-004）', () => {
     assert.equal(c.length, 1);
     assert.equal(c[0].encoded, '-tmp-foo');
     assert.deepEqual(c[0].paths.sort(), ['/tmp-foo', '/tmp/foo'].sort());
-  });
-});
-
-// 工作区 cwd 合法性：只认 workdirs 白名单本身。git linked worktree 若要用，须显式写入 workdirs.json
-// 成为独立条目——不再有「父仓下自动挂载 worktree 路径」的隐式放行。
-test.describe('isWhitelisted / ensureWhitelisted（显式 workdir 白名单，无 worktree 隐式放行）', () => {
-  const dirs = ['/repo/a', '/repo/b', '/repo/a-wt-promo'];
-  test('白名单目录本身 → true', () => {
-    assert.equal(isWhitelisted('/repo/a', dirs), true);
-    assert.equal(isWhitelisted('/repo/a-wt-promo', dirs), true);
-  });
-  test('形似 worktree 但未列入白名单 → false（须手动加进 workdirs.json）', () => {
-    assert.equal(isWhitelisted('/repo/a/.worktrees/promo', dirs), false);
-    assert.equal(isWhitelisted('/repo/a/.claude/worktrees/feat', dirs), false);
-  });
-  test('ensureWhitelisted：在册路径原样保留；越界夯到 dirs[0]', () => {
-    assert.equal(ensureWhitelisted('/repo/a-wt-promo', dirs), '/repo/a-wt-promo');
-    assert.equal(ensureWhitelisted('/elsewhere', dirs), '/repo/a');
-    assert.equal(ensureWhitelisted('/repo/a/.worktrees/promo', dirs), '/repo/a');
   });
 });
 
@@ -289,6 +263,15 @@ test.describe('resolveWorkdirSource：doctor 与 server 同一选择', () => {
     const r = resolveWorkdirSource({ envList: [], envFile: '', inline: ['/from/config'] });
     assert.equal(r.from, 'WORKDIRS');
     assert.deepEqual(r.result.entries.map(e => e.path), ['/from/config']);
+  });
+
+  // 什么都没配（没有 env、配置里也没有 WORKDIRS 键）：新装时跳过了文件夹就是这样（2026-10-15 起可以跳过）。
+  // 来源记作 WORKDIRS——要加就加在那里，手机上的「添加文件夹」据此放行写入，doctor 的标签也指向它。
+  // 记成 WORK_DIRS 的后果：第一次添加就被当成「来自环境变量」拒掉，而那个环境变量谁都没设。
+  test('什么都没配 → 空清单，来源记作 WORKDIRS（不是一个谁都没设的环境变量）', () => {
+    const r = resolveWorkdirSource({ envList: [], envFile: '', inline: null });
+    assert.equal(r.from, 'WORKDIRS');
+    assert.deepEqual(r.result.entries, []);
   });
 
   test('getting-started / schema 不得再说内联 WORKDIRS 压过 WORK_DIRS env', () => {
@@ -439,5 +422,115 @@ test.describe('resolveEnvPrimaryWorkdir：投影之后仍分得清 WORK_DIR 是�
       shellEnv: { WORK_DIR: '   ', WORK_DIRS: '/only/this' },
       projectedPrimary: '/legacy/repo',
     }), '');
+  });
+});
+
+// 照抄桌面端 Code 侧栏的 Show more：初始条数 = 该连接根配的条数，每点一次「显示更多」再放宽同样条数，硬顶 BROWSE_HARD_LIMIT。
+test('sessionListWindow：初始用配置条数，每点一次加一档同样条数；搜索不分档；到硬顶不能再点', () => {
+  assert.deepEqual(sessionListWindow({ query: 'foo', more: 3 }), { limit: SEARCH_RESULT_LIMIT, nextLimit: null }, '搜索态不分档');
+  assert.deepEqual(sessionListWindow({ configuredLimit: 8 }), { limit: 8, nextLimit: 16 }, '没点过：配置条数，下一档再加 8');
+  assert.deepEqual(sessionListWindow({ configuredLimit: 6, more: 2 }), { limit: 18, nextLimit: 24 }, '点过两次：6 × 3');
+  assert.deepEqual(sessionListWindow({ configuredLimit: 6, more: 83 }), { limit: BROWSE_HARD_LIMIT, nextLimit: null }, '到硬顶：再往后用搜索');
+  assert.deepEqual(sessionListWindow({ configuredLimit: 6, more: 82 }), { limit: 498, nextLimit: BROWSE_HARD_LIMIT }, '最后一档不越过硬顶');
+  assert.deepEqual(sessionListWindow({ configuredLimit: 6, more: 1e9 }), { limit: BROWSE_HARD_LIMIT, nextLimit: null }, '次数再大也不越过硬顶');
+  for (const bad of [-1, 1.5, '2', null, NaN]) {
+    assert.deepEqual(sessionListWindow({ configuredLimit: 6, more: bad }), { limit: 6, nextLimit: 12 }, `脏次数 ${String(bad)} 当没点过`);
+  }
+});
+
+// 调用方按 limit + 1 扫，fitSessionPage 收尾。rows(n) = 按时间排好的 n 行。
+const rows = n => Array.from({ length: n }, (_, i) => ({ id: `s${i}` }));
+
+test('fitSessionPage：不藏单条——只比窗口多 1 条时整页全给，没有更早的', () => {
+  const page = fitSessionPage({ sessions: rows(7), hasMore: false }, 6);
+  assert.equal(page.sessions.length, 7, '藏 1 条再给一个「显示更多 1 个」不如让它直接出现（桌面端 len > t+n+1 才截断）');
+  assert.equal(page.hasMore, false);
+});
+
+test('fitSessionPage：多出的不止 1 条就照常截到窗口', () => {
+  const page = fitSessionPage({ sessions: rows(7), hasMore: true }, 6);
+  assert.deepEqual(page.sessions.map(s => s.id), ['s0', 's1', 's2', 's3', 's4', 's5'], '多扫的那 1 条不能漏进本页');
+  assert.equal(page.hasMore, true);
+});
+
+test('fitSessionPage：不满一页照原样，hasMore 照实（删除在途被剔掉几条时仍可能还有更早的）', () => {
+  assert.deepEqual(fitSessionPage({ sessions: rows(4), hasMore: false }, 6), { sessions: rows(4), hasMore: false });
+  assert.deepEqual(fitSessionPage({ sessions: rows(5), hasMore: true }, 6), { sessions: rows(5), hasMore: true });
+});
+
+test('showMoreCount：还远没到底时是一档的条数', () => {
+  assert.equal(showMoreCount({ hasMore: true, total: 40, shown: 6, nextLimit: 12 }), 6);
+});
+
+test('showMoreCount：下一档会把剩下的全给时报确切剩余数，不把「稍后再看」组算成新行', () => {
+  // 13 个：下一档 12 只差 1 条，按不藏单条会全给 → 再点一次多出 7 条，其中 2 条已作为「稍后再看」画在页尾
+  assert.equal(showMoreCount({ hasMore: true, total: 13, shown: 6, nextLimit: 12, pinnedCount: 2 }), 5);
+});
+
+test('showMoreCount：到硬顶（nextLimit=null）、没有更早的、剩下的全是「稍后再看」行，都是 0', () => {
+  assert.equal(showMoreCount({ hasMore: true, total: 900, shown: 500, nextLimit: null }), 0, '到硬顶只能搜');
+  assert.equal(showMoreCount({ hasMore: false, total: 4, shown: 4, nextLimit: 12 }), 0);
+  assert.equal(showMoreCount({ hasMore: true, total: 8, shown: 6, nextLimit: 12, pinnedCount: 2 }), 0);
+});
+
+test('showMoreCount：total 缺失时按一档报，不报 0（报 0 就再也点不出更早的）', () => {
+  assert.equal(showMoreCount({ hasMore: true, total: null, shown: 6, nextLimit: 12 }), 6);
+});
+
+// #355：告警「从列表移除缺失项」——按原始配置条目删，保留 sessionLimit；WORK_DIR 不给自动移除。
+test.describe('planRemoveMissingWorkdirEntries', () => {
+  test('原文带空白的条目按 trim 后的路径对上（confirmedMissing 来自已 trim 的 normalizeWorkdirEntries）', () => {
+    const list = [' /gone ', { path: '/other-gone\t', sessionLimit: 3 }, '/ok'];
+    const r = planRemoveMissingWorkdirEntries(list, { confirmedMissing: ['/gone', '/other-gone'] });
+    assert.deepEqual(r.removed, ['/gone', '/other-gone'], '带空白的条目永远删不掉，只会回 nothing_removable');
+    assert.deepEqual(r.next, ['/ok']);
+  });
+
+  test('只删「请求 ∩ 仍缺失」的原始条目，其余连同 sessionLimit 原样保留', () => {
+    const list = ['/ok', { path: '/gone', sessionLimit: 12 }, { path: '/other-gone', sessionLimit: 3 }, '/still-here'];
+    const r = planRemoveMissingWorkdirEntries(list, {
+      confirmedMissing: ['/gone', '/other-gone'],
+      requested: ['/gone'],
+    });
+    assert.deepEqual(r.removed, ['/gone']);
+    assert.deepEqual(r.skippedLegacy, []);
+    assert.deepEqual(r.next, ['/ok', { path: '/other-gone', sessionLimit: 3 }, '/still-here']);
+  });
+
+  test('没带 requested 时按全部仍缺失的来（一键移除）', () => {
+    const r = planRemoveMissingWorkdirEntries(['/a', '/b', '/c'], {
+      confirmedMissing: ['/a', '/c'],
+    });
+    assert.deepEqual(r.removed, ['/a', '/c']);
+    assert.deepEqual(r.next, ['/b']);
+  });
+
+  test('目录已恢复（不在 confirmedMissing）的候选不删——旧告警不能误删刚挂回来的', () => {
+    const r = planRemoveMissingWorkdirEntries(['/back', '/gone'], {
+      confirmedMissing: ['/gone'],
+      requested: ['/back', '/gone'],
+    });
+    assert.deepEqual(r.removed, ['/gone']);
+    assert.deepEqual(r.next, ['/back']);
+  });
+
+  test('legacy WORK_DIR 路径不给自动移除，记进 skippedLegacy', () => {
+    const r = planRemoveMissingWorkdirEntries(
+      [{ path: '/legacy', sessionLimit: 9 }, '/gone'],
+      { confirmedMissing: ['/legacy', '/gone'], legacyPrimary: '/legacy' },
+    );
+    assert.deepEqual(r.removed, ['/gone']);
+    assert.deepEqual(r.skippedLegacy, ['/legacy']);
+    assert.deepEqual(r.next, [{ path: '/legacy', sessionLimit: 9 }]);
+  });
+
+  test('只剩 WORK_DIR 缺失时 removed 为空，留给调用方回 legacy_workdir', () => {
+    const r = planRemoveMissingWorkdirEntries(['/legacy'], {
+      confirmedMissing: ['/legacy'],
+      legacyPrimary: '/legacy',
+    });
+    assert.deepEqual(r.removed, []);
+    assert.deepEqual(r.skippedLegacy, ['/legacy']);
+    assert.deepEqual(r.next, ['/legacy']);
   });
 });

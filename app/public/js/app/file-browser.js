@@ -27,6 +27,15 @@ const CM_MIME_BY_EXT = {
   yml: 'text/x-yaml', yaml: 'text/x-yaml',
 };
 
+// 无高亮 mode 的文件挂 CM 的行数上限（见 renderContent）；有 mode 的文件不受此限，沿用既有行为。
+const PLAIN_CM_MAX_LINES = 2000;
+
+// public/vendor/codemirror/ 下按需加载的脚本（见 loadCodeMirror），核心排第一。
+const CM_SCRIPTS = [
+  'codemirror.min.js', 'mode-javascript.min.js', 'mode-xml.min.js', 'mode-css.min.js', 'mode-htmlmixed.min.js',
+  'mode-jsx.min.js', 'mode-markdown.min.js', 'mode-python.min.js', 'mode-shell.min.js', 'mode-yaml.min.js',
+];
+
 export function cmModeForFileName(name) {
   const dot = String(name || '').lastIndexOf('.');
   if (dot < 0) return null;
@@ -54,12 +63,37 @@ export function createFileBrowser(context, {
   let listTotal = 0;
   let contentText = '';
   let contentOffset = 0;
+  let contentReadGen = 0; // 每发一次 browse:read 加一，见 fetchContentPage
   let usedPagination = false; // 一旦分页续读过，本文件全程走 pre 纯文本，不中途切 CM（避免重建/滚动跳动）
   let cmInstance = null;   // 当前 content 视图里活的 CM 实例（只读预览态也是它，编辑态只是切它的 readOnly）
   let editMode = 'view';   // 'view' | 'editing'；离开 content 模式（back/loadContent 新文件）即复位
   let baseHash = null;     // files:write 的冲突基线——来自最近一次 browse:read 或 files:write 成功后的 contentHash
+  let editOnDemand = false; // 行多的纯文本：查看留在 <pre>，点「编辑」才挂 CM（验收 O103，见 renderContent）
+  let codeMirrorLoad = null; // CM 脚本的按需加载，见 loadCodeMirror
+  let codeMirrorReady = false; // 整包（核心＋全部 mode）都执行完才算；核心先执行，全局在不等于 mode 到齐
 
   function relativePath() { return segments.join('/') || '.'; }
+
+  // CM5（核心＋9 个语言 mode，约 250KB）只有文件浏览器用，不进启动链：第一次打开文件时才插 <script>，与 browse:read
+  // 并行拉。async = false 让动态插入的脚本按插入顺序执行，mode 才挂得到核心上。vendor 按 immutable 缓存一年，
+  // URL 得带版本戳才换得到新文件：服务端给全部相对 import 戳了 ?v=，本模块自己的 URL 上就有。
+  // 整包到齐后返回 null，调用方照旧同步渲染。拉不到也照常 resolve：renderContent 本来就会在 CM 不在时回退 <pre>；
+  // 单例随之清空，下次打开文件整包重拉（缓存命中的几个很快），别让一次网络抖动记一整个会话。
+  function loadCodeMirror() {
+    if (codeMirrorReady) return null;
+    if (!codeMirrorLoad) {
+      const version = new URL(import.meta.url).searchParams.get('v');
+      codeMirrorLoad = Promise.all(CM_SCRIPTS.map(name => new Promise((resolve, reject) => {
+        const script = documentRef.createElement('script');
+        script.async = false;
+        script.onload = resolve;
+        script.onerror = reject;
+        script.src = `/vendor/codemirror/${name}${version ? `?v=${version}` : ''}`;
+        documentRef.head.appendChild(script);
+      }))).then(() => { codeMirrorReady = true; }, () => { codeMirrorLoad = null; });
+    }
+    return codeMirrorLoad;
+  }
 
   function renderHeader() {
     const rootList = mode === 'list' && segments.length === 0;
@@ -75,7 +109,9 @@ export function createFileBrowser(context, {
   }
 
   function fetchListPage(requestedPath, offset) {
+    const requestedCwd = cwd;
     context.socket.emit('browse:list', { cwd, relPath: requestedPath, offset }, response => {
+      if (cwd !== requestedCwd) return;
       if (mode !== 'list' || relativePath() !== requestedPath) return;
       if (!response?.ok) {
         showMessage(`${t('无法加载：')}${response?.error || t('未知错误')}`, 'text-danger');
@@ -148,7 +184,9 @@ export function createFileBrowser(context, {
       return;
     }
     const requestedPath = segments.concat(entry.name).join('/');
+    const requestedCwd = cwd;
     context.socket.emit('browse:list', { cwd, relPath: requestedPath }, response => {
+      if (cwd !== requestedCwd) return;
       if (mode !== 'list' || relativePath() !== segments.join('/')) return;
       if (response?.ok) {
         segments.push(entry.name);
@@ -164,10 +202,15 @@ export function createFileBrowser(context, {
     });
   }
 
-  function fetchContentPage(requestedPath, offset) {
+  // 只认最近一次读请求的回执。只比路径不够：打开、返回、再打开同一个文件（或换了 cwd 后同名的相对路径），
+  // 两次回执都过得了路径检查，正文被接两遍，而 baseHash 仍是合法的，保存会把两遍的正文写回磁盘。
+  // codeMirrorReady：loadCodeMirror() 的返回值，正文到了先等它再渲染，CM 才挂得上；等完要再认一遍，等的这段里用户可能已换了文件。
+  function fetchContentPage(requestedPath, offset, codeMirrorReady = null) {
+    const gen = ++contentReadGen;
+    const stale = () => gen !== contentReadGen || mode !== 'content'
+      || segments.concat(fileName || '').join('/') !== requestedPath;
     context.socket.emit('browse:read', { cwd, relPath: requestedPath, offset }, response => {
-      const currentPath = segments.concat(fileName || '').join('/');
-      if (mode !== 'content' || currentPath !== requestedPath) return;
+      if (stale()) return;
       if (!response?.ok) {
         showMessage(`${t('无法加载：')}${response?.error || t('未知错误')}`, 'text-danger');
         return;
@@ -176,9 +219,14 @@ export function createFileBrowser(context, {
         showMessage(`${t('二进制文件（')}${formatFileSize(response.totalSize)}${t('），不支持预览')}`);
         return;
       }
-      contentText += response.content;
-      contentOffset = offset + (response.bytesRead ?? response.content.length);
-      renderContent(response.truncated, response.totalSize, response.contentHash);
+      const render = () => {
+        if (stale()) return;
+        contentText += response.content;
+        contentOffset = offset + (response.bytesRead ?? response.content.length);
+        renderContent(response.truncated, response.totalSize, response.contentHash);
+      };
+      if (codeMirrorReady) codeMirrorReady.then(render);
+      else render();
     });
   }
 
@@ -193,7 +241,7 @@ export function createFileBrowser(context, {
     hideSaveError();
     renderHeader();
     showMessage(t('加载中…'));
-    fetchContentPage(segments.concat(name).join('/'), 0);
+    fetchContentPage(segments.concat(name).join('/'), 0, loadCodeMirror());
   }
 
   function hideSaveError() {
@@ -206,16 +254,20 @@ export function createFileBrowser(context, {
     dom.fileBrowseSaveError.classList.remove('hidden');
   }
 
-  // 三态互斥：可编辑且未在编辑 → 编辑；正在编辑 → 保存+取消。不可编辑（无 baseHash：截断/二进制/纯文本
-  // 回退路径）→ 三个都不显，file-browse.js 只读铁律的既有语义在这些场景下原样保留。
+  // 三态互斥：可编辑且未在编辑 → 编辑；正在编辑 → 保存+取消。不可编辑（无 baseHash：截断/二进制，或分页续读过）
+  // → 三个都不显，file-browse.js 只读铁律的既有语义在这些场景下原样保留。
   function syncEditButtons() {
-    const editable = Boolean(baseHash) && Boolean(cmInstance);
+    const editable = Boolean(baseHash) && (Boolean(cmInstance) || editOnDemand);
     dom.fileBrowseEdit?.classList.toggle('hidden', !(editable && editMode === 'view'));
     dom.fileBrowseSave?.classList.toggle('hidden', editMode !== 'editing');
     dom.fileBrowseCancelEdit?.classList.toggle('hidden', editMode !== 'editing');
   }
 
   function enterEditMode() {
+    if (!cmInstance && editOnDemand && baseHash) {
+      dom.fileBrowseBody.innerHTML = '';
+      mountCodeMirror('text/plain');
+    }
     if (!cmInstance || editMode !== 'view') return;
     haptic('tap');
     hideSaveError();
@@ -258,31 +310,42 @@ export function createFileBrowser(context, {
     });
   }
 
+  function mountCodeMirror(mime) {
+    const holder = documentRef.createElement('div');
+    holder.className = 'cm-ccm-viewer';
+    dom.fileBrowseBody.appendChild(holder);
+    cmInstance = CodeMirror(holder, {
+      value: contentText,
+      mode: mime,
+      readOnly: 'nocursor',
+      lineNumbers: true,
+      lineWrapping: true,
+      viewportMargin: Infinity,
+    });
+  }
+
   function renderContent(truncated, totalSize, contentHash) {
     if (!dom.fileBrowseBody) return;
     dom.fileBrowseBody.innerHTML = '';
     cmInstance = null;
     editMode = 'view';
+    editOnDemand = false;
     baseHash = contentHash || null;
     // CM 只接管「一次性读全」的小文件：分页续读过的文件（>256KB 或用户点过加载更多）全程留在 pre，
-    // 避免重建编辑器丢滚动位置；未 vendor 对应语言 / CM 脚本未加载时静默回退，不是错误态。
-    // 只读预览 vs 可编辑不区分 mode 判定——两者都要挂 CM 实例，baseHash 有无才是「能不能点编辑」的唯一判据。
-    const mime = !usedPagination && !truncated ? cmModeForFileName(fileName) : null;
+    // 避免重建编辑器丢滚动位置；CM 脚本未加载时静默回退，不是错误态。没有对应高亮 mode 的扩展名（.txt、
+    // Makefile、.env 等）照样挂 CM、用纯文本 mode——行号与编辑不该取决于有没有语法高亮。但超过
+    // PLAIN_CM_MAX_LINES 行的仍回 pre：viewportMargin: Infinity 会逐行建 DOM，换行密集的日志能拖死手机。
+    // 但能不能编辑只看 baseHash：这类文件「编辑」照给，点了才挂 CM——那时的逐行建 DOM 是用户要编辑才付的，
+    // 而只是看一眼的不付（验收 O103：几 KB 的 .txt 因行多不能编辑，256KB 的 .js 却能）。
+    const highlighted = cmModeForFileName(fileName);
+    const plainOk = !highlighted && contentText.split('\n').length <= PLAIN_CM_MAX_LINES;
+    const mime = !usedPagination && !truncated ? (highlighted || (plainOk ? 'text/plain' : null)) : null;
     if (mime && typeof CodeMirror !== 'undefined') {
-      const holder = documentRef.createElement('div');
-      holder.className = 'cm-ccm-viewer';
-      dom.fileBrowseBody.appendChild(holder);
-      cmInstance = CodeMirror(holder, {
-        value: contentText,
-        mode: mime,
-        readOnly: 'nocursor',
-        lineNumbers: true,
-        lineWrapping: true,
-        viewportMargin: Infinity,
-      });
+      mountCodeMirror(mime);
       syncEditButtons();
       return;
     }
+    editOnDemand = !highlighted && !plainOk && !usedPagination && !truncated && typeof CodeMirror !== 'undefined';
     syncEditButtons();
     const pre = documentRef.createElement('pre');
     pre.className = 'p-4 text-[11px] leading-relaxed font-mono text-ink whitespace-pre-wrap break-words';
@@ -305,6 +368,7 @@ export function createFileBrowser(context, {
   function resetEditState() {
     cmInstance = null;
     editMode = 'view';
+    editOnDemand = false;
     baseHash = null;
     hideSaveError();
     syncEditButtons();
@@ -334,6 +398,7 @@ export function createFileBrowser(context, {
   // 进入文件 tab 并从根目录重新载入。**不负责开合 sheet**——外壳（#workspaceModal）的开关与 tab
   // 切换归 createWorkspacePanel 统一持有，本控制器只管自己那半边的数据与渲染。
   function open(nextCwd) {
+    contentReadGen++;
     cwd = nextCwd;
     segments = [];
     mode = 'list';

@@ -13,10 +13,12 @@ import { bgTaskUsageText, isSyntheticTaskId } from './bg-tasks.js';
 // 工具卡片摘要可读化：agent 侧 stringify 是紧凑单行，手机展开难读。
 // 能 parse 的 JSON（对象/数组）→ 2 空格缩进；非 JSON / 截断残缺 / 空 → 原样（String 化）。
 // 只做数据→数据，不碰 DOM/hljs（高亮由 app.js 渲染层复用现有 hljs）。
-export function formatToolSummary(summary) {
+// truncated：调用方手里的截断元数据（实时 tool_result 事件带；「展开全文」恒为 false）。明说没截断就不动尾巴——原文可能
+// 恰好以同样几个字结尾（#341 review）；没有元数据（历史、输入摘要）才按尾巴认，与 isToolSummaryTruncated 同口径。
+export function formatToolSummary(summary, { truncated } = {}) {
   if (summary == null) return '';
   if (typeof summary !== 'string') return String(summary);
-  const s = summary;
+  const s = truncated === false ? summary : localizeServerTruncationTail(summary);
   if (!s) return '';
   const trimmed = s.trim();
   if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return s;
@@ -25,6 +27,22 @@ export function formatToolSummary(summary) {
   } catch {
     return s; // 截断残缺 JSON 等：不抛、原样
   }
+}
+
+// 工具输出代码块的高亮 class（验收 O55 附带）：原来一律交给 hljs 自动识别，纯文本日志常被认成 css / vbnet /
+// yaml 上一片色，读起来像代码。只有能完整解析的 JSON 按 json 高亮，其余写 nohighlight（hljs 认这个 class 跳过）。
+export function toolOutputHighlightClass(text) {
+  const trimmed = typeof text === 'string' ? text.trim() : '';
+  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return 'nohighlight';
+  try { JSON.parse(trimmed); return 'language-json'; } catch { return 'nohighlight'; }
+}
+
+// 工具输入块的高亮 class（性能改造 1a）：原来也一律交给 hljs 自动识别，每块把 36 种语法全试一遍，一次打开几百块就是
+// 秒级长任务，还常认成 swift / css。输入摘要是服务端 stringify 的 JSON（toolSummary），截断了也还是 JSON、词法高亮
+// 不在乎残缺，所以与输出不同：只看开头，不要求能完整解析。
+export function toolInputHighlightClass(text) {
+  const trimmed = typeof text === 'string' ? text.trimStart() : '';
+  return trimmed[0] === '{' || trimmed[0] === '[' ? 'language-json' : 'nohighlight';
 }
 
 // UX-001：审批 sheet 内容可读化（数据→数据）。
@@ -370,7 +388,7 @@ export function formatSubagentCardTitle({
   // 失败计数排在用量之前：出没出错比跑了多少 token 更该先看见。
   // 【为什么放标题不放单行动作槽】那个槽由 task_progress 心跳驱动、每隔几秒被当前工具覆盖一次——
   // 失败写在那里会闪一下就没，而"闪过"等于没显示。计数只增不减，折叠着扫一眼就知道里面出没出过错。
-  // 【只数真错误】denyKind 那几档（已回答/已拒绝/已取消）是用户自己的动作，他知道，不算异常。
+  // 【只数真错误】denyKind 那两档（已拒绝/已取消）是用户自己的动作，他知道，不算异常。
   const failed = Number(failures);
   if (Number.isFinite(failed) && failed > 0) parts.push(`❌ ${failed}`);
   const uses = Number(toolUses);
@@ -430,8 +448,25 @@ export function formatSpawnDescription(inputSummary, maxLen = 120) {
 
 // 工具摘要是否已被 agent/history 截断（口径：尾缀「 …（已截断）」——见 agent.js truncate）。
 // 前端据此显「展开全文」；payload.truncated 优先（布尔），缺省时嗅探摘要串。
+// 嗅探用服务端写进摘要的原文，不过 t()：它不随界面语言变，英文界面下翻译成「…(truncated)」再比，历史里截断过的
+// 卡就永远不给「展开全文」（#250 review）。
+const SERVER_TRUNCATION_MARK = '…（已截断）';
+const SERVER_TRUNCATION_TAIL = ` ${SERVER_TRUNCATION_MARK}`;
+
+// 截断尾巴是服务端写进摘要的中文原文（shared/tool-summary.js、sessions/history.js），显示时按界面语言换掉（验收 O131）。
+// 只换末尾那一处：正文里恰好出现同样几个字的不动。
+function localizeServerTruncationTail(text) {
+  return text.endsWith(SERVER_TRUNCATION_TAIL) ? text.slice(0, -SERVER_TRUNCATION_TAIL.length) + t(SERVER_TRUNCATION_TAIL) : text;
+}
+
+// 历史思考块的正文同样带服务端写的中文：超长截断的尾巴，或脱敏占位（sessions/history.js）。
+const SERVER_REDACTED_THINKING = '（思考内容已脱敏）';
+export function localizeServerThinkingText(text) {
+  if (typeof text !== 'string') return '';
+  return text === SERVER_REDACTED_THINKING ? t(SERVER_REDACTED_THINKING) : localizeServerTruncationTail(text);
+}
 export function isToolSummaryTruncated(summary, { truncated } = {}) {
   if (truncated === true) return true;
   if (truncated === false) return false;
-  return typeof summary === 'string' && summary.includes(t('…（已截断）'));
+  return typeof summary === 'string' && summary.includes(SERVER_TRUNCATION_MARK);
 }

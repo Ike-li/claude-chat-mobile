@@ -247,4 +247,33 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // #359 第 5 项：胶囊以前写死 bottom:84px，composer 一长高（多行输入、横幅、附件托盘）就叠在输入框上。
+  // 现在它要贴着 composer 顶边外侧，随 composer 增高一起上移。
+  test('P0-24f 未读胶囊贴在 composer 顶边上方，输入多行后跟着上移、不压输入框', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await sendChatMessage(page, 'test:unread-pill');
+    const pill = page.locator('#unreadPill');
+    await expect(pill).toBeVisible({ timeout: 10_000 });
+
+    const gap = () => page.evaluate(() => {
+      const pillRect = document.getElementById('unreadPill')!.getBoundingClientRect();
+      const footerTop = document.getElementById('composerFooter')!.getBoundingClientRect().top;
+      return { gap: footerTop - pillRect.bottom, footerTop };
+    });
+    const before = await gap();
+    expect(before.gap, '胶囊压到了 composer 上').toBeGreaterThanOrEqual(0);
+    expect(before.gap, '胶囊离 composer 顶边太远，没贴着它').toBeLessThanOrEqual(24);
+
+    await page.locator('#input').fill('第一行\n第二行\n第三行\n第四行\n第五行\n第六行');
+    await expect.poll(async () => (await gap()).footerTop, { message: '多行输入没让 composer 长高，测试前提不成立' })
+      .toBeLessThan(before.footerTop - 40);
+    const after = await gap();
+    expect(after.gap, '多行输入后胶囊压到了 composer 上').toBeGreaterThanOrEqual(0);
+    expect(after.gap, '多行输入后胶囊没跟着上移').toBeLessThanOrEqual(24);
+    await expect(pill).toBeVisible();
+    await expectNoBrowserErrors(page);
+  });
 });

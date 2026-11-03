@@ -37,6 +37,9 @@ export function createNewSessionWorktree(context, { onChange = () => {}, ackTime
     const v = Boolean(next);
     if (v === enabled) return;
     enabled = v;
+    // 源分支只对新 worktree 有意义：没勾时会话开在主工作树、就是仓库当前分支，胶囊必须如实显示它。
+    // 留着旧选择的话，取消后胶囊仍写着一个不会生效的分支，再勾上时又悄悄恢复它。
+    if (!v) sourceBranch = null;
     onChange(snapshot());
   }
 

@@ -14,6 +14,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#consoleModal')).toContainText('交互日志');
     await expect(page.locator('#consoleClose')).toBeVisible();
     await expect(page.locator('#consoleClear')).toBeVisible();
+    // #368：面板底色必须真的画出来（console-* 是裸 var，`bg-console/95` 这类类名生成不出 CSS → 全透明）
+    const panelAlpha = await page.locator('#consoleModal > div').first().evaluate(el => {
+      const m = getComputedStyle(el).backgroundColor.match(/[\d.]+/g) || [];
+      return m.length >= 4 ? Number(m[3]) : (m.length === 3 ? 1 : 0);
+    });
+    expect(panelAlpha, '交互日志面板底色是透明的').toBeGreaterThan(0.9);
     await page.locator('#consoleClear').click();
     await expect(page.locator('#messages')).toBeVisible();
     await page.locator('#consoleClose').click();

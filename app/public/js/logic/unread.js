@@ -58,6 +58,20 @@ export function resolveDirUnreadBadge(count) {
   return { state: 'unread', visible: true, text: t('{n} 未读').replace('{n}', String(count)) };
 }
 
+// 抽屉一个分组里「画出来且未读」的会话（#300）：本页 sessions + 稍后再看 pinned + 页外开着的 open，按 id 去重。
+// 目录角标的计数与长按「全部标为已读」的目标共用这一个集合——此前角标只数前两组，open 行照样亮
+// 「未读」chip，角标却不数它。isUnread 由调用方给（含「正在看」与手动标记的判定），这里只管集合。
+export function unreadSessionsInGroup(group, isUnread) {
+  const ids = new Set();
+  const out = [];
+  for (const s of [...(group?.sessions || []), ...(group?.pinned || []), ...(group?.open || [])]) {
+    if (!s?.id || ids.has(s.id)) continue;
+    ids.add(s.id);
+    if (isUnread(s)) out.push(s);
+  }
+  return out;
+}
+
 // 手动未读的当前判据：标记时刻是否晚于已看时刻。相等算已读（与 `lastUsedAt > seenBar` 的
 // 「恰好相等不亮」同向）。脏值/缺失一律 false——失败方向是「不亮」，不制造无法消除的假未读。
 export function isManualUnreadNow(manual, seen, sessionId) {
@@ -70,7 +84,8 @@ export function isManualUnreadNow(manual, seen, sessionId) {
 
 // 服务端权威态并入本地态。remote 无效（离线、ack 超时、老服务端不认这个事件）时原样返回 local：
 // 功能降级回「每设备独立」，绝不清空——本地已读表丢一次，用户面前就是一整屏假未读。
-export function mergeReadState(local, remote, { seenCap = 500, manualCap = 100 } = {}) {
+// folders（文件夹「全部标为已读」的水位）服务端不回传，本地这份只为离线后随 read:sync 补报，原样带过去。
+export function mergeReadState(local, remote, { seenCap = 500, manualCap = 100, folderCap = 200 } = {}) {
   if (!remote || typeof remote !== 'object' || Array.isArray(remote)
     || typeof remote.baselineTs !== 'number' || !Number.isFinite(remote.baselineTs)) {
     return local;
@@ -79,6 +94,7 @@ export function mergeReadState(local, remote, { seenCap = 500, manualCap = 100 }
     baselineTs: remote.baselineTs,
     seen: capNewest(mergeLatest(local?.seen, remote.seen), seenCap),
     manual: capNewest(mergeLatest(local?.manual, remote.manual), manualCap),
+    folders: capNewest(mergeLatest(local?.folders, remote.folders), folderCap),
   };
 }
 
@@ -129,16 +145,16 @@ export function setManualUnreadEntry(manual, sessionId, on, now, cap = 100) {
 
 // localStorage 原文 → 状态。任何解析失败/形状不对都回落全新状态（基线=now）：
 // 隐私模式、首装、坏数据同一条降级路径，绝不抛。已有合法基线必须保留——被 now 覆盖
-// 等于每次启动重置基线，点永远不亮。manual 字段是后加的：旧落盘缺它时回空表，不重置基线/seen。
+// 等于每次启动重置基线，点永远不亮。manual、folders 字段是后加的：旧落盘缺它们时回空表，不重置基线/seen。
 export function parseUnreadState(raw, now) {
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       && typeof parsed.baselineTs === 'number' && Number.isFinite(parsed.baselineTs)) {
-      return { baselineTs: parsed.baselineTs, seen: numericMap(parsed.seen), manual: numericMap(parsed.manual) };
+      return { baselineTs: parsed.baselineTs, seen: numericMap(parsed.seen), manual: numericMap(parsed.manual), folders: numericMap(parsed.folders) };
     }
   } catch { /* 坏 JSON → 全新状态 */ }
-  return { baselineTs: now, seen: {}, manual: {} };
+  return { baselineTs: now, seen: {}, manual: {}, folders: {} };
 }
 
 // 只保留「值是有限数」的条目——防手改/旧版本残留把非数字混进比较。
@@ -152,5 +168,5 @@ function numericMap(src) {
 }
 
 export function serializeUnreadState(state) {
-  return JSON.stringify({ baselineTs: state.baselineTs, seen: state.seen, manual: state.manual || {} });
+  return JSON.stringify({ baselineTs: state.baselineTs, seen: state.seen, manual: state.manual || {}, folders: state.folders || {} });
 }

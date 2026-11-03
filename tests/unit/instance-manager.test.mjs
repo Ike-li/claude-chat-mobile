@@ -28,8 +28,8 @@ test('instance manager owns IDs, per-instance preferences, lookup, and teardown'
   manager.permissionModes.set(first.instanceId, 'plan');
   manager.efforts.set(first.instanceId, 'high');
 
-  assert.equal(first.instanceId, 'inst_1');
-  assert.equal(manager.nextId(), 'inst_2');
+  // 号码的具体形态不是契约（跨重启不复用由 tests/invariants/instance-identity.test.mjs 钉，MSG-02）
+  assert.notEqual(manager.nextId(), first.instanceId);
   assert.equal(manager.forSession('s1'), first);
   assert.equal(manager.permissionModeOf(first.instanceId), 'plan');
   assert.equal(manager.effortOf(first.instanceId), 'high');
@@ -252,6 +252,28 @@ test('waitForSessionExits 等本会话里已移除、正在回收的实例退完
   );
 });
 
+// 网页改名的退出补写（#458）挂在这上面：CLI 退出收尾会把内存里的旧标题写回 transcript，
+// 活的、空闲回收中的、已移出表还没退完的实例都会写，所以三种都得算；别的会话不算。
+test('sessionExitPromises：本会话里还没退完的实例都算，活的也算', async () => {
+  const manager = createInstanceManager();
+  const live = exitableAgent(manager, 's1');
+  const reclaiming = exitableAgent(manager, 's1', { terminating: true });
+  const closed = exitableAgent(manager, 's1');
+  manager.remove(closed.agent.instanceId);
+  exitableAgent(manager, 's-other');
+  const exits = manager.sessionExitPromises('s1');
+  assert.equal(exits.length, 3);
+  assert.equal(manager.sessionExitPromises('s-none').length, 0);
+  let done = false;
+  Promise.all(exits).then(() => { done = true; });
+  live.exit(); reclaiming.exit();
+  await flush();
+  assert.equal(done, false, '已移出表的那个还在收尾写盘');
+  closed.exit();
+  await flush();
+  assert.equal(done, true);
+});
+
 // 等待是异步的：这期间另一台设备可能又打开、又关掉了这个会话。只等调用那一刻收集到的，
 // 新关掉的那个 CLI 就漏了——等完它已不是活实例，保护①放行，删除又落在它的收尾写入前面。
 test('waitForSessionExits 等待期间新关掉的实例也要等到', async () => {
@@ -303,4 +325,19 @@ test('waitForSessionExits 有上限：等不到按时放行并返回 false，不
   t.mock.timers.tick(1);
   await flush();
   assert.equal(result, false, '到上限必须结算，并如实说明没等到');
+});
+
+// PR #328 review P1：新会话页认领它开出的实例时，「还活着」要与 forSession 同口径——空闲回收置了 terminating、
+// 还没被 onExit 清表的实例照样在 agents 里，往它投消息会在清理时连队列一起丢掉
+test('isRoutable：在表里但正在终止 / 已 dispose 的实例不算能投递', () => {
+  const manager = createInstanceManager();
+  const agent = { instanceId: manager.nextId(), sessionId: 's-r', terminating: false, disposed: false };
+  manager.agents.set(agent.instanceId, agent);
+  assert.equal(manager.isRoutable(agent.instanceId), true);
+  agent.terminating = true;
+  assert.equal(manager.isRoutable(agent.instanceId), false, '正在终止的实例还被当成活的，消息会投进将死的进程');
+  agent.terminating = false;
+  agent.disposed = true;
+  assert.equal(manager.isRoutable(agent.instanceId), false);
+  assert.equal(manager.isRoutable('inst-none'), false);
 });

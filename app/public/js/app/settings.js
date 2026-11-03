@@ -7,8 +7,8 @@
 //   通用设置 #generalSheet（侧栏底部入口，本机偏好 + 主机与服务，全局可达）
 // 二者的开合/手势/滚动锁完全一样，故只参数化 DOM key，不复制第二份实现。
 import { resolveSheetDragEnd } from '../logic/panel-state.js';
-
-const SHEET_OPEN_CLASS = 'ccm-sheet-open';
+import { focusInto, restoreFocus, setInertReason, trapTabIn } from './focus-layers.js';
+import { acquireSheetScrollLock, releaseSheetScrollLock } from './sheet-scroll-lock.js';
 
 // 默认指向会话设置那套 id——现有调用点与单测因此零改动。
 const DEFAULT_KEYS = {
@@ -23,7 +23,7 @@ const DEFAULT_KEYS = {
 export function createSettingsController(context, {
   // 本控制器操作哪一组 DOM（见 DEFAULT_KEYS）。
   keys: keyOverrides = null,
-  // 本 sheet 是否承载「提示音/震动/前台通知/推送预览/语言」这套本机偏好。拆分后它们全在通用设置里，
+  // 本 sheet 是否承载「提示音/震动/前台通知/推送预览/语言/主题」这套本机偏好。拆分后它们全在通用设置里，
   // 会话设置传 false 跳过回填与开关绑定（那些 DOM 根本不在它的子树内）。
   syncPrefs = true,
   // 打开前的钩子：通用设置用它收掉可能还开着的会话设置，避免两层 sheet 叠着。
@@ -34,8 +34,10 @@ export function createSettingsController(context, {
   // 独立于 alerts（那是本地提示音/震动，不涉网络）；duck-typed 最小接口，settings.js 不需要认识整个
   // notifications 控制器。
   pushPreview = { get: () => false, set: () => {} },
-  // ⑨ 语言偏好：get/set 由 app.js 注入；set 里写 storage + 提示刷新（不做响应式重渲，见 index.html 头注）。
+  // ⑨ 语言偏好：get/set 由 app.js 注入；set 先确认刷新再落盘（取消不写；不做响应式重渲，见 index.html 头注）。
   langPref = { get: () => 'zh', set: () => {} },
+  // ⑩ 主题偏好：get/set 由 app.js 注入；set 即时落盘并改 data-theme（无需刷新）。
+  themePref = { get: () => 'system', set: () => {} },
   autoBind = true,
   // 面板打开时的回调：给需要"每次打开重算"的动态段用（如推送订阅状态——权限可能在系统设置里被
   // 改过，渲染一次会过期）。**必须挂在这里而不是包装 open()**：trigger 按钮由下方 autoBind 直接绑到
@@ -61,15 +63,14 @@ export function createSettingsController(context, {
    *   velocityY: number,
    * }} */
   let drag = null;
+  let focusBefore = null; // 打开前焦点所在，关闭时还回去
 
   function lockBackgroundScroll() {
-    doc?.documentElement?.classList?.add(SHEET_OPEN_CLASS);
-    doc?.body?.classList?.add(SHEET_OPEN_CLASS);
+    acquireSheetScrollLock(doc);
   }
 
   function unlockBackgroundScroll() {
-    doc?.documentElement?.classList?.remove(SHEET_OPEN_CLASS);
-    doc?.body?.classList?.remove(SHEET_OPEN_CLASS);
+    releaseSheetScrollLock(doc);
   }
 
   function resetSheetMotion() {
@@ -107,6 +108,24 @@ export function createSettingsController(context, {
     }
   }
 
+  // 主题三选一与语言组同构（自绘 radio + aria-checked）；选中态同样双通道更新。
+  function renderThemeOptions() {
+    const group = dom.prefThemeGroup;
+    if (!group) return;
+    const current = themePref.get();
+    for (const btn of group.querySelectorAll('[data-theme-pref]')) {
+      const on = btn.dataset.themePref === current;
+      btn.setAttribute('aria-checked', on ? 'true' : 'false');
+      btn.classList.toggle('border-line', !on);
+      btn.classList.toggle('bg-surface', !on);
+      btn.classList.toggle('text-ink', !on);
+      btn.classList.toggle('border-accent', on);
+      btn.classList.toggle('bg-accent-wash', on);
+      btn.classList.toggle('text-accent', on);
+      btn.querySelector('[data-theme-check]')?.classList.toggle('opacity-0', !on);
+    }
+  }
+
   function syncPreferences() {
     if (!syncPrefs) return;
     const preferences = alerts.preferences();
@@ -115,11 +134,16 @@ export function createSettingsController(context, {
     if (dom.prefAlertForeground) dom.prefAlertForeground.checked = !!preferences.foregroundComplete;
     if (dom.prefPushPreview) dom.prefPushPreview.checked = !!pushPreview.get();
     renderLangOptions();
+    renderThemeOptions();
   }
 
   function open() {
     try { beforeOpen(); } catch { /* 收另一个 sheet 失败不能让本面板打不开 */ }
     haptic('tap');
+    // 已开着时再 open（深链跳页）不覆盖：那时焦点在面板里，记下来就还不回打开它的入口了
+    // 滚动锁也必须幂等：重复 open 不得再 acquire，否则 close 一次会留下 ccm-sheet-open（#425）。
+    const alreadyOpen = isOpen();
+    if (!alreadyOpen) focusBefore = doc?.activeElement ?? null;
     alerts.ensureAudio?.();
     syncPreferences();
     // 内容区每次打开滚回顶部，避免上次停在底部再打开时「像丢了半截」
@@ -128,17 +152,28 @@ export function createSettingsController(context, {
     resetSheetMotion();
     sheetEl()?.classList.remove('translate-y-full');
     scrimEl()?.classList.remove('hidden');
-    lockBackgroundScroll();
+    setInertReason(sheetEl(), 'closed', false);
+    if (!alreadyOpen) lockBackgroundScroll();
     try { onOpen(); } catch { /* 动态段渲染失败不能让面板打不开 */ }
+    // 焦点进面板（验收 O77）：不移的话键盘用户按 Tab 走的还是背后的页面
+    if (sheetEl()) focusInto(sheetEl());
   }
 
   function close() {
+    // 已关再关：不 release（引用计数否则会 underflow，嵌套 sheets/另一设置页的锁被提前摘掉）
+    if (!isOpen()) return;
     haptic('tap');
     drag = null;
+    // 先记下焦点在不在面板里：一 inert，浏览器就把里面的焦点丢回 body，事后再问就晚了
+    const hadFocus = !!sheetEl()?.contains(doc?.activeElement);
     resetSheetMotion();
     sheetEl()?.classList.add('translate-y-full');
     scrimEl()?.classList.add('hidden');
+    // 收起只是移出屏幕，里面的控件照样能被 Tab 到、回车触发
+    setInertReason(sheetEl(), 'closed', true);
     unlockBackgroundScroll();
+    if (hadFocus) restoreFocus(focusBefore, doc);
+    focusBefore = null;
   }
 
   function bindToggle(element, key) {
@@ -159,8 +194,14 @@ export function createSettingsController(context, {
   }
 
   function onKeydown(ev) {
-    if (ev.key !== 'Escape') return;
     if (!isOpen()) return;
+    // sheet 是 aria-modal：Tab 不出面板
+    if (ev.key === 'Tab') { trapTabIn(sheetEl(), ev, doc); return; }
+    if (ev.key !== 'Escape') return;
+    if (ev.isComposing || ev.keyCode === 229) return; // 这次 Esc 是在取消输入法候选，不是关面板
+    // 叠在设置之上的 sheet（appConfirm、从诊断进的服务状态/环境配置/日志）已在捕获阶段处理这次 Esc 并
+    // preventDefault——只收栈顶那一层；设置面板跟着关，等于连来源页一起关掉、焦点落到 body（#380）
+    if (ev.defaultPrevented) return;
     ev.preventDefault();
     close();
   }
@@ -310,11 +351,19 @@ export function createSettingsController(context, {
       dom.prefLangGroup.onclick = (e) => {
         const lang = e.target?.closest?.('[data-lang]')?.dataset?.lang;
         if (!lang) return;
-        // langPref.set 先落盘、再弹「要不要刷新」的确认框，落盘那段是同步的——所以紧跟着重绘
-        // 拿到的已经是新值。用户在确认框上点「取消」也不回滚高亮：偏好确实存下来了，下次打开
-        // 就是新语言，高亮跟着走才不撒谎。
-        void langPref.set(lang);
-        renderLangOptions();
+        // 已是当前档：不再弹确认（同语言无切换可做）。
+        if (lang === langPref.get()) return;
+        // langPref.set 先确认刷新，同意后才落盘并 reload；取消时 storage 未改。
+        // 等 set 结束后再重绘：取消后磁贴仍跟旧偏好一致；同意则页面已 reload，这行通常到不了。
+        void Promise.resolve(langPref.set(lang)).finally(() => renderLangOptions());
+      };
+    }
+    if (dom.prefThemeGroup) {
+      dom.prefThemeGroup.onclick = (e) => {
+        const theme = e.target?.closest?.('[data-theme-pref]')?.dataset?.themePref;
+        if (!theme) return;
+        // 主题即时生效：set 落盘并 applyTheme，无需刷新；重绘磁贴反映新选中态。
+        void Promise.resolve(themePref.set(theme)).finally(() => renderThemeOptions());
       };
     }
     if (dom.btnAlertPreview) {
@@ -325,6 +374,8 @@ export function createSettingsController(context, {
     }
   }
 
+  // 初始就是收起态：不 inert 的话，页面一加载两个面板里的控件就都排在 Tab 序列里
+  if (!isOpen()) setInertReason(sheetEl(), 'closed', true);
   if (autoBind) bind();
   return {
     close,

@@ -1,5 +1,524 @@
 # 变更记录
 
+## v1.14.0 — 2026-11-03
+
+Changes since v1.13.0.
+
+### Verified environment
+- claude CLI: 2.1.317
+- Agent SDK: @anthropic-ai/claude-agent-sdk 0.3.310
+
+### Features
+- feat(perf): 手机上的性能记录自动上报进 server 日志，perf-report 按维度出分位值
+- feat(mcp): MCP 服务器要表单输入或 URL 授权时，手机上能看到并作答（接入 onElicitation）
+- feat(tasks): 把在跑的前台命令 / 子代理转到后台（终端 Ctrl+B）
+- feat(sessions): 网页端给会话改名（SDK renameSession），抽屉兜底路径认 /rename 的自定义标题
+- feat(mcp): 宿主机页的 MCP 服务器改为实时状态，能重连、启停（对应终端 /mcp）
+- feat(slash): 斜杠菜单改用 supportedCommands()，带说明、参数提示和别名，新工作区首条消息前就有完整菜单
+- feat(question): AskUserQuestion 改走 allow + answers，拆开「不回答」和「中止本轮」
+- feat(permissions): settings 禁用了 auto 模式时，Auto 置灰并说明原因，服务端拒切
+- feat(agent): init 时保存 CLI 上报的 capabilities，提供 hasCliCapability（行为不变）
+- feat: add manual theme preference (light / dark / system)
+- feat: add scroll-to-bottom affordance when reading history
+- feat(question): 多题提问可来回切题改答案，复查后整组提交
+- feat(drawer): 文件夹行「⋯」菜单（全部标为已读 · 断开连接），长按连接根拖动排序，取代置顶
+- feat(drawer): 会话行只留「⋯」一个入口，关闭 / 删除 / 标已读未读都进菜单
+- feat(service): 抽屉「服务」小节的推送失败、限速锁定、前端错误也能「忽略」
+- feat(drawer): 文件夹长按「置顶 / 取消置顶」，顺序存数据目录、不动 WORKDIRS（#305）
+- feat(history): 历史渲染半路停下时记日志，提示条上原地给「重新加载」，顶栏加「⋯」常驻入口（#307 第 1、3 步）
+- feat(settings): 设置页底部加「重新加载」与「重置本机数据」两档（#302）
+- feat(settings): 设置里加「关于」页：版本与作者、许可证原文、第三方组件、检查更新（#303）
+- feat(service): 「N 个文件夹找不到了」告警加「管理工作区 / 重新检查 / 忽略」（#301 第一期）
+- feat(drawer): 文件夹长按「全部标为已读」，目录角标与未读 chip 同源（#300）
+- feat(outbox): 离线连发恢复后按序排队，本轮结束自动续发；真正发出时气泡挪到最后
+- feat(drawer): 「显示全部」之后可以「加载更多」；「稍后再看」组排回本页之后
+- feat(acceptance): 新增 tests/acceptance 验收套件骨架，迁入 378 条用例
+- feat(resume): 续接会丢掉一段对话时先问再发（检测 + 面板 + 一键分叉），接管时提醒活终端
+- feat: 抽屉里断开文件夹；选文件夹一步开会话
+- feat: 没有文件夹也能用——零文件夹照常启动，只剩「无文件夹」
+- feat(widget): 手机上显示桌面端 show_widget 画的 SVG 图
+- feat: 会话里的工具截图与用户贴图在手机上显示
+- feat(doctor): 已连接文件夹的布局提示——多余的 worktree 条目、无文件夹目录在 git 仓库里或不可写
+- feat(no-folder): 离线「无文件夹」每批只开一个会话；删除时说清临时目录一并删除；删后按小节失效缓存
+- feat(picker): 「选文件夹」面板——新会话在哪开、手机上直接添加 / 新建文件夹、无文件夹
+- feat(drawer): 抽屉按项目分组——子文件夹自成一节、平级 worktree 随仓库、「无文件夹」在用时一节
+- feat(folders): 手机上添加 / 新建文件夹、「无文件夹」会话接进 server
+- feat(folders): 添加 / 新建文件夹的判据与 scratch 目录的建删（只加模块，尚未接线）
+- feat(sessions): 项目清单与成员目录——平级 worktree 并进仓库、子文件夹自成项目、无文件夹可列
+- feat(scope): 显式传入越界 cwd 一律拒绝，不再静默回落当前查看目录
+- feat(scope): server 各闸门改走「已连接的文件夹」授权判据
+- feat(scope): 「已连接的文件夹」的统一授权判据（只加模块，尚未接线）
+
+### Fixes
+- fix(busy): 后台子代理在主轮结束后推流，不再反复点亮运行条
+- fix(audit): 已删掉的已连接文件夹不再记越界；完全相同的审计 60 秒内合并计数
+- fix(3a): 最近一段切不开、等更早那段时留着加载卡；这时实例变了也给「重新加载」
+- fix(sync): 截顶会话的点击预取凭 diskTotal 核对，不再白拉第二遍历史
+- fix(sync): replayed 也不计 slash_commands——刚续接的实例缓冲里只有元数据，切入不该判成 reload
+- fix(3b): 截顶的会话不复用预取，sync:since 报的条数核对不了就当场重新拉
+- fix(2d): SDK 抛错回落的降级列表只缓存 4s，SDK 恢复后不再一直给降级结果
+- fix(dist-manifest): 静态 import 扫描不再把模板字符串里的 from '…' 当成依赖
+- fix(1c): CodeMirror 按整包执行完判就绪，不拿核心全局当作 mode 已到（PR #484 review）
+- fix(perf): 打开会话的步骤凭这一次的凭据记，不再只比 sid
+- fix(perf): 长任务汇总算上收尾所在的那个任务
+- fix(history): 历史还没落地时不存会话 DOM 缓存，切回不再停在只有提示条 (#307)
+- fix(drawer): 被分页挤出的已开会话按时间排回列表，不再顶到最前
+- fix(#473): 搬家后点过的模型不被 instances 广播冲掉
+- fix(#473): 搬家后续聊不把外部模型带进发送
+- fix(#473): worktree 被删后代码面板恢复回落父仓
+- fix(#473): 收窄外部迁移恢复的范围，补齐拒绝与取代时的回执
+- fix: recover externally relocated session context (#473)
+- fix(effort): 底栏胶囊只显思考档名，「· CLI 默认」后缀留在 title 与摘要
+- fix(mcp): elicitation 表单的 date-time 默认值换算成本地时刻；字符串上限不再由浏览器按 UTF-16 截断
+- fix(mcp): 宿主机页 MCP 现查只认最后一次，切走前那个实例的晚到回执不再顶掉新结果
+- fix(tasks): 切回会话后工具卡上的「后台运行」能找回；sync-catchup 不再把瞬时快照算成重发
+- fix(drawer): 边缘手势让位给 sheet 与横向滚动；会话行「⋯」热区扩到 48px
+- fix(style): 语义色支持 Tailwind 透明度修饰（bg-danger/10 等）
+- fix(layout): 未读胶囊挂进 composer 顶边外侧，随 composer 长高上移
+- fix(layout): 桌面挂着审批 / 提问时侧栏仍可点；桌面高度改 100dvh
+- fix(layout): ≥768px 消息阅读宽度与 composer 对齐，消息区仍铺满整列
+- fix(sessions): 改名的退出补写与后续改名按会话排队；迟到的改名回执不碰新开的 sheet
+- fix(mcp): 终端驾驶时 MCP 只给快照；查看的会话被切走时卡片跟着换
+- fix(slash): scout 晚到时用户已切到别的工作区，命令清单只落缓存、不推给手机
+- fix(history): listSessions 关掉 SDK 的 worktree 展开，别让别棵树的会话挤占候选窗
+- fix: confirm before removing missing workspaces; align legacy and trim checks
+- fix: give the console drawer a real background (no alpha classes on bare vars)
+- fix: keep keyboard focus on the task row control across re-renders
+- fix: make widget charts and native controls follow the manual theme
+- fix: count queued question cards, not queued questions
+- fix: anchor the scroll-to-bottom button to the message column
+- fix: announce turn start and end once instead of going silent
+- fix: inert only what the session-blocked surface covers
+- fix: don't let the settings Escape listener re-close what a sheet already handled
+- fix: switch .ccm-sheet visibility instantly on open so initial focus lands
+- fix: keep the shared scroll lock balanced and enlarge the drag-handle hit area
+- fix: expire retained terminal state 60s after the last observation
+- fix: keep the ☐/☑ glyph out of multi-select option names
+- fix: pin permission actions to the sheet bottom on short viewports
+- fix: one-tap remove missing workspaces from alert (#355)
+- fix: console log palette tokens + fill-into-input copy
+- fix: replace push subscribe alert with inline status receipt
+- fix: make drawer unread chip a visible mark-as-read control
+- fix: restore bg-task-row click target for expand
+- fix: add expand indicators and aria-expanded for expandable rows
+- fix: aria patches for discover hint, change badge, and controls
+- fix: honor prefers-reduced-motion for remaining UI animations
+- fix: switch PWA manifest theme_color with dual light/dark files
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: refresh queue progress when resolve shrinks queue while open
+- fix: show remaining approval/question queue count in sheet
+- fix: enlarge and deconflict message/control touch targets
+- fix: keyboard and SR access for @ and / composer hints
+- fix: throttle noisy aria-live updates
+- fix: use bg-cta for dark-mode solid white-on-accent CTAs
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: keep bypassPermissions tile in viewport for P0-09r
+- fix: keyboard access for effort tiles and rewind list
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: keep sidebar interactive under session-blocked overlay
+- fix: focus trap for session-blocked surface
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: add global :focus-visible focus ring
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: consistent Escape to dismiss sheets
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: sheet-open transitions via class selector
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: settings scroll-lock idempotency and sheet focusInto E2E
+- fix: sheet scroll lock and honest drag handles
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: roll back language pref when reload is cancelled
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: retain terminalState for sessionsDot after drawer close
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: preserve rewind mode disables after confirm failure
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: show visible feedback on icon-only config refresh
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: allow Enter-to-send on touchscreen laptops
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: AskUserQuestion option card hit target (#400) and checkbox a11y (#382)
+- fix: align question arming disabled opacity with P0-08i
+- fix: disable AskUserQuestion controls while sheet arming
+- fix: arm AskUserQuestion sheet against mis-taps
+- fix: keep permission actions reachable on short viewports
+- fix: show approval/question failure inside open sheet
+- fix: route approval/question answers to owning instance
+- fix(drawer): 拖动排序别的文件夹不该把当前工作区连带强制展开
+- fix(question): 整组提交里别处已答的题忽略，不再整组拒收
+- fix(question): 组里后几题还没送到时不放行整组提交
+- fix(rewind): 分叉前复制来的轮次不再报「无代码改动」，并指回原会话
+- fix(rewind): 回退的锚点沿父链取，不再锚到被放弃的那条分支上
+- fix(rewind): 回退后不再把整段对话在屏幕上重复一遍
+- fix(fork): 气泡长按还给系统选字，想复制文字时不再弹分叉确认
+- fix(drawer): 菜单接力开确认框时焦点不被拽回模态层背后；菜单补上滑入滑出
+- fix(drawer): 会话列表照抄桌面端「显示更多 / 收起」，一键已读覆盖更早会话
+- fix(sync): 重连重定基线不再把己方 sdk-ts 写盘判成终端写入
+- fix(history): 手动重新加载作废上一轮加载，画完按服务端快照补回待审批（#354 review）
+- fix(settings): 重置期间，确认前已排上的重连定时器不再握手（#352 review）
+- fix(test): single-source-of-truth 在没有 git 的环境里退回目录遍历（#351 review）
+- fix(gates): 点名 invariants 排除目录本身也拦下；目录形态的替代命令展开成 glob（#351 review）
+- fix(gates): 替代命令从原文切词、保留引号（#351 review）
+- fix(test): single-source-of-truth 的扫描面改走 git ls-files，本机验收产物不再让 test:unit 恒红
+- fix(gates): 单文件验证被拒时只指去跑那几个文件，不再放大成 5 档全量
+- fix(service): 「重新检查」在热加载早退时回失败，配置文件写坏时不再清空白名单（#301 review）
+- fix(read-state): read:sync 的 clamp 保住同一会话 seen 与 manual 的先后（#300 review）
+- fix(outbox): 改投后的在途条目登记即落盘，等 ack 时刷新恢复的是改投后的路由
+- fix(outbox): 离线消息有结论之前一直落盘，排队等本轮结束时刷新不再丢
+- fix(models): 模型清单重发时不再冲掉用户刚点、还没发出去的模型
+- fix(files): 文件面板只认最近一次读请求的回执，重开同一文件不再把正文接两遍
+- fix(desktop): 日志窗口尾读起点切在汉字中间时不再整屏空白
+- fix(folders): 目录已经被删了也能在手机上断开
+- fix(release): 预检拒绝发版时不再还原用户没提交的 package.json / lock / CHANGELOG
+- fix(gates): 测试守卫不再放行写在脚本之后的 --check
+- fix(fork): Android 真机长按气泡弹不出分叉确认（O136）
+- fix(gitignore): node_modules 去掉尾斜杠，让软链也被忽略（test:docker 在新克隆上不再红）
+- fix(i18n): 有截断元数据时以它为准，没截断的原文以同样几个字结尾也不翻译（#341 review）
+- fix(css): 代码块「复制」的可点高度补到 44（O130）
+- fix(server): 重启被拒的提示把 npm run dev 也列进去（O133）
+- fix(agent): 进程被信号终止时，中断原因不再带无关的 stderr 尾巴（O132）
+- fix(i18n): 英文界面下工具卡与历史思考块的截断尾巴、脱敏占位跟随界面语言（O131）
+- fix(folders): 清单改不了时新会话页选择面板里的「添加文件夹」同抽屉置灰并说清为什么（O129）
+- fix(outbox): 「交还不了」只认判了 stale 的死信，由暂存时判定并随条目落盘（PR #339 review）
+- fix(outbox): 升级前入队的离线消息被拒后在眼前的会话里交出原文；首次绑定视图不再把离线提示当成会话缓存（O135）
+- fix(compose): 新会话页离线发出的消息因文件夹被断开而拒收时，留住新会话页与「已断开」提示（O128）
+- fix(agent): backend 规则覆盖 scripts/ 下所有配置读写入口（PR #335 review）
+- fix(compose): 新会话页续接用实例最后的驾驶目录（PR #328 review P1）
+- fix(compose): 新会话页认领实例时不算正在终止的实例（PR #328 review P1）
+- fix(sessions): 搜索的 SDK 标题 overlay 覆盖到浏览窗硬顶（PR #333 review P2）
+- fix(sessions): meta 缓存满了只更新已有条目，不再被新→旧扫描冲刷（PR #333 review P2）
+- fix(sessions): 读 transcript 的并发按整个进程共用一个上限（PR #333 review P1）
+- fix(sessions): 首条消息只留前 1000 字作搜索键，meta 缓存不再可能常驻几百 MB（PR #333 review P2）
+- fix(destroyed): 中断面只认按实例记的崩溃原因，不回落会话级（PR #329 review P2）
+- fix(compose): 「已断开」按已连接的根判，不按展示用的项目清单（PR #330 review P2）
+- fix(destroyed): 会话级旧原因不挡回放队列里这一次的崩溃原因（PR #329 review P2）
+- fix(agent): 纯文本回落只认 Bash，不按 stdout 形状判（PR #332 review P2）
+- fix(sessions): 搜索读 meta 分批打开 transcript，不因 fd 上限静默丢会话（PR #333 review P1）
+- fix(compose): 「无文件夹」页被别的设备换走时不说「已断开」（PR #330 review P2）
+- fix(destroyed): 进程在拿到会话 id 之前崩溃，中断面也写出原因（PR #329 review P2）
+- fix(files): 行多的纯文本文件也能编辑，点「编辑」才挂 CodeMirror（O103）
+- fix(sessions): 标题搜索扫全部会话，500 名以外的旧会话也搜得到（O100）
+- fix(agent): Bash 工具卡显示终端那份纯文本，不是 tool_use_result 的 JSON（O116）
+- fix(compose): 新会话页开出的实例没了，这一页的消息续接它的会话（PR #328 review P2）
+- fix(destroyed): 回放缓冲开着时进程崩溃，中断面仍写出原因（PR #329 review P2）
+- fix(compose): 断开文件夹导致新会话页被归位时，就地说一句（O119）
+- fix(routing): 新会话页拆分延伸到 worktree / scratch 分配；登记表移进路由域模块
+- fix(ui): 进程异常退出时「会话已中断」面当场写出原因（O121）
+- fix(mirror): 审批窗里的外部写入扫描与 size 基线取自同一份快照
+- fix(drawer): 长按之后键盘呼出的菜单照常触发
+- fix(a11y): 确认 sheet 的危险档按钮也用 danger-solid 实底
+- fix(routing): 新会话页的首发开新会话，不再落进另一台设备正看着的会话（O107）
+- fix(mirror): 审批结算那一拍里的终端写入照样标脏（O122 follow-up）
+- fix(drawer): 长按的 contextmenu 去重只在下一次 pointerdown 复位，不在 pointerup
+- fix(a11y): 对比度残留——语义色、代码高亮、Bypass 说明、侧滑「关闭」、markdown 标题到 4.5:1（O102）
+- fix(mirror): 审批结算后 SDK 自己写的 tool_result 不再被当成终端写入（O122）
+- fix(drawer): 触屏长按抬手的 click 不再关掉刚弹出的确认框，也不再卡住右键（O101）
+- fix(config): 底栏不再叫人 unset 配置键名（PR #321 review）
+- fix(devices): 同一毫秒到达的两台待审设备，后到的排在前面
+- fix(devices): 输入法组字中按 Enter 只是选词，不提交改名（PR #320 review）
+- fix(config): 改的是被环境变量压着的项时，保存前底栏就说清写了也不生效（O111）
+- fix(devices): 设备别名输入框按码点限长 24，emoji 不再只写得下 12 个（O106）
+- fix(ui): 附件键右缘不再被发送键热区压住；消息操作按钮可点高度到 44（O98 / O99）
+- fix(notify): ntfy 失败原因在日志与告警里说清楚，审批过期推送不再带 ✅（O109 / O110 / O120）
+- fix(i18n): 验收遗留的几处漏翻与不友好的报错（O97 / O114 / O125 / O105）
+- fix(ui): 中文宽表格不再被压成一字一行（O45 残留）
+- fix(folders): 清单改不了时抽屉「选择文件夹」置灰并说明原因，未连接目录上不给「在这里开始会话」（O41 残留）
+- fix(history): 压缩摘要换成「上下文已压缩」标记条目，不再整条跳过（PR #312 review）
+- fix(push): 测试推送回执按环境说清卡在哪，结果行出来时滚进视口（O108 / O1 残留 / O112）
+- fix(history): /compact 的压缩摘要不再回显成用户气泡（O115 / AC-06-18）
+- fix(outbox): 没带会话号的暂存条目不许诺交还，原文直接写进提示（PR #310 review）
+- fix(outbox): server 重启后的提示页不再被冲成空白，说明原文已保存并给回到该会话的入口（O126）
+- fix(device-gate): 加 close() 关掉目录监听，修 Windows 上 device-gate 测试挂死
+- fix(gates): 破坏性删除门禁只扫 git 跟踪与未忽略的文件
+- fix(service): npm run dev 不算「有人拉起」，重启入口只对进程管理器托管放行
+- fix(outbox): server 重启后离线重放判 stale，原文暂存并在回到会话时交还
+- fix(test-infra): 测试镜像的 Playwright 跟着 lock 升到 1.64.1
+- fix(drawer): 行上终端态退回快照优先，镜像锁真正转变时立即刷新那一行的目录
+- fix(models): 旧代数的实例回报的清单不再写进缓存
+- fix(attachments): 手动移除最后一个附件时一并撤掉托盘旁的提示
+- fix(files): readdir 的 ENOENT 先确认是范围内真不在了，才回「不存在」
+- fix(models): 配置代数收进 models-cache；采纳新 settings 快照时当场推进，scout 不再作废当前这一代
+- fix(drawer): 同一会话的实时镜像锁压过行上缓存的注册表快照
+- fix(notify): 审批过期那一支也走 identity()，合并后不再 ReferenceError、ntfy 标题不带会话名
+- fix(tool-cards): 截断嗅探认服务端原文后缀，英文界面下历史卡也给「展开全文」
+- fix(a11y): 只读镜像下模型磁贴的 aria-pressed 跟 CLI 在跑的模型走
+- fix(a11y): 输入框「/ · @」提示去掉 opacity；连接横幅小字改用 ink-soft
+- fix(attachments): 托盘清空或换面时撤掉托盘旁的提示；用例先断言提示可见
+- fix(notify): 审批过期那一轮的推送也带 ntfyType，锁屏不显示成 ✅
+- fix(statusline): 状态栏命令是空串或只有空白时按「没配」算，不给「开启」
+- fix(device): 重连定时器排上之后设备才被拒，定时器走到时不再握手
+- fix(push): 测试推送两条通道并发发，Web Push 条数在它发完时就取
+- fix(config): 被同名变量和别名同时压着时，回执列出全部要 unset 的变量
+- fix(files): 范围门之后、readdir 之前目录被删，按「不存在」回，不记越界
+- fix(task-status): 完成通知去重记录有界，摘掉的行不再被引用
+- fix(outbox): 懒开新会话与无落点的被拒条目也登记排队，本轮结束照样续发
+- fix(settings): 在首页 / 新会话页重启后，撤掉重启条时把空态表面还回来
+- fix(drawer): 自主循环造成的镜像锁不在抽屉行冒充「终端运行中」
+- fix(files): 无高亮 mode 的文本文件超过 2000 行仍回 <pre>
+- fix(bridges): 投递箱认出「目录被删了又建」；卸载的递归删除只认绝对 home
+- fix(tool-cards): 展开全文超过服务端上限时说清只显示了开头和原长
+- fix(crash-notice): 分块重载途中切走时，崩溃提示不再补进切到的那个会话
+- fix(files): 写回的 relPath 不是字符串时回结构化的 bad_path，不再在范围门里抛 TypeError
+- fix(history): 重载期间那一轮跑完时，没配上结果的工具卡不判「已中止」，随后到的结果照常落上
+- fix(outbox): 永久拒收又没地方交还原文的离线条目先暂存，回到它的会话时交还
+- fix(conn-banner): 新一轮连接或换了失败原因时撤掉「等 N 分钟」的锁定文案
+- fix(acceptance): runSteps 的回显走可注入的 log，单测里不再写 stdout
+- fix(effort): CLI settings 来的思考档按「没指定」显示，发前发后都是「<档> · CLI 默认」
+- fix(git): 取 diff 再加 --no-textconv，不执行仓库配置的 textconv 驱动
+- fix(auth): 冷却期内没带凭据的请求仍回 401；server 档鉴权不变量按冷却语义更新
+- fix(task-status): 同一条后台任务完成通知只画一行、只响一次
+- fix(auth-gate): 令牌门说明不再预设「你清过浏览器数据」
+- fix(git): 改动 Tab 取 diff 时加 --no-ext-diff --no-color，不受用户 diff 配置影响
+- fix(settings): 开发者模式「重启服务」——拉不起来时不给点；服务端答应了才说正在重启；新进程连上来就撤掉那一行
+- fix(drawer): 被只读镜像锁住的会话行也标终端驾驶态
+- fix(uploads): 附件芯片、广播与落盘用同一个清洗过的名字；清洗改为幂等
+- fix(files): 没有高亮 mode 的文本文件也挂 CodeMirror，给行号与编辑
+- fix(composer): @ 点选文件插入「@路径」，与终端一致；路径含空白时加引号
+- fix(service): 告警行里的限速锁定按来源判色，本机与局域网不再与公网一样标红
+- fix(i18n): 权限档的一句话说明与状态行来源标签跟界面语言走；档名仍是 CLI 英文原名
+- fix(effort): 恢复会话的思考档只看会话自己存的与 CLI settings，不再继承同目录末个实例的档
+- fix(mirror): 正文之后的空 thinking 不再把链尾判成 pending，镜像锁不再永久不放
+- fix(models): ↻ 之前就开着的会话，之后每轮 init 不再把旧模型名写回「本目录默认模型」
+- fix(bridges): 单独卸载桥时清掉自己的 ~/.claude/ccm 命名空间；server 不再替没装桥的机器建投递箱目录
+- fix(service): 自身启动记录挪到 listen 成功之后，没真正起来的启动不再算进「重启记录」
+- fix(doctor): 两座可选桥没装时给 ℹ 提示，不再算 ⚠ 警告；settings.json 还没有时 statusline:status 不再报错
+- fix(server): 未鉴权连接的单包上限压到 64KB，握手鉴权通过后再抬回 32MB
+- fix(auth): 退避冷却期内回 429 cooldown + Retry-After，不再把没校验的正确令牌说成「令牌不对」
+- fix(approvals): 审批卡防误触延到 600ms 并用原生禁用；完整性预检不符时「允许」一直禁用
+- fix(devices): CF Access 开着时，「隧道连接不查这张表」的说明不随空列表一起隐藏
+- fix(notify): ntfy 推送的标题只留「事件 · 项目」，不带会话标题
+- fix(stream): 回合收尾时正文同步写进气泡，后台标签页里的那一端也看得到本地命令的输出
+- fix(tool-cards): 历史工具卡的截断上限对齐契约（Bash 2000），截断的卡也能「展开全文」，纯文本输出不再被误上语法色
+- fix(gates): 宿主机钩子补三处漏放、一处误拦；验收套件里的守护行不算数
+- fix(ui): 用户气泡按纯文本显示，尖括号、星号、换行与连续空格都原样保留
+- fix(a11y): 首页最近会话行、模型磁贴与「会话设置」chip 改成原生按钮，键盘与读屏够得着
+- fix: 审批过期那一轮的推送说清是过期不是出错；进程异常退出的提示切回会话后还在
+- fix(a11y): 小字与小按钮的对比度到 4.5:1（两套主题）
+- fix: 配置说明不露 markdown 加粗；安全日志的文件夹 / worktree 条目说人话；/rewind 清单不列 CLI 内部包装
+- fix(ui): 顶栏按钮热区到 44；多选确认禁用看得出来；宽表格自己横向滚动；锁定的分支胶囊点了说原因
+- fix(bridges): 桥面板说清读不了的是哪个文件；没配 statusLine 不给「开启」；装卸结果就地显示
+- fix: 回合结束行不挂累计费用、出错写「出错」；推送标签跟标题一致；ntfy 失败原因说得出；超限大小向上取整
+- fix(attachments): 新会话页上托盘的提示不再把整块面板冲掉
+- fix: 新审批即时计入「需要你」；网关报错不再当成下一步建议；编辑关闭时不给编辑入口
+- fix(drawer): 打开抽屉的入口不再开了又关；落地页上不浮着别的会话的审批卡；被挤出页的已开会话显示自己的标题和时间
+- fix(audit): 越界写入不再被入参检查抢先；读不了、已经不在的文件不再记成越界
+- fix(acceptance): 用例校验拒绝未知的 check.kind 与档位不搭的组合
+- fix(acceptance): report.md 表格先转义反斜杠再转义竖线
+- fix(folders): 清单在手机上改不了时，不在已连接的文件夹之外新建目录
+- fix(sessions): 进程意外退出不静默换会话；过期审批说清没执行、历史里没配上结果的工具行不再一直「进行中」
+- fix(outbox): 离线重发收尾：保住的气泡不留在历史上方、永久拒收交还原文、进行中横幅按时撤
+- fix(push): 测试推送如实回报 ntfy 与权限被拒，结果就地显示在设置面板里
+- fix(config): 保存配置逐项回执：被环境变量压着的项不再说成「重启后生效」
+- fix(models): 在跑的模型落在已有磁贴上、不当成用户选择发出去；胶囊不带残留后缀
+- fix(sessions): 会话行时间与无标题会话跟界面语言走；SDK 提不出摘要时标题回落首条消息
+- fix(a11y): 全屏门与收起的面板 / 抽屉不再能被 Tab 到，设置面板打开移焦、关闭还焦
+- fix(devices): 被拒设备不再自己重新进待审（CLI 拒待审即断连、被拒遮罩期不自动重连）
+- fix(auth-ui): 没有令牌时不在开页时握手；被限速锁住时横幅说清要等多久
+- fix(conn): sync:since 回执在途时断线不再把 socket.io 的重连状态卡死；「立即重试」强制重新握手
+- fix(history): 超过 2000 条的会话说清只显示了最近的多少条、一共多少条
+- fix(drawer): 「还有 N 个更早的会话」把补回的「稍后再看」行算进可见数
+- fix(outbox): 离线气泡只在有送达证据时按文字认领，stale 不再当作没写入的证据
+- fix(outbox): 同一会话清屏重载保住离线气泡，第 2 条的「重发」挂回气泡、排在历史之后
+- fix(outbox): 离线条目的归属按会话认，同一会话换了实例号后不再判成别的会话
+- fix(outbox): 同会话置换进行到一半时到达的离线重放，先等那次续接落定再判
+- fix(outbox): 离线重放的句柄被置换换了号，按入队时的会话改投该会话的活实例
+- fix(outbox): 实例句柄跨重启不复用，离线重放核对入队时的会话
+- fix(security): @ 文件搜索跑的 git ls-files 改走 childEnv，仓库 fsmonitor 读不到控制面密钥
+- fix(settings): project 层的 acceptEdits 改为照终端采纳，只拦仓库层的 bypassPermissions / auto
+- fix(settings): 新会话采纳 defaultMode 前先过 filterEscalatingDefaultMode，仓库 settings 不再能关掉审批
+- fix(approval): 普通「允许」不再顺带把会话升到 acceptEdits
+- fix(security): markdown 净化禁掉 <style> 元素，堵住按 id 改写审批按钮的劫持
+- fix(folders): 「无文件夹」新会话页不再露出点开就报越界的顶栏文件夹入口
+- fix(fork): 托管 worktree 会话里的分叉与 /rewind 改送驾驶轴，不再「会话不存在」
+- fix(resume): 规则 5 置换后才到的分叉拒收不再丢话；分叉送发送那一刻的驾驶轴 cwd
+- fix(rewind): 分叉保留方向沿父链只走本支后代，不按物理行序
+- fix(history): 选叶保护的「最新主链消息」跳过 teamName 条目
+- fix(history): SDK 选错叶子时不按当前链剪回显
+- fix: 断开确认框把子文件夹小节里在跑的会话也算上
+- fix: 首轮 sessionId 未到时点 🏠，首页不再被动态状态行顶掉
+- fix: 外置清单读不出时拒绝启动；手机上改不了清单时首页引导不给按钮
+- fix: image:get 内存命中也先过范围门；截图缓存只留图片块
+- fix(widget): 孤立代理字符退回工具卡；widget 源码上限降到 64K
+- fix(approval): Claude in Chrome 的卡片标题按来源认，不按工具名前缀
+- fix(approval): Claude in Chrome 审批卡片写出网站，「总是允许」按实际范围写
+- fix: transcript 在 history.js 以外的读写点也只认普通文件，FIFO 不再卡死镜像态、回退与 entrypoint 写入
+- fix: history.js 读 transcript 与子代理文件一律 O_NONBLOCK 打开、只读普通文件，FIFO 不再卡死读盘
+- fix: project 目录名被截断时照样认得出「无文件夹」会话与已删托管 worktree 的会话
+- fix(compose): 没勾「在新 worktree 里开」时分支胶囊锁定在当前分支，不再显示一个不会生效的分支
+- fix(service): restart --wait 端口还没在听时继续等，不再新 PID 一出现就报「连不上」
+- fix: 缺省 cwd 也过开档、归属扫描不被 FIFO 卡住、新建文件夹只撤自己建的、浏览路径统一 /（2026-10-11 review）
+- fix: ＋ 时作废上一页的 worktree 目标；project 目录名被截断时照样认得出子孙（第五轮 review）
+- fix: 撞名路径间换 cwd 的归属、子目录里删无文件夹会话、离线重放分开两个新会话页（第四轮 review）
+- fix(folders): 仓库外的 worktree 不再随仓库授权，要显式连接（照官方桌面端）
+- fix(sessions): 编码撞名的 project 目录按 transcript 记的 cwd 分开列、分开打开
+- fix(sessions): 无文件夹会话搬进 scratch 目录下的 worktree 后，那一节和那条会话都还在
+- fix(web): 判「在不在某目录下」两种分隔符都认（原生 Windows 上的选择器与无文件夹）
+- fix(server): 新会话页选中 worktree 时，空页的默认档位与默认模型按 worktree 取
+- fix(folders): 两侧一起伪造的 worktree 元数据，不能把范围扩到家目录、上级目录或禁区
+- fix(agent): SDK 会话跟随终端的 Chrome「默认启用」，下发 --chrome
+- fix(worktree): 防重名后缀用满 4 位 base-36，不把撞名空间缩到 65536
+- fix(home): 首页项目胶囊一个项目一个，worktree 与「无文件夹」的会话不再各占一个
+- fix(outbox): 离线重放里改投过的消息，重新入队和「重发」都按改投后的目标走
+- fix(folders): 在 worktree 上开的新会话，首条消息开在 worktree 里而不是它所属的仓库
+- fix(no-folder): 按 cwd 的请求不再拿 scratch 根去问，服务端也不再把它记成越界
+- fix(files): 写回只认当前授权——文件夹移出清单后可看、不可直写
+- fix(scope): 授权链上的 realpath 统一用 .native，macOS 上换个大小写不再绕过禁区
+- fix(folder-access): 读仓库侧 gitdir 前确认是普通文件，FIFO 不再卡死整个进程
+- fix(scratch): 删「无文件夹」会话时按整棵子树判「在用」，不再误删正在用的子目录
+- fix(send): 在线发送没被确认、转入重发时带上 worktree 意图
+- fix(folder-picker): 「无文件夹」「添加文件夹」挪到已连接文件夹之上
+- fix(drawer): 「添加文件夹」挪到文件夹清单之上
+- fix(folders): 已显式连接的平级 worktree 浏览时说「已经连接」，不说「请添加仓库」
+- fix(scope): 路由代次、当前指针、空首页暂存档位统一按项目轴归键
+- fix(drawer): 在跑的会话永远有一行，不再依赖 session:list 返回它
+- fix(agent): 会话中途 EnterWorktree 后驾驶轴改认主链 tool_use_result
+
+### Other
+- test: 修 playground 浏览器 E2E 的 HSTS 红与 idempotency 第 2 条用例
+- docs(testing): 宿主机真跑集成时关掉 hooks / statusline 两个桥
+- docs(testing): 写明真 turn 集成的宿主机跑法，S4 落到 playground/e2e
+- docs: 按全量文档 review 修正与代码不符的描述
+- test(files-scope): 越界审计用例改为轮询落盘，不再固定睡 300ms
+- refactor(ui): 手机界面里指文件夹的「工作区」统一叫「文件夹」，对齐官方桌面端
+- perf(3a): 历史分两次传——先最近 300 条，更早那段和画最近一段同时在路上
+- test(gates): 图 12 已改成 17 道门禁，这条断言从 PENDING_CLAIMS 挪回 CLAIMS
+- chore(dist): tailwind.config.js 不进 master 源码归档
+- perf(4a): 回显增量解析——文件只往后长、新写的接在链尾时只解析新长的那截，不再求链
+- perf(3b): 点开非活会话时历史和切换并行拉，sync:since 报的条数对得上就直接画
+- perf(2d): 首页最近会话按工作区先到先画；列表缓存改按目录内容指纹失效，12s 重验不再整目录重扫
+- perf(3d): 回显与续接判定共用一个逐行扫描引擎，退回不剪不再重读，同一份文件在建时并入
+- perf(2b): index 的 head 里预载整张模块图（modulepreload），冷启动不再一层一层发现 import
+- perf(3a): 打开长会话先画最近一段，更早的在空闲里补到前面
+- perf(2a): 带当前版本戳的 /js、/css、/vendor 回一年 immutable，热启动不再逐个 304 重验
+- perf(3c): 续接分叉判定移出切换关键路径，session:list 预热 L3 settings
+- perf(1c): head 脚本全部 defer，CodeMirror 改为打开文件时按需加载，socket.io 换压缩版
+- perf(1b): Tailwind 改用 CLI 预编译，去掉浏览器里的运行时编译
+- perf(1a): 工具卡输入块直接按 JSON 高亮，不再交给 hljs 自动识别
+- perf(stage0): 启动和打开会话的各段耗时写进客户端日志
+- docs(claude-md): PR 合进 dev 后删掉它的 worktree 和分支
+- test: 补齐 #473 历史迁移与归属回归
+- test(history): 补齐同会话实例置换与持续抛错断言 (#307)
+- test: await send acknowledgement before rewind busy checks
+- test(e2e): P0-15k 改成确定性时序，不再赌真实时间窗口
+- test(mcp): elicitation 的 TTL 用例改用 awaitTtlSettled，修 Node 20 上连带取消
+- refactor(frontend): 键盘 visualViewport inset 适配迁出 app.js
+- refactor(frontend): composer 控件（模型 / 权限 / 思考强度磁贴、斜杠与 @ 候选）迁出 app.js
+- refactor(frontend): 会话侧栏迁出 app.js
+- refactor(frontend): 空状态表面与 composer / 顶栏 pill 显隐联动迁出 app.js
+- refactor(frontend): web 状态栏渲染迁出 app.js
+- refactor(frontend): 日志抽屉与服务状态类面板迁出 app.js
+- test(style): console 色板单测跟上 tw-config 的 token() 写法
+- test(smoke): runner 起的 server 关掉两个 CLI 桥，不和同机生产 server 抢投递箱
+- refactor(doctor): settings 读取改用 SDK resolveSettings，与设置面板同源
+- refactor(scout): 不落盘改用 persistSession:false，删掉按 sid 手工 unlink 的 transcript 清理
+- perf(usage): 额度拉取传 skipBehaviors，停掉每次的近 7 天 transcript 扫盘
+- chore(deps): 清掉 dev 上 npm audit 报的 5 个间接依赖漏洞（2 高 3 中）
+- test(gates): 图 00 断言随 SDK 升级改为 0.3.310
+- chore(deps): bump jose from 6.2.12 to 6.2.13
+- chore(deps): bump @anthropic-ai/claude-agent-sdk from 0.3.302 to 0.3.310
+- chore(deps): bump dotenv from 18.0.8 to 18.0.9
+- Revert "fix: make drawer unread chip a visible mark-as-read control"
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- test: drop the duplicated #400/#382 option-card tests
+- docs: describe the real #388 window in approval routing comments
+- chore(deps): bump express from 5.2.1 to 5.3.0
+- test: rewrite i18n E2E for confirm-then-write
+- test: align P0-11aa with retained sessionsDot after drawer close
+- ci(e2e): Playwright 产物上传捞空时不再出 warning
+- ci(e2e): 汇总 job 报地板提醒并写 run 摘要（只出 warning，不红）
+- ci: 两个最大的 e2e spec 按主题拆开，分片 12→14，server 不变量层并发 6
+- ci(e2e): 字体走缓存不碰 apt，浏览器只装 headless shell，分片 8→12
+- docs(deployment): 排错表补 WebAPK 装成 shortcut 的两个手机侧原因
+- test(settings): P0-RESET-4「取消没有副作用」不比 ccm_client_logs
+- perf(lint): eslint 开 --cache，并忽略 .claude/worktrees/**
+- test(settings): L1 目录改成七行——#303 加了「关于」页，P0-28g 还钉着六行
+- test(e2e): P0-PICK-18 的「已连接文件夹可选」断言打在行内主按钮上（#340 review）
+- docs(acceptance): AC-23-09 的环境补上 E3（PR #338 review）
+- docs(acceptance): R10 首跑的三条用例写回档位与判法（AC-03-13、AC-23-09、AC-23-10）
+- docs(readme): 徽章行加 DeepWiki 入口
+- docs(agent): CLAUDE.md 瘦身为每轮必需的硬规则，按目录的细则拆进 .claude/rules/
+- ci(e2e): 同一 run 的 8 个分片共用同一份时长缓存
+- style(mirror): busyScan 不给用不上的初值（no-useless-assignment）
+- docs(effort): 「CLI 自读 settings、实际档不变」只在非 worktree 成立
+- docs(effort): 写明 L3 档「照样下发 --effort」以读到 settings 为前提（O117）
+- test(drawer): P0-LIVE-4 断言关掉的会话行整行消失，不只是不带 ✕
+- test(e2e): 侧栏常驻时关掉只在活实例里的行，行要当场消失（O104 回归用例）
+- test(e2e): P0-PICK-5 等抽屉里的按钮进了视口再点（#314 引入的时序红）
+- chore: 更正上一个提交 Tested trailer 里的单测数字
+- ci(windows-trial): 临时诊断 step，定位 device-gate 在 Windows 上挂死的用例
+- ci: 加 windows-latest 试跑 job（不进 required checks）
+- test(e2e): folder-picker 抓 user:message 也解析 polling 阶段的 HTTP POST
+- test(gates): 图 00 断言随 SDK 升级改为 0.3.302
+- test(e2e): 放过 Chrome 156 在 DOMPurify 解析阶段报的 inline handler CSP 违规
+- chore(deps-dev): bump @playwright/test from 1.63.0 to 1.64.1
+- chore(deps): bump @anthropic-ai/claude-agent-sdk from 0.3.301 to 0.3.302
+- test(integration): 端口改由 server 自己 listen(0)，消掉起 server 前的抢占窗口
+- chore(deps): 清掉 dev 上 npm audit 报的 hono 中危告警
+- test(drawer): P0-11au 用哨兵确认栅栏已被处理再计数；理清方案 F 与桌面端 status 的注释
+- test(attachments): 补 P0-18o，守住托盘换面时撤掉提示的那一半
+- test(models): 补同代 scout 探测外部清单变化的集成用例，单测逐条注入验红
+- test(push): 并发用例改成双向屏障，任一种串行顺序都会红；push:test 注释按并发改准
+- chore(deps-dev): bump eslint from 10.12.0 to 10.13.0
+- chore(deps): bump dotenv from 18.0.5 to 18.0.8
+- chore(deps-dev): bump globals from 17.12.0 to 17.13.0
+- test(e2e): P0-DESTROY-CRASH2 改成排队手动放行 idle 回调，不再和定时器赛跑
+- test: 编号表里查不到的验收用例从 invariants 挪到 unit
+- test(e2e): P0-DESTROY-CRASH2 的前提只认历史提示里共有的「2000 条历史消息」
+- refactor(models): 「选过模型」的发送意图收进 app/model-intent.js
+- test(e2e): P0-05-UNPAIRED 两条手写开页也预置令牌，跟上 dev 上 mock 拒绝无令牌握手
+- test(e2e): 抓 user:message 帧时也解析 polling 阶段的 HTTP POST
+- test(e2e): P0-I18N-ROWS 手写开页也预置令牌，跟上 dev 上 mock 拒绝无令牌握手
+- test(e2e): mock 场景抛错记账，E2E 收尾断言为空，触发它的用例必红
+- test(e2e): 两条重连用例改号 P0-02q/P0-02r，避开 dev 上已有的 P0-02j/P0-02k
+- test(e2e): 还原上一提交误改的 dev 原有用例编号 P0-11ai（只有 O86 那条改成 P0-11ar）
+- test(e2e): O34 用例改号 P0-18k，避开已占用的 P0-18j
+- test(e2e): O86 用例改号 P0-11ar，避开已占用的 P0-11ai
+- test(e2e): O83 用例改号 P0-20i，避开 #225 已占用的 P0-20f
+- test(e2e): O5 用例改号 P0-20h，避开 #225 已占用的 P0-20f/g
+- test(e2e): mock 场景抛错只让触发它的用例失败，不再拖垮整片；后台完成场景不依赖前台实例
+- test(e2e): mock 丢弃上一条用例里没跑完的场景尾巴，修 P0-SYNC-ACK-TIMEOUT 的间歇红
+- docs(acceptance): 更正三条用例的前置与通过标准
+- docs: 查新版本的命令按版本号排序；不再写「::1 也免设备审批」；别名清洗措辞对齐实现
+- test: 按会话认的归属用例挪进 MSG-02 的 invariants，unit 里只留界面细节
+- test(e2e): P0-02d4 只守「提示进了当前会话的消息流」，标题与断言说明按实测改准
+- docs: 续接锚点（谁最后重贴 last-prompt 谁说了算）、订正单驾驶员规则 5、README 用法约定
+- chore(deps): Agent SDK 0.3.300 → 0.3.301
+- chore(deps): Agent SDK 0.3.281 → 0.3.300
+- docs(upstream-watch): A 类补上本仓在用、原先漏列的几块
+- docs(ci): 改正 dependabot 安全更新的路由说法——target-branch 管不到它们
+- chore(deps): 清掉 dev 上 npm audit 报的 6 个间接依赖漏洞
+- refactor: 清单的来源与找不到的个数移出组装根，进 workdirs.js
+- docs(architecture): 写明 show_widget 来自 Claude 官方桌面端
+- docs(architecture): 补 show_widget 图表的事件通道与渲染
+- docs(getting-started): 补「从 v1.13.0 升级：已连接的文件夹」
+- test(e2e): 刻意断网期间 socket.io 的重连轮询失败不算浏览器错误
+- chore(deps): bump dotenv from 18.0.1 to 18.0.5
+- chore(deps-dev): bump eslint from 10.11.0 to 10.12.0
+- chore(deps): bump actions/download-artifact from 7 to 8
+- chore(deps-dev): bump socket.io-client from 4.8.3 to 4.8.4
+- chore(deps): bump socket.io from 4.8.3 to 4.8.4
+- docs(getting-started): 「添加文件夹」在抽屉顶部；讲清哪些连不上、哪些只是手机上加不了
+- test(folders): 补上两处空着的守护——server 的禁区清单、mkdir 后的 realpath 复核（并修复核误删）
+- chore(worktree): 防重名后缀改用 crypto，止住 CodeQL insecure-randomness 同一误报的反复重报
+- test(e2e): P0-40c 补浏览器错误断言
+- test(smoke): permission-modes 批准时回显 op 并路由回本实例
+- test: 补上变异检查在本分支新代码上抓出的四处空过
+- docs: 文档与外围改成「已连接的文件夹」语义；卸载 --purge 只报 scratch 根
+- chore(deps): 升级 @anthropic-ai/claude-agent-sdk 0.3.278 → 0.3.281
+
+**Full Changelog**: https://github.com/Ike-li/claude-chat-mobile/compare/v1.13.0...v1.14.0
+
 ## v1.13.0 — 2026-09-24
 
 Changes since v1.12.1.

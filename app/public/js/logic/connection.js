@@ -9,6 +9,7 @@
 
 import { t, tk } from '../i18n.js';
 import { formatUptime } from './format.js';
+import { normalizeMessageTs } from './message-time.js';
 
 // 长会话切入分块渲染的推进数学：给定已处理条数/总数/块大小，算出这一块的结束位置与是否处理完。
 // chunkSize<=0 防呆到至少推进 1 条，避免调用方传入非法值时死循环。
@@ -17,9 +18,64 @@ export function nextHistoryRenderChunk({ processed, total, chunkSize }) {
   return { end, done: end >= total };
 }
 
+// 回合边界 = 主链用户文本。tool_result 也是 role=user，子 agent 的条目带 parentToolUseId / isSidechain，都不算
+const isTurnStart = msg => msg?.role === 'user' && !msg.kind && !msg.parentToolUseId && !msg.isSidechain;
+
+// 渲染时靠同一个 key 串起来的条目：tool_use↔tool_result 走配对表，子 agent 条目路由进 parentToolUseId 那张卡
+// （只带 isSidechain 的旧形态共用「sidechain」卡），卡建在首次出现处。口径同 app.js renderHistoryBubbles
+function renderKeysOf(msg) {
+  const keys = [];
+  if (msg?.toolUseId) keys.push(msg.toolUseId);
+  if (msg?.parentToolUseId) keys.push(msg.parentToolUseId);
+  else if (msg?.isSidechain) keys.push('sidechain');
+  return keys;
+}
+
+// 长会话切入先画最近一段：返回切点 cut，msgs[cut] 是一条主链用户消息，最近段 msgs[cut..] 至少 minRecent 条。
+// cut = 0 表示不切，整段照旧一次画完。
+// 早段是后画的，所以任何 key 都不能一头在切点前、一头在切点后：配对会找不到卡，子 agent 卡会建在最近段里。
+// suffix：msgs 只是历史的最近一段，更早的那段最后才接到最前面。某个 key 在这段里首次出现的不是开它的 tool_use，
+// 开它的那条就在更早那段里，按从段首之前就开着算；段里切点前没有打戳的气泡也不切，seedPrevTs 在更早那段里。
+export function historyRenderSplit(msgs, minRecent, { suffix = false } = {}) {
+  const list = Array.isArray(msgs) ? msgs : [];
+  const first = new Map();
+  const last = new Map();
+  list.forEach((msg, i) => {
+    for (const key of renderKeysOf(msg)) {
+      if (!first.has(key)) first.set(key, suffix && !(msg.kind === 'tool_use' && msg.toolUseId === key) ? -1 : i);
+      last.set(key, i);
+    }
+  });
+  // 切点 c 落在某个 key 的 (首次, 末次] 里就会把它切断；差分数组一遍算出每个位置被几个 key 跨着
+  const crossing = new Array(list.length + 1).fill(0);
+  for (const [key, from] of first) {
+    const to = last.get(key);
+    if (to > from) { crossing[from + 1]++; crossing[to + 1]--; }
+  }
+  for (let i = 1; i < crossing.length; i++) crossing[i] += crossing[i - 1];
+  for (let i = list.length - Math.max(1, minRecent | 0); i > 0; i--) {
+    if (!isTurnStart(list[i]) || crossing[i] !== 0) continue;
+    const seedPrevTs = lastStampedTsBefore(list, i);
+    if (!suffix || seedPrevTs != null) return { cut: i, seedPrevTs };
+  }
+  return { cut: 0, seedPrevTs: null };
+}
+
+// 只有主链文本气泡打时间戳（口径同 renderHistoryBubbles 的 stampIntoFrag）；null = 前面一条都没有，即会话首条
+function lastStampedTsBefore(list, end) {
+  for (let i = end - 1; i >= 0; i--) {
+    const msg = list[i];
+    if (msg?.kind || msg?.isApiErrorMessage || msg?.parentToolUseId || msg?.isSidechain) continue;
+    const ts = normalizeMessageTs(msg?.timestamp);
+    if (ts != null) return ts;
+  }
+  return null;
+}
+
 // 全量重载时，未确认乐观气泡该由哪条历史消息认领（否则 null）。
 // clearView 保住的气泡 + 已入 transcript 的同一条会撞成两颗。
 // 判据与 handle.user_message 的 matchedBubble 对齐；历史没有 clientMessageId，按内容从后往前认。
+// 交给 outbox 的气泡该不该进这里，先过 logic/outbox-send.js 的 canTextClaimPendingBubble。
 export function findHistoryClaimForPending({ text = '', attNames = '', messages = [] } = {}) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
   const wantText = String(text ?? '');
@@ -67,15 +123,17 @@ export function foregroundReconnectAction(connected) {
 //   t≈235  socket.connect() 撞进那把还没过期的锁 → 被拒且报「尝试过多」
 // 服务端的说法已单独修正（rate-limiter.js 的 gateCheck 区分冷却/长锁），这一层管住触发源。
 //
-// 两条判据，方向都是「宁可不连」：
+// 三条判据，方向都是「宁可不连」：
 //   · 凭据门开着（令牌门 / Access 重登门）：用户还没交出凭据，重连必然失败，唯一效果是把退避
 //     越推越长（500ms→1s→2s→…→30s），切够 8 次标签页就是 15 分钟长锁——纯粹的自伤。
 //     此时唯一正确的入口是用户按下「进入」（submitAuth 自己 connect），不是后台替他试。
 //   · persisted === false：pageshow 的普通加载分支。那一刻 io() 刚刚连过，再连一次没有任何
 //     新信息，只会紧贴着首次失败补一枪。只有 persisted === true（真·bfcache 恢复，页面被冻过、
 //     socket 多半已死）才是这个监听器的本意。其余入口不传 persisted，走默认 null 正常重连。
-export function shouldAttemptReconnect({ authGateOpen = false, accessReloginOpen = false, persisted = null } = {}) {
-  if (authGateOpen || accessReloginOpen) return false;
+//   · 「设备未获授权」遮罩开着：设备已被拒，重连握手会让它重新进待审、机主又收到一条「新设备请求接入」。
+//     遮罩上的「重新请求接入」按钮自己 connect，那是唯一该发起握手的入口。
+export function shouldAttemptReconnect({ authGateOpen = false, accessReloginOpen = false, deviceDeniedOpen = false, persisted = null } = {}) {
+  if (authGateOpen || accessReloginOpen || deviceDeniedOpen) return false;
   if (persisted === false) return false;
   return true;
 }
@@ -87,10 +145,19 @@ export function shouldAttemptReconnect({ authGateOpen = false, accessReloginOpen
 // 既看不懂也不知道要等多久，于是用户反复点重连，而每一次都只是撞在刚上的那把锁上。
 //
 // kind 与文案分开：'unauthorized' 归令牌门处理（它要弹输入框，不是显示一句话），
-// 其余两类才由调用方拿 text 去刷状态行。
+// 其余几类才由调用方拿 text 去刷状态行。
+//
+// 'cooldown'（验收 O83）：同一来源刚有一次登录失败，服务端在退避短锁里，这次的令牌根本没校验。
+// 既不是「令牌不对」也不是「尝试过多」——调用方拿 retryAfterMs 到点自动重试一次。
 export function describeHandshakeError(err) {
   const message = String(err?.message ?? '');
   if (message === 'unauthorized') return { kind: 'unauthorized', text: t('需要访问令牌') };
+  if (message === 'cooldown') {
+    const ms = Number(err?.data?.retryAfterMs);
+    const retryAfterMs = Number.isFinite(ms) && ms > 0 ? ms : 1000;
+    const secs = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    return { kind: 'cooldown', retryAfterMs, text: t('刚有一次登录失败，{n} 秒后自动重试').replace('{n}', String(secs)) };
+  }
   if (message !== 'rate_limited') {
     // 网络抖动之类：保留原始信息，它是排查时唯一的线索（对用户没意义，但比空白强）。
     return { kind: 'other', text: `${t('连接失败：')}${message || t('未知错误')}` };
@@ -120,10 +187,16 @@ export const CONN_BANNER_RECONNECTED_LINGER_MS = 1600; // 「已重新连接」�
 // phase：'connecting'（从未连上过）| 'offline'（连上过又断了）| 'online'
 // elapsedMs：当前 phase 已持续时长；suppressed：鉴权门/Access 重登门打开中（全屏页与横幅不能并存）
 // wasVisible：进入 online 那一刻横幅是否可见——决定要不要给「已重新连接」，秒连不该闪绿条
+// blockedText：握手被防暴破长锁拦下时给人看的话（describeHandshakeError 的 text，已是当前语言、带分钟数）。
+//   未连上时立刻显示、不转圈（没有在自动重连）、保留重试（锁期内重试不计数，锁过了点一下就能进）。此前这句话
+//   只写进恒隐藏的状态元素，屏幕上只有「连接中…」，用户会以为服务挂了（验收 O22）。t(已翻译的句子) 原样返回。
 // 返回 null（不显示）或 { tone, label, detail, spinner, retry }；label 是 tk() 标记的中文原文（key），接线层才 t()
-export function resolveConnectionBanner({ phase, elapsedMs, suppressed = false, wasVisible = false } = {}) {
+export function resolveConnectionBanner({ phase, elapsedMs, suppressed = false, wasVisible = false, blockedText = '' } = {}) {
   if (suppressed) return null;
   if (typeof elapsedMs !== 'number' || !Number.isFinite(elapsedMs) || elapsedMs < 0) return null;
+  if (blockedText && (phase === 'connecting' || phase === 'offline')) {
+    return { tone: 'warn', label: blockedText, detail: '', spinner: false, retry: true };
+  }
   if (phase === 'connecting') {
     if (elapsedMs < CONN_BANNER_CONNECTING_DELAY_MS) return null;
     // 首连不报「已断开 N 秒」：从没连上过，无「断开」可言
@@ -216,6 +289,30 @@ export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, disk
   if (diskExternalLen > seenDiskLen) return 'reload';
   if (replayed > 0) return 'keep';
   return 'keep';
+}
+
+// 点开非活会话时，session:history 和 session:switch 在点击那一刻并行发出（预取）；bindView 的 sync:since
+// ack 回来后由这里判预取那份还能不能直接画。判据是上面 'keep' 的 diskLen ≤ seenDiskLen 收紧成相等：
+// 两次读盘之间终端可能写过（变长），rewind 也可能截过（变短），这份还没画过，短了同样不能当最新。
+// diskExternalLen 不用另查：它和 diskLen 出自 server 同一次读盘，条数相等时它不可能越过预取的末尾。
+// diskLen 为空（replayed>0 时 server 不读盘）就看不出磁盘变没变，照常重新拉。
+// 截顶的窗口（磁盘到了 2000 条）光比条数不够：两次都只读回最近 2000 条，终端写过条数照样相等；
+// 而镜像引擎切入时以当时的磁盘长度定基线、不推，画了旧窗口，中间那几条要等终端再写一条、满窗滑动整窗替换才补上。
+// 所以截顶时再比削顶前的总条数（sync:since 的 diskTotal 对预取回执的 total）；没报 diskTotal（后端还没重启的旧版）
+// 就核对不了，照常重新拉。
+// 与 app/src/sessions/history.js 的 HISTORY_MAX_MESSAGES 同值（前后端互不 import，单测对齐两边）。
+export const HISTORY_WINDOW_MAX = 2000;
+// session:history 先传的最近一段有多少条（server 的 historyPage 切），更早的那段另要。2026-10-31 量过最大的 25 份
+// 真实 transcript：300 条压缩后 33–89KB（整窗 316–481KB），其中 21 份能在这段里切出先画的最近段（historyRenderSplit 的 suffix）
+export const HISTORY_TAIL_FIRST = 300;
+export function prefetchCheckable(diskLen, diskTotal) {
+  return Number.isInteger(diskLen) && (diskLen < HISTORY_WINDOW_MAX || Number.isInteger(diskTotal));
+}
+export function prefetchedHistoryFits({ diskLen, diskTotal, err, res } = {}) {
+  if (err || res?.error || !Array.isArray(res?.messages)) return false;
+  // 预取带了 tail 的回执只有最近一段，窗口条数在 res.diskLen；旧 server 不认 tail，交的就是整窗
+  if (!prefetchCheckable(diskLen, diskTotal) || (res.diskLen ?? res.messages.length) !== diskLen) return false;
+  return diskLen < HISTORY_WINDOW_MAX || res.total === diskTotal;
 }
 
 // 修「切回会话停在旧位置 + 内容一条条冒出来像重播」：shouldReloadOnEnter 的 'keep' / syncAckAction 的
@@ -312,6 +409,39 @@ export function shouldAckUnreadOnScroll({
   return shouldStickScrollToBottom({ scrollHeight, scrollTop, clientHeight });
 }
 
+// 「回到最新」悬浮钮（#376）：与未读胶囊分层——未读是「离开期间没看过，看过即清」；
+// 本钮是「我现在不在底部」。上翻读历史的人并没有未读，不能合成一颗。
+// 显示条件是 stick 判据的反面：距底 ≥ threshold（默认 120，与 shouldStickScrollToBottom 对齐）。
+export function shouldShowScrollToBottom({
+  scrollHeight, scrollTop, clientHeight,
+  threshold = 120,
+} = {}) {
+  const dist = Number(scrollHeight) - Number(scrollTop) - Number(clientHeight);
+  return Number.isFinite(dist) && dist >= threshold;
+}
+
+// 自离开底部以来新增的顶层气泡数。baseline 在「刚离开底部」时钉死；脏输入回 0。
+export function resolveScrollToBottomNewCount(baselineCount, currentCount) {
+  // null/undefined 必须先挡：Number(null)===0，会把「尚未钉基线」算成从 0 起的假新增。
+  if (baselineCount == null || currentCount == null) return 0;
+  const base = Number(baselineCount);
+  const cur = Number(currentCount);
+  if (!Number.isFinite(base) || !Number.isFinite(cur)) return 0;
+  return Math.max(0, Math.floor(cur) - Math.floor(base));
+}
+
+// 按钮文案：有新增顶层气泡写「N 条新内容」，否则「回到最新」。不上报 ackUnread、不改角标。
+export function formatScrollToBottomLabel(newCount = 0) {
+  const n = Number(newCount);
+  if (Number.isFinite(n) && n > 0) {
+    const shown = n > 99 ? '99+' : String(Math.floor(n));
+    const text = t('{n} 条新内容').replace('{n}', shown);
+    return { text, ariaLabel: text, hasNew: true };
+  }
+  const text = t('回到最新');
+  return { text, ariaLabel: text, hasNew: false };
+}
+
 // 同 sessionId 的 DOM 缓存恢复策略：已完成的对话/工具卡片按会话不可变，与当前 instanceId 无关。
 // instance 会因 effort/model 切档被 dispose+open 换新（新 epoch/seq 空间），但历史 DOM 仍可秒恢复；
 // 仅当「缓存归属实例 === 当前实例」时才复用 lastSeq/epoch 做增量续传，否则 seq 从 0 跟新实例，
@@ -360,15 +490,6 @@ export function isRestoredBoundary(prevEntry, entry) {
   return !!prevEntry?.restored && !entry?.restored;
 }
 
-// 长按历史气泡「从这里分叉」该发哪条消息的 uuid 给 forkSession（upToMessageId）：
-// assistant 气泡 = 分叉点就是它自己；user 气泡故意不用自身 uuid，而是取它前面最近一条 assistant 的
-// uuid——语义是「从这里开始重新问」（新会话里下一步就是重新打字），而非把这条提问原样复制进新会话末尾。
-// DOM 侧负责找 precedingAssistantUuid（沿 previousElementSibling 回溯），本函数只做决策、不碰 DOM。
-export function resolveForkAnchorUuid({ role, ownUuid = null, precedingAssistantUuid = null } = {}) {
-  if (role === 'assistant') return ownUuid || null;
-  return precedingAssistantUuid || null;
-}
-
 // 页面是否从「本地/局域网/隧道内」打开——决定 unauthorized 时有没有 token 门可弹。
 // 100.64.0.0/10 是 Tailscale 用的 CGNAT 段（正则精确到 /10，不放整个 100/8：100/8 其余部分是可路由公网）。
 // `.ts.net` 是同一件事的域名那半：MagicDNS 开着时手机上输入的是 `<主机名>.<tailnet>.ts.net`，
@@ -395,4 +516,12 @@ export function isLanOrLocalHostname(h) {
 // 唯一合法的「已启用」是 === '1'；dataset 缺失（替换没匹配上）同样落 token 门，失败方向必须有门可弹。
 export function authFailurePath({ lanOrLocal, cfAccessFlag } = {}) {
   return (lanOrLocal || cfAccessFlag !== '1') ? 'token-gate' : 'access-relogin';
+}
+
+// 开页时要不要发起握手。走令牌门的路径上没有令牌，握手必然被拒，而服务端把每一次都记成鉴权失败——
+// 新用户找令牌时反复打开 App，第 8 次就被锁 15 分钟，之后带正确令牌也 429（验收 O20）。
+// 判据与 authFailurePath 同一份：只有「公网 + Access 已启用」那条路不需要令牌（凭边缘注入的 JWT）。
+export function shouldHandshakeOnBoot({ token, lanOrLocal, cfAccessFlag } = {}) {
+  if (token) return true;
+  return authFailurePath({ lanOrLocal, cfAccessFlag }) === 'access-relogin';
 }

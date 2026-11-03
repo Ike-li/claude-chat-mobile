@@ -31,7 +31,7 @@ test.describe('resolveDeepLinkTarget：通知深链落地策略', () => {
   });
 });
 
-// instanceId 是进程内计数器（inst_${++counter}），server 重启即从 inst_1 重新发号 —— 「同号」≠「同会话」。
+// instanceId 曾是进程内计数器，server 重启即从 inst_1 重新发号（2026-10-16 起跨重启不复用，MSG-02）—— 「同号」≠「同会话」。
 // 重启后点一条留在通知栏的旧通知会落进另一个项目的会话，用户以为在 A 实际在 B，后续发消息/授权全是错投。
 test.describe('resolveDeepLinkTarget：instanceId 复用后必须靠 sessionId 兜底', () => {
   test('同 instanceId 但 sessionId 不符 → 不当 live，走 session:switch 精确定位', () => {

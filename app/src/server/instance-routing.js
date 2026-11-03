@@ -9,6 +9,7 @@
 //   - 显式命中 live                     → { id: <该 id>, stale: false }
 //   - 显式但不在 live（含空串等非 null 假值）→ { id: null, stale: true } 目标已失效，调用方应负 ACK / no-op，
 //                                          【绝不】回退 viewing、【绝不】懒开新实例
+//                                          （离线重放带着会话时可改投该会话的活实例，见下方 liveInstanceOfSession）
 //
 // 缺省且无 viewing（首发 / 无 open tab）返回 { id: null, stale: false }：id 为空但非 stale，调用方据 stale=false
 // 走懒开而非拒绝。据此 { id:null } 的两种成因（缺省无 viewing vs 显式 stale）由 stale 字段区分。
@@ -19,13 +20,67 @@
 // 给离线 outbox 重发用：它携带的 instanceId/cwd 是【入队时刻】的快照，而服务端 viewing 在断线期间
 // 可能已经换了会话——此时回退等于把一条旧消息投给它从没指向过的会话。交互式首发不传此项：
 // 那条路径上服务端 viewing 就是用户眼下看的，回退才是正确行为。
+//
+// opts.expectedSessionId（非空字符串才算）+ opts.sessionOf(id)：显式命中活实例时再核对它此刻跑的会话（MSG-02）。
+// 离线重放带着入队时那个会话，实例对得上号、跑的却不是它（重启前的旧号、/clear 换了会话）→ 与「已不在」同样 stale。
+// 实例还没有会话而条目有，同样判 stale：客户端只可能从服务端得知 sessionId，而实例的 sessionId 有了就不会变回空。
+//
+// opts.liveInstanceOfSession(sessionId) → 该会话此刻的活实例 id（没有就 null）。只有离线重放传它：句柄失效或指着
+// 别的会话、而入队时那个会话还开着时，改投它 → { id, stale:false, followed:true }。会话没关，只是换了进程——
+// 规则 5 置换、切 effort 都是 dispose + resume，换号不换会话；同一批离线消息的第 1 条触发了置换，后面各条还拿着
+// 旧号（2026-10-16 review P2）。没有活实例（空闲回收了、用户关掉了）照旧 stale：不替用户把会话重新拉起来。
+// 改投之后与客户端直接拿着那个实例的句柄来发同路，下游的规则 5 置换、续接分叉闸、在途轮闸照样过。
+// 本函数只看此刻登记着的实例：置换进行到一半（旧实例已移出、新实例还没登记）时它查不到，调用方（user:message）
+// 在落 stale 之前先等同会话在途的续接（resumeInFlight）落定，再调一次。
 export function resolveInstanceTarget(requestedId, viewingInstanceId, isLive, opts = {}) {
   if (requestedId == null) {
     if (opts.allowViewingFallback === false) return { id: null, stale: false };
     return { id: viewingInstanceId ?? null, stale: false };
   }
-  if (isLive(requestedId)) return { id: requestedId, stale: false };
+  const expected = typeof opts.expectedSessionId === 'string' && opts.expectedSessionId ? opts.expectedSessionId : null;
+  if (isLive(requestedId) && (!expected || opts.sessionOf?.(requestedId) === expected)) {
+    return { id: requestedId, stale: false };
+  }
+  const followed = expected ? (opts.liveInstanceOfSession?.(expected) ?? null) : null;
+  if (followed) return { id: followed, stale: false, followed: true };
   return { id: null, stale: true };
+}
+
+// 新会话页（composeId）→ 它的首发开出来的实例（验收 O107）。服务端 viewingInstanceId 是全局单值，新会话页
+// 的后续消息在 instances 广播到达之前、或离线重放时仍不带 instanceId——按 composeId 落回这一页自己开的实例，
+// 而不是回退全局 viewing。只留最近 max 页（每个新会话页一条，常驻进程里会一直攒）。
+// 实例没了（关闭、空闲回收、置换）而它已经有了会话：resumeOf 给出那个会话与实例最后的驾驶目录，调用方在那里续接它，
+// 不另开一个没有前文的新会话（#328 review）。会话 id 要等首轮 init 才有，经 noteSession 记进来；那之前就没了的当没开过。
+// 驾驶目录经 noteCwd 跟着 EnterWorktree / ExitWorktree 走——transcript 随它迁，而 sessions.json 里的 cwd 不变。
+export function createComposeRegistry({ max = 100, isLive = () => false } = {}) {
+  const byCompose = new Map(); // composeId → { instanceId, sessionId, cwd }
+  const update = (instanceId, patch) => {
+    for (const entry of byCompose.values()) {
+      if (entry.instanceId === instanceId) Object.assign(entry, patch);
+    }
+  };
+  return {
+    lookup(composeId) {
+      const entry = composeId ? byCompose.get(composeId) : undefined;
+      return entry && isLive(entry.instanceId) ? entry.instanceId : null;
+    },
+    resumeOf(composeId) {
+      const entry = composeId ? byCompose.get(composeId) : undefined;
+      return entry?.sessionId ? { sessionId: entry.sessionId, cwd: entry.cwd } : null;
+    },
+    remember(composeId, instanceId, sessionId = null, cwd = null) {
+      if (!composeId || !instanceId) return;
+      byCompose.delete(composeId);
+      byCompose.set(composeId, { instanceId, sessionId: sessionId || null, cwd: cwd || null });
+      if (byCompose.size > max) byCompose.delete(byCompose.keys().next().value);
+    },
+    noteSession(instanceId, sessionId) {
+      if (instanceId && sessionId) update(instanceId, { sessionId });
+    },
+    noteCwd(instanceId, cwd) {
+      if (instanceId && cwd) update(instanceId, { cwd });
+    },
+  };
 }
 
 // allowViewingFallback=false 的另一半：关掉实例回退后 outbox 重发会落到懒开分支，而那里的
@@ -49,12 +104,16 @@ export function shouldRejectOutboxLazyOpen({ fromOutbox = false, cwd = undefined
 //        —— 禁止把视图静默弹到其它工作区（用户切会话 resume 失败时曾闪回 mimo）
 //      · allowCrossWorkspace=true（用户主动 session:close）→ 插入序第一个剩余，cwd 随该实例
 //   3. 无任何剩余 → null + (removedCwd ?? fallbackCwd)
+//   0. stayOnRemoved=true（进程意外退出，不含 resumeFailed）→ 不挑任何剩余实例，直接 null + 保留 removedCwd。
+//      用户正看着的会话没了，换一个同目录的会话顶上去等于静默跳走、什么都没说（验收 O60）；落空视图后前端判
+//      「正在看的实例被摧毁」，显示「会话已中断」，下一步由用户选。
 //
 // remainingIds：移除后仍存活的实例 id（按插入序，对齐 agents.keys()）；removedCwd：刚移除实例的 cwd；
 // cwdOf(id)：id→cwd；fallbackCwd：removedCwd 缺失时的兜底（当前 viewingCwd）。
 export function reselectViewingTarget(remainingIds, removedCwd, cwdOf, fallbackCwd, opts = {}) {
   const ids = Array.isArray(remainingIds) ? remainingIds : [];
   const allowCross = opts.allowCrossWorkspace === true;
+  if (opts.stayOnRemoved === true) return { viewingInstanceId: null, viewingCwd: removedCwd ?? fallbackCwd };
   if (removedCwd != null) {
     const sameCwd = ids.find(id => cwdOf(id) === removedCwd);
     if (sameCwd) return { viewingInstanceId: sameCwd, viewingCwd: removedCwd };
@@ -121,16 +180,19 @@ export function externalDirtyBusyNack({
   bgTaskCount = 0,
   pendingPermissionCount = 0,
   pendingQuestionCount = 0,
+  pendingElicitationCount = 0,
 } = {}) {
   const turns = Number(pendingTurns) > 0 ? Number(pendingTurns) : 0;
   const bgs = Number(bgTaskCount) > 0 ? Number(bgTaskCount) : 0;
   const perms = Number(pendingPermissionCount) > 0 ? Number(pendingPermissionCount) : 0;
   const qs = Number(pendingQuestionCount) > 0 ? Number(pendingQuestionCount) : 0;
+  const els = Number(pendingElicitationCount) > 0 ? Number(pendingElicitationCount) : 0;
   const bits = [];
   if (turns) bits.push(`pendingTurns=${turns}`);
   if (bgs) bits.push(`bgTasks=${bgs}`);
   if (perms) bits.push(`permissions=${perms}`);
   if (qs) bits.push(`questions=${qs}`);
+  if (els) bits.push(`elicitations=${els}`);
   const detail = bits.length ? bits.join(' ') : 'busy=true';
 
   if (turns > 0) {

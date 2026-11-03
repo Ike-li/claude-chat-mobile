@@ -1,16 +1,15 @@
 // helpers: tests/helpers/playwright.ts
+// 后台任务横幅与详情面板；终端只读锁与接管在 terminal-readonly-takeover.spec.ts（2026-10-25 按主题从本文件拆出）。
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 import {
   ANOTHER_WORKSPACE,
   expandWorkspace,
   expectSessionStatusChip,
-  expectSidebarClosed,
-  openSessionByTitle,
   openSessionsSidebar,
-  openWorkspaceSession,
-  sessionButtonByTitle,
+  sessionRowByInstance,
+  startNewSessionInWorkspace,
   workspaceRow
 } from '../../helpers/sidebar-ui';
 
@@ -49,105 +48,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-17c 终端只读追平会锁定输入并允许显式接管', async ({ page }) => {
-    await gotoMock(page);
-
-    await sendChatMessage(page, 'test:mirror-readonly');
-    await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', '只读镜像：终端会话运行中，移动端当前只读');
-    await expect(page.locator('#btnSend')).toHaveText('续接');
-    await expect(page.locator('#btnSend')).toBeEnabled();
-
-    // 非 stale 只读态点续接 = 排队等终端本轮完结；mock 稍后发 readonly:false 自动放行
-    await page.locator('#btnSend').click();
-    await expect(page.locator('#input')).toBeEnabled({ timeout: 10_000 });
-
-    await sendChatMessage(page, 'take over from terminal');
-    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('take over from terminal');
-
-    await expectNoBrowserErrors(page);
-  });
-
-  test('P0-17d 切换会话会清除只读追平锁', async ({ page }) => {
-    await gotoMock(page);
-
-    await sendChatMessage(page, 'test:tab');
-    await waitForIdle(page);
-    await sendChatMessage(page, 'test:mirror-readonly');
-    await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#btnSend')).toHaveText('续接');
-
-    await openSessionsSidebar(page);
-    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
-    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
-    await expect(page.locator('#input')).toBeEnabled();
-    await expect(page.locator('#btnSend')).toBeDisabled();
-
-    await sendChatMessage(page, 'test:settings-echo');
-    await waitForIdle(page);
-    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:settings-echo');
-
-    await expectNoBrowserErrors(page);
-  });
-
-  test('P0-17f 终端只读锁到来时保留草稿且接管后可发送', async ({ page }) => {
-    await gotoMock(page);
-
-    await sendChatMessage(page, 'test:mirror-readonly-delayed');
-    await page.locator('#input').fill('test:settings-echo');
-    await expect(page.locator('#btnSend')).toBeEnabled();
-
-    await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', '只读镜像：终端会话运行中，移动端当前只读');
-    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
-    await expect(page.locator('#btnSend')).toHaveText('续接');
-
-    // 点续接排队，终端本轮完结（mock 后续 readonly:false）后自动放行，草稿仍在
-    await page.locator('#btnSend').click();
-    await expect(page.locator('#input')).toBeEnabled({ timeout: 10_000 });
-    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
-
-    await page.locator('#btnSend').click();
-    await waitForIdle(page);
-    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:settings-echo');
-    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
-    await expect(page.locator('#input')).toHaveValue('');
-
-    await expectNoBrowserErrors(page);
-  });
-
-  test('P0-17g 迟到只读锁不会污染切走后的当前会话', async ({ page }) => {
-    await gotoMock(page);
-
-    await sendChatMessage(page, 'test:tab');
-    await waitForIdle(page);
-
-    await openSessionsSidebar(page);
-    await expandWorkspace(page, ANOTHER_WORKSPACE);
-    await expect(sessionButtonByTitle(page, 'Another App Concurrency')).toBeVisible();
-    await page.locator('#sidebarClose').click();
-    await expectSidebarClosed(page);
-
-    const startedAt = Date.now();
-    await sendChatMessage(page, 'test:mirror-readonly-delayed');
-
-    await openSessionsSidebar(page);
-    await openSessionByTitle(page, 'Another App Concurrency');
-    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
-    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
-
-    await expect.poll(() => Date.now() - startedAt, { timeout: 2_000 }).toBeGreaterThan(900);
-    // 迟到只读锁不污染已切走的会话：当前会话 input 仍可写（镜像横幅已恒 hidden，改判 input 态）
-    await expect(page.locator('#input')).toBeEnabled();
-
-    await sendChatMessage(page, 'test:settings-echo');
-    await waitForIdle(page);
-    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:settings-echo');
-    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
-
-    await expectNoBrowserErrors(page);
-  });
-
   test('P0-17e 后台 task_progress 不污染当前会话但保留忙碌角标', async ({ page }) => {
     await gotoMock(page);
 
@@ -158,7 +58,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#taskProgressBanner')).toBeHidden();
     await expect(page.locator('#messages')).not.toContainText('另一个工作区正在运行后台任务');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '运行中');
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 运行中');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他文件夹 · 运行中');
 
     await openSessionsSidebar(page);
     const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
@@ -166,91 +66,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('aria-label', '运行中');
     await expandWorkspace(page, ANOTHER_WORKSPACE);
     await expectSessionStatusChip(page, 'inst_2', '运行中');
-
-    await expectNoBrowserErrors(page);
-  });
-
-  test('P0-17h 终端接管可排队、取消并在本轮结束后自动放行', async ({ page }) => {
-    await gotoMock(page);
-
-    await sendChatMessage(page, 'test:mirror-armed');
-    await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', '只读镜像：终端会话运行中，移动端当前只读');
-    await expect(page.locator('#btnSend')).toHaveText('续接');
-
-    // 点续接 → 排队（armed），发送位变「取消」，仍只读
-    await page.locator('#btnSend').click();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', /已请求续接|等待终端/);
-    await expect(page.locator('#btnSend')).toHaveText('取消');
-    await expect(page.locator('#input')).toBeDisabled();
-
-    // 点取消 → 回到只读驾驶态
-    await page.locator('#btnSend').click();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', '只读镜像：终端会话运行中，移动端当前只读');
-    await expect(page.locator('#btnSend')).toHaveText('续接');
-    await expect(page.locator('#input')).toBeDisabled();
-
-    // 再点续接排队，终端本轮完结（mock 后续 readonly:false）后自动放行
-    await page.locator('#btnSend').click();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', /已请求续接|等待终端/);
-    await expect(page.locator('#input')).toBeEnabled({ timeout: 10_000 });
-    await waitForIdle(page);
-
-    await expectNoBrowserErrors(page);
-  });
-
-  // 2026-07-28 真机 b06fb05d：用户亲手杀掉 CLI 后排队续接——他比判定链更早知道终端已死，
-  // 但排队只承诺「最长约 5 分钟」自动判定，且当时没有任何不等判定的出口，逼得他去重启服务。
-  test('P0-17j 排队续接给「强制立即续接」入口：确认分叉风险后立即解锁，不等自动判定', async ({ page }) => {
-    await gotoMock(page);
-
-    await sendChatMessage(page, 'test:mirror-armed-force');
-    await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#btnSend')).toHaveText('续接');
-
-    // 排队 → 提示条内出现强制入口
-    await page.locator('#btnSend').click();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', /已请求续接|等待终端/);
-    const forceBtn = page.locator('[data-testid="mirror-force-resume"]');
-    await expect(forceBtn).toBeVisible();
-
-    // 点强制 → 项目风格确认 sheet → 确认后立即解锁 + 分叉风险警示留痕（mock 不放行，解锁只能来自强制路径）
-    await forceBtn.click();
-    await page.locator('#confirmOk').click();
-    await expect(page.locator('#input')).toBeEnabled();
-    await expect(page.locator('#messages')).toContainText('分叉风险');
-
-    await expectNoBrowserErrors(page);
-  });
-
-  test('P0-17i 终端只读镜像经历驾驶、疑似中断与自动解锁三态', async ({ page }) => {
-    await gotoMock(page);
-
-    await sendChatMessage(page, 'test:mirror');
-    await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', '只读镜像：终端会话运行中，移动端当前只读');
-    await expect(page.locator('#btnSend')).toHaveText('续接');
-
-    const modelBefore = await page.locator('#modelInput').inputValue();
-    await page.locator('#customModelGrid .model-tile').evaluateAll((tiles) => {
-      const target = tiles.find(tile => (tile as HTMLElement).dataset.model);
-      (target as HTMLElement | undefined)?.click();
-    });
-    await expect(page.locator('#modelInput')).toHaveValue(modelBefore);
-    await expect(page.locator('#messages')).toContainText('设置已冻结');
-
-    // 后两态由用例显式推进，不再等 mock 的定时窗口。原实现是 delay(1500)→stale→delay(5000)→解锁，
-    // 于是这条用例得在那 5 秒内点完 tile、等到「设置已冻结」、再断言两次——谁快谁慢取决于机器。
-    // 窗口早先是 1500ms、因同样的原因被调宽到 5000ms；2026-09-12 e2e 接进 4 分片并行后 CPU 争抢又让
-    // 5000ms 不够用，dev 与当时在审的 PR 双双【稳定】红在下面这条 toBeEnabled（retry 也红）。
-    // 显式推进之后没有窗口可赌，用例还快了约 6.5 秒。测的东西没变：产品侧「自动解锁」是服务端释放
-    // 镜像锁的行为，这里验的始终是前端【收到 mirror_state 之后】怎么反应，与事件何时到达无关。
-    await page.request.post('/__mirror-state?readonly=1&stale=1');
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', /疑似中断/, { timeout: 5_000 });
-
-    await page.request.post('/__mirror-state?readonly=0&stale=0&withResult=1');
-    await expect(page.locator('#input')).toBeEnabled({ timeout: 5_000 });
-    await waitForIdle(page);
 
     await expectNoBrowserErrors(page);
   });
@@ -265,7 +80,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#taskProgressText')).toContainText('2 个子代理 · 1 条命令', { timeout: 10_000 });
 
     // 默认折叠：行已渲染在 DOM（供断言/无障碍），但列表容器不可见。
-    // 折叠热区是整条头行（无三角按钮），恒可见；右侧「停止」在多任务下隐藏（每行自带「停」）。
+    // 折叠热区是整条头行（#taskBannerToggle），尾随 #taskBannerChevron 作 ▸/▾；右侧「停止」在多任务下隐藏（每行自带「停」）。
     const toggle = page.locator('[data-testid="bg-task-toggle"]');
     await expect(page.locator('[data-testid="task-stop-btn"]')).toBeHidden();
     const list = page.locator('[data-testid="bg-task-list"]');
@@ -451,6 +266,112 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(list).toBeVisible();
 
     await waitForIdle(page);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 转后台（#459，终端 Ctrl+B）。mock 的 test:fg-task 起一条前台 Bash 挡着本轮；转后台成功后照 CLI 的次序
+  // 回事件：前台集合清空 → 进后台任务横幅 → 工具卡收到「running in background」→ 本轮收尾。
+  test('P0-17q 前台命令挡着本轮时出「转后台」，点了整轮转后台、横幅接住', async ({ page }) => {
+    await gotoMock(page);
+
+    const composerBtn = page.locator('[data-testid="btn-background-tasks"]');
+    await expect(composerBtn).toBeHidden();
+    await sendChatMessage(page, 'test:fg-task');
+    const card = page.locator('details.toolcard[data-tool-name="Bash"]');
+    await expect(composerBtn).toBeVisible();
+    await expect(card.locator('[data-testid="tool-background"]')).toBeVisible();
+
+    await composerBtn.click();
+    await expect(page.locator('#taskProgressBanner')).toBeVisible();
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('sleep 120');
+    await expect(composerBtn).toBeHidden();
+    await expect(card.locator('[data-testid="tool-background"]')).toHaveCount(0);
+    await expect(card).toContainText('running in background');
+    // 点卡上的按钮不该顺手展开卡片；点输入条按钮更不该
+    await expect(card).not.toHaveAttribute('open', '');
+
+    await waitForIdle(page);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-17r 工具卡上的「后台运行」只转这一条，且不连带展开卡片', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:fg-task');
+    const card = page.locator('details.toolcard[data-tool-name="Bash"]');
+    const cardBtn = card.locator('[data-testid="tool-background"]');
+    await expect(cardBtn).toBeVisible();
+    await expect(card).not.toHaveAttribute('open', '');
+
+    await cardBtn.click();
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('sleep 120');
+    await expect(cardBtn).toHaveCount(0);
+    await expect(page.locator('[data-testid="btn-background-tasks"]')).toBeHidden();
+    await expect(card).not.toHaveAttribute('open', '');
+
+    await waitForIdle(page);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-17t 「转后台」只跟着当前查看的会话：切走就藏，切回来还在', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:fg-task');
+    const composerBtn = page.locator('[data-testid="btn-background-tasks"]');
+    const cardBtn = page.locator('details.toolcard[data-tool-name="Bash"] [data-testid="tool-background"]');
+    await expect(composerBtn).toBeVisible();
+    await expect(cardBtn).toBeVisible();
+
+    // 切到同工作区的新会话：那边没有前台任务
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, '/Users/you/code/claude-chat-mobile');
+    await expect(composerBtn).toBeHidden();
+
+    // 切回 inst_1：它的前台任务还挡着本轮，两处按钮都回来。＋ 进新会话页不留 DOM 缓存，切回走拉历史：
+    // 卡从历史渲染、不进 toolCards 表，而且比 sync:since 补推的前台任务快照晚到——卡上那颗得在历史落地后
+    // 按 DOM 找回来（#469 review）
+    await openSessionsSidebar(page);
+    await sessionRowByInstance(page, 'inst_1').click();
+    await expect(composerBtn).toBeVisible();
+    await expect(cardBtn).toBeVisible();
+    await cardBtn.click();
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('sleep 120');
+    await expect(cardBtn).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-17s 会话禁用了后台任务：点「转后台」把原因写进消息流，按钮留着', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:fg-task-disabled');
+    const composerBtn = page.locator('[data-testid="btn-background-tasks"]');
+    await expect(composerBtn).toBeVisible();
+
+    await composerBtn.click();
+    await expect(page.locator('#messages')).toContainText('这个会话禁用了后台任务（CLAUDE_CODE_DISABLE_BACKGROUND_TASKS）');
+    await expect(composerBtn).toBeVisible();
+    await expect(composerBtn).toBeEnabled();
+    await expect(page.locator('#taskProgressBanner')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 真机 2026-11-02：主轮已结束、只剩后台子代理在跑，每条子代理 delta 都把运行条从 0s 重新点亮，
+  // 30s 后被快照自检清掉，下一条又亮——用户看到「✻ Working… (29s)」反复从头计时。
+  test('P0-17u 主轮结束后后台子代理继续推流：运行条与停止钮不得重新出现', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:bg-subagent-after-result');
+    // 正向对照：三种子代理事件都确实到了前端，否则下面的「没亮」可能只是事件没发出来
+    const card = page.locator('[data-testid="subagent-card"]');
+    await expect(card).toContainText('BG_SUBAGENT_THINKING', { timeout: 10_000 });
+    await expect(card.locator('details.toolcard')).toContainText('Grep');
+    await expect(card.locator('[data-testid="subagent-text"]')).toContainText('BG_SUBAGENT_TEXT');
+
+    await expect(page.locator('#streamLiveStatus')).toHaveCount(0);
+    await expect(page.locator('#btnSend')).not.toHaveAttribute('data-mode', 'stop');
+
     await expectNoBrowserErrors(page);
   });
 });

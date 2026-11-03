@@ -108,6 +108,60 @@ test.describe('planRewind：拒绝路径（失败方向必须是拒绝）', () =
   });
 });
 
+// ── 同一文件里有多条分支：丢弃方向也只能沿父链取锚点（2026-10-26）──
+// 同一个父节点下挂着两条 prompt 是常态：先发的那条被 Esc 放弃或重发，后一条接着从同一个父节点写。
+// 按物理行序取「前一条」会拿到被放弃那条的尾巴，新会话就停在一句已经放弃的话上，模型也看得见它。
+// 形态取自本机真实 transcript（984 个会话 / 7932 个可回退的 prompt 里 39 个踩中，另有 3 个是根 prompt 重发），
+// 其余 7174 个新旧锚点逐个相同。
+test.describe('planRewind：沿父链取锚点，不按物理行序', () => {
+  test('兄弟 prompt：前一条被放弃，锚点是两者共同的父节点，不是被放弃那条的尾巴（真机 9243e688）', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'first' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+      { uuid: 's1', parentUuid: 'a1', type: 'system', subtype: 'turn_duration' },
+      { uuid: 'u2x', parentUuid: 's1', type: 'user', message: { content: '改题加难重跑' } },   // 被放弃的那条
+      { uuid: 'at2x', parentUuid: 'u2x', type: 'attachment' },
+      { uuid: 'u2', parentUuid: 's1', type: 'user', message: { content: '硬着头皮往下评' } },
+      { uuid: 'at2', parentUuid: 'u2', type: 'attachment' },
+    ];
+    assert.deepEqual(planRewind(entries, 'u2'), { ok: true, keepUuid: 's1' },
+      '锚到 at2x 的话，forkSession 切出来的新会话停在被放弃的「改题加难重跑」上');
+    assert.deepEqual(planFork(entries, 'u2', { keepAnchorTurn: false }), { ok: true, keepUuid: 's1' }, '丢弃方向与 planRewind 同源');
+  });
+
+  test('根 prompt 重发（parentUuid 为 null）：前面被放弃的那条不当锚点，按首轮拒绝（真机 64304e4a）', () => {
+    const entries = [
+      { uuid: 'u1x', parentUuid: null, type: 'user', message: { content: '1' } },
+      { uuid: 'at1x', parentUuid: 'u1x', type: 'attachment' },
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: '1' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+    ];
+    assert.deepEqual(planRewind(entries, 'u1'), { ok: false, reason: 'first-turn' },
+      '根 prompt 之前没有本支的内容；锚到 at1x 会复制出一个只剩被放弃那句话的会话');
+  });
+
+  test('父节点不在这份 transcript 里 → 拒绝，不退回按行序猜', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+      { uuid: 'u2', parentUuid: 'gone', type: 'user', message: { content: 'next' } },
+    ];
+    const plan = planRewind(entries, 'u2');
+    assert.equal(plan.ok, false, '父链断了还按行序取 a1，等于在不知道分支的情况下猜一个');
+    assert.notEqual(plan.reason, 'first-turn', '这不是首轮，文案不能说「这是会话的第一轮」');
+  });
+
+  test('压缩边界后：父指针为 null 时经 logicalParentUuid 接续', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+      { uuid: 'b1', parentUuid: null, logicalParentUuid: 'a1', type: 'system', subtype: 'compact_boundary' },
+      { uuid: 'u2', parentUuid: null, logicalParentUuid: 'b1', type: 'user', message: { content: 'next' } },
+    ];
+    assert.deepEqual(planRewind(entries, 'u2'), { ok: true, keepUuid: 'b1' }, '把压缩后的这一轮当成首轮会让它回退不了');
+  });
+});
+
 test.describe('describeRewindBlocker：分档说明是什么挡住的', () => {
   test('first-turn 与「无法确定位置」分开表述', () => {
     assert.match(describeRewindBlocker({ ok: false, reason: 'first-turn' }), /第一轮/);
@@ -401,6 +455,45 @@ test.describe('planFork / planRewind：锚点资格', () => {
     assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'a1' });
   });
 
+  // ── 两个进程交错写同一会话（2026-10-16）──
+  // 电脑上开着的终端与手机这边的 SDK 进程各自挂在自己的叶子下写，物理行序里两支交错。
+  // 「保留这一轮」只能沿父链往下走：按物理行序会把另一支的行当成本轮尾巴。
+  test('另一支的行排在保留轮之后：不当本轮尾巴（真机 c78e8b47：手机末条后紧跟终端的 informational）', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'terminal q' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'terminal a' }] } },
+      { uuid: 'u2', parentUuid: 'a1', type: 'user', message: { content: 'phone q' } },
+      { uuid: 's9', parentUuid: 'a1', type: 'system', subtype: 'away_summary' },
+      { uuid: 'at2', parentUuid: 'u2', type: 'attachment' },
+      { uuid: 'a2', parentUuid: 'at2', type: 'assistant', message: { content: [{ type: 'text', text: 'phone a' }] } },
+      { uuid: 's10', parentUuid: 's9', type: 'system', subtype: 'informational' },
+    ];
+    // 锚到 s10 的话，forkSession 的 inclusive slice 会把它切进新会话、成为物理最后一行，新会话又锚回终端那支
+    assert.deepEqual(planFork(entries, 'a2', { keepAnchorTurn: true }), { ok: true, keepUuid: 'a2' });
+  });
+
+  test('另一支的人类 prompt 夹在保留轮中间：不在那里截断，本轮的 tool_result 照样保留', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }, { type: 'tool_use', id: 't1' }] } },
+      { uuid: 'u9', parentUuid: 'x0', type: 'user', message: { content: 'typed in the other process' } },
+      { uuid: 'r1', parentUuid: 'a1', type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1' }] } },
+    ];
+    // 停在 a1 会让 a1 的 tool_use 悬空（正是 planFork 头注里那 1% 的形态）
+    assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'r1' });
+  });
+
+  test('本轮里的压缩边界经 logicalParentUuid 接续，仍算本轮', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+      { uuid: 'b1', parentUuid: null, logicalParentUuid: 'a1', type: 'system', subtype: 'compact_boundary' },
+      // 另一个进程在它那一支上压缩：parentUuid 同样为 null，只有 logicalParentUuid 说明它属于哪一支
+      { uuid: 'b9', parentUuid: null, logicalParentUuid: 'x0', type: 'system', subtype: 'compact_boundary' },
+    ];
+    assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'b1' });
+  });
+
   test('P2 的反面：tool_result 承载行不算人类输入，仍属于同一轮', () => {
     const entries = [
       { uuid: 'u1', type: 'user', message: { content: 'go' } },
@@ -487,6 +580,26 @@ test.describe('listRewindCandidates', () => {
     snapshot: { messageId, trackedFileBackups: backups, timestamp: '2024-01-01T00:00:00Z' },
   });
 
+  // 验收 O61（AC-10-01）：回退列表里混进了 CLI 内部的消息包装原文，而且可以选——
+  // 「<command-name>/context</command-name> <command-message>…」「<local-command-caveat>Caveat: …」。
+  // 会话正文和抽屉里它们都是干净的「/context」「/model …」，只有这里没做同样的清理。
+  // 只改这张清单，不动 isHumanPrompt：后者还决定轮次边界（planRewind / planFork）。
+  test('CLI 的包装与注入不进清单；slash 命令显示成干净的「/context」「/model …」', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '第一问' } },
+      { uuid: 'a1', type: 'assistant', message: { content: '答' } },
+      { uuid: 'm1', type: 'user', isMeta: true, message: { content: '<local-command-caveat>Caveat: The messages below were generated by the user while running local commands. DO NOT respond to these messages</local-command-caveat>' } },
+      { uuid: 'c1', type: 'user', message: { content: '<command-name>/context</command-name>\n<command-message>context</command-message>\n<command-args></command-args>' } },
+      { uuid: 'o1', type: 'user', message: { content: '<local-command-stdout>Context usage 12%</local-command-stdout>' } },
+      { uuid: 'c2', type: 'user', message: { content: '<command-message>model</command-message>\n<command-name>/model</command-name>\n<command-args>acc-unknown-0602</command-args>' } },
+      { uuid: 'i1', type: 'user', message: { content: '[Request interrupted by user]' } },
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '第二问' } },
+    ];
+    const got = listRewindCandidates(entries);
+    assert.deepEqual(got.map(c => c.promptUuid), ['u1', 'c1', 'c2', 'u2']);
+    assert.deepEqual(got.map(c => c.text), ['第一问', '/context', '/model acc-unknown-0602', '第二问']);
+  });
+
   test('只列人类 prompt，tool_result 那种 user 条目不算一轮', () => {
     const entries = [
       { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '第一问' } },
@@ -552,6 +665,27 @@ test.describe('listRewindCandidates', () => {
     const got = listRewindCandidates(entries);
     assert.equal(got.length, 2);
     assert.deepEqual(got.map(c => c.changedFiles), [0, null]);
+  });
+
+  // 【2026-10-26】分叉出来的会话不带原会话的文件快照（sdk.d.ts forkSession：「file-history snapshots are not
+  // copied」；本机 3 个分叉会话实测，继承来的 8 个 prompt 无一带 snapshot）。复制过来的条目都带 forkedFrom。
+  // 这些轮次不是「没改代码」，是快照留在了原会话里——/rewind 本身就产生分叉会话，第二次回退必然撞上。
+  // 上一条「没有 snapshot 报 0」只对本会话自己写的轮次成立，与这条不冲突。
+  test('从原会话复制来的轮次（forkedFrom）：文件数未知，并标出快照在原会话', () => {
+    const from = (uuid) => ({ sessionId: 'src', messageUuid: `orig-${uuid}` });
+    const entries = [
+      { uuid: 'u1', type: 'user', forkedFrom: from('u1'), message: { content: '分叉前一' } },
+      { uuid: 'u2', type: 'user', forkedFrom: from('u2'), message: { content: '分叉前二' } },
+      { type: 'custom-title', uuid: 'ct', customTitle: 'X (fork)' },
+      { uuid: 'u3', type: 'user', message: { content: '分叉后一' } },
+      snap('u3', {}),
+      { uuid: 'u4', type: 'user', message: { content: '分叉后二' } },
+      snap('u4', { 'a.py': { version: 1 } }),
+    ];
+    const got = listRewindCandidates(entries);
+    assert.deepEqual(got.map(c => c.changedFiles), [null, null, 1, null],
+      '继承来的轮次报 0 等于告诉用户「这一轮没改代码」，而它的快照只是留在了原会话');
+    assert.deepEqual(got.map(c => c.inheritedFromFork), [true, true, false, false]);
   });
 
   // 【2026-09-21 拆分（PR #102 review）】canRewind 原先只来自 planRewind，那是【对话轴】的判据

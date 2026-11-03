@@ -18,7 +18,6 @@ export function createNotificationController(context, {
   const navigatorRef = deps.navigator || globalThis.navigator || {};
   const NotificationApi = deps.Notification || windowRef.Notification;
   const fetchFn = deps.fetch || globalThis.fetch;
-  const showAlert = deps.alert || windowRef.alert || (() => {});
   const logger = deps.console || globalThis.console;
   // ⑧ 推送内容预览偏好：与 app/alerts.js 同款 storage 注入模式（可测、抗 PWA 被杀落盘+重开恢复）。
   const storage = deps.storage || globalThis.localStorage;
@@ -224,12 +223,37 @@ export function createNotificationController(context, {
     }
   }
 
+  // #381：订阅结果写进 #pushSubscribeResult（行内 role=status），不再 window.alert。
+  // 设置 sheet 盖住消息流时 addBar 看不见；行内回执与 #hooksBridgeResult / #drawerNotice 同构。
+  // 清除时机必须由代码显式决定——下次订阅操作开头清一次；离开通知页由调用方 clearSubscribeResult。
+  function subscribeResultEl() {
+    return context.dom.pushSubscribeResult
+      || documentRef?.getElementById?.('pushSubscribeResult')
+      || null;
+  }
+
+  function clearSubscribeResult() {
+    const box = subscribeResultEl();
+    if (!box) return;
+    box.textContent = '';
+    box.className = 'hidden text-[11px] px-1 mt-1.5 break-words';
+    box.classList.add('hidden');
+  }
+
   function explain(message, className) {
-    showAlert(message);
+    const box = subscribeResultEl();
+    if (box) {
+      box.textContent = message;
+      // 保留布局类，叠加语义色（text-success / text-warning / text-danger / text-info）
+      box.className = `text-[11px] px-1 mt-1.5 break-words${className ? ` ${className}` : ''}`;
+      box.classList.remove('hidden');
+    }
+    // 仍写消息流：关掉设置面板后能回看；面板开着时以行内回执为准
     addBar(message, className);
   }
 
   async function requestSubscription() {
+    clearSubscribeResult();
     const hint = pushEnvHint(environment());
     if (hint === 'need-https') {
       explain(t('⚠️ 推送需 HTTPS：局域网 http 下浏览器会拦截通知订阅。请用 https 隧道（cloudflared 等）访问本站。'), 'text-warning');
@@ -274,5 +298,5 @@ export function createNotificationController(context, {
   }
 
   if (autoBind && context.dom.btnPush) context.dom.btnPush.onclick = bellAction || requestSubscription;
-  return { environment, notify, requestSubscription, setup, subscribe, unsubscribe };
+  return { environment, notify, requestSubscription, setup, subscribe, unsubscribe, clearSubscribeResult };
 }

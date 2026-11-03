@@ -1,6 +1,6 @@
 {
   "name": "claude-chat-mobile",
-  "version": "1.13.0",
+  "version": "1.14.0",
   "description": "Self-hosted mobile web chat UI for Claude Code — drive your real local claude CLI from your phone. Same CLAUDE.md, MCP, skills, login; any gateway or API key.",
   "type": "module",
   "private": true,
@@ -32,7 +32,7 @@
     "node": ">=20"
   },
   "verifiedWith": {
-    "claudeCli": "2.1.281"
+    "claudeCli": "2.1.317"
   },
   "scripts": {
     "start": "node app/server.js",
@@ -59,16 +59,17 @@
     "app:install": "node scripts/app-build.js --install",
     "app:test": "node scripts/app-build.js --test-only",
     "dev": "node --watch app/server.js",
-    "check": "eslint . && node tests/gates/check-import-boundaries.js && node tests/gates/contract-check.js && node scripts/doc-consistency.js && node tests/gates/check-diagram-claims.js && node tests/gates/check-n1-assumptions.js && node tests/gates/i18n-check.js && node tests/gates/check-destructive-deletes.js && node tests/gates/check-shell-pitfalls.js && node tests/gates/check-invariant-ids.js && node tests/gates/check-config-gitignored.js && node tests/gates/check-disposable-env-guard.js && node tests/gates/check-container-config-isolation.js && node tests/gates/check-playwright-forbidden-patterns.js && node scripts/app-build.js --test-only && npm run inventory:check",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
+    "build:css": "tailwindcss -c tailwind.config.js -o app/public/css/tw.css",
+    "check": "eslint . --cache --cache-location node_modules/.cache/eslint/ && node tests/gates/check-import-boundaries.js && node tests/gates/contract-check.js && node scripts/doc-consistency.js && node tests/gates/check-diagram-claims.js && node tests/gates/check-n1-assumptions.js && node tests/gates/i18n-check.js && node tests/gates/check-destructive-deletes.js && node tests/gates/check-shell-pitfalls.js && node tests/gates/check-invariant-ids.js && node tests/gates/check-config-gitignored.js && node tests/gates/check-disposable-env-guard.js && node tests/gates/check-container-config-isolation.js && node tests/gates/check-playwright-forbidden-patterns.js && node tests/gates/check-tailwind-css.js && node scripts/app-build.js --test-only && npm run inventory:check",
+    "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
+    "lint:fix": "eslint . --fix --cache --cache-location node_modules/.cache/eslint/",
     "inventory:check": "node tests/gates/repo-inventory.js",
     "dist:list": "node scripts/dist-manifest.js",
     "dist:check": "node scripts/dist-manifest.js --check",
     "test": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/unit/*.test.mjs tests/integration/*.test.mjs",
     "test:unit": "node --import ./tests/setup/preload-env.mjs --test tests/unit/*.test.mjs",
     "test:invariants": "node --import ./tests/setup/preload-env.mjs --test tests/invariants/*.test.mjs",
-    "test:invariants:server": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/invariants/server/*.test.mjs",
+    "test:invariants:server": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit --test-concurrency=6 tests/invariants/server/*.test.mjs",
     "test:invariants:env": "node --import ./tests/setup/preload-env.mjs --test tests/invariants/env/*.test.mjs",
     "test:integration": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/integration/*.test.mjs",
     "test:coverage": "node --import ./tests/setup/preload-env.mjs --experimental-test-coverage --test tests/unit/*.test.mjs",
@@ -84,6 +85,7 @@
     "test:docker": "docker compose -f tests/infra/docker-compose.test.yml run --rm test sh -lc \"npm run test:unit && npm run test:invariants && npm run test:invariants:server && npm run test:invariants:env && npm run test:integration\"",
     "test:docker:unit": "docker compose -f tests/infra/docker-compose.test.yml run --rm test npm run test:unit",
     "test:docker:integration": "docker compose -f tests/infra/docker-compose.test.yml run --rm test npm run test:integration",
+    "test:docker:file": "docker compose -f tests/infra/docker-compose.test.yml run --rm test node --import ./tests/setup/preload-env.mjs --test --test-force-exit",
     "test:docker:invariants": "docker compose -f tests/infra/docker-compose.test.yml run --rm test sh -lc \"npm run test:invariants:server && npm run test:invariants:env\"",
     "test:docker:e2e": "docker compose -f tests/infra/docker-compose.test.yml run --rm test npm run test:e2e",
     "test:docker:sh": "docker compose -f tests/infra/docker-compose.test.yml run --rm test bash",
@@ -101,20 +103,21 @@
     "playground:restart": "docker compose -f tests/infra/docker-compose.playground.yml restart app"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.278",
+    "@anthropic-ai/claude-agent-sdk": "0.3.310",
     "compression": "^1.8.2",
-    "dotenv": "^18.0.1",
-    "express": "^5.0.0",
-    "jose": "^6.2.12",
-    "socket.io": "^4.8.0",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "jose": "^6.2.13",
+    "socket.io": "^4.8.4",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.63.0",
-    "eslint": "^10.11.0",
+    "@playwright/test": "^1.64.1",
+    "eslint": "^10.13.0",
     "eslint-plugin-unused-imports": "^4.4.1",
-    "globals": "^17.12.0",
-    "socket.io-client": "^4.8.3"
+    "globals": "^17.13.0",
+    "socket.io-client": "^4.8.4",
+    "tailwindcss": "3.4.17"
   }
 }

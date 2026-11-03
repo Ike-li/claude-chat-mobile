@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeMessageTs, isSameLocalDay, resolveMessageTimeMarker, MESSAGE_TIME_GAP_MS,
-  formatClockHm, formatCalendarDayLabel, formatMessageTimeMarker,
+  formatClockHm, formatCalendarDayLabel, formatMessageTimeMarker, formatSessionRowTime,
 } from '../../app/public/js/logic.js';
 import { setLang } from '../../app/public/js/i18n.js';
 
@@ -164,6 +164,26 @@ test('formatMessageTimeMarker：英文界面 → Today / Yesterday / Aug 2 / Dec
   assert.equal(formatMessageTimeMarker({ kind: 'day', ts: at(2026, 8, 2, 9, 0) }, { now }), 'Aug 2 09:00');
   assert.equal(formatMessageTimeMarker({ kind: 'day', ts: at(2025, 12, 31, 9, 0) }, { now }), 'Dec 31, 2025 09:00');
   assert.equal(formatMessageTimeMarker({ kind: 'time', ts: at(2026, 8, 4, 14, 20) }, { now }), '14:20');
+});
+
+// 验收 AC-04-15 / AC-21-02（O43③）：抽屉会话行与首页最近会话行原来用 toLocaleString() 不传 locale，
+// 跟着浏览器走——中文界面上是「10/17/2026, 8:07:14 AM」。与消息流时间戳同一套文案，跟界面语言走。
+test('formatSessionRowTime：中文界面 → 今天 / 昨天 / 10月15日 / 跨年带年份，都带 HH:mm', () => {
+  setLang('zh');
+  const now = at(2026, 10, 17, 18, 0);
+  assert.equal(formatSessionRowTime(at(2026, 10, 17, 8, 7), { now }), '今天 08:07');
+  assert.equal(formatSessionRowTime(at(2026, 10, 16, 23, 5), { now }), '昨天 23:05');
+  assert.equal(formatSessionRowTime(at(2026, 10, 15, 8, 7), { now }), '10月15日 08:07');
+  assert.equal(formatSessionRowTime(at(2025, 12, 31, 9, 0), { now }), '2025年12月31日 09:00');
+});
+
+test('formatSessionRowTime：英文界面 → Today / Oct 15 / Dec 31, 2025', () => {
+  setLang('en');
+  const now = at(2026, 10, 17, 18, 0);
+  assert.equal(formatSessionRowTime(at(2026, 10, 17, 8, 7), { now }), 'Today 08:07');
+  assert.equal(formatSessionRowTime(at(2026, 10, 15, 8, 7), { now }), 'Oct 15 08:07');
+  assert.equal(formatSessionRowTime(at(2025, 12, 31, 9, 0), { now }), 'Dec 31, 2025 09:00');
+  setLang('zh');
 });
 
 // currentLang 是 i18n.js 的模块级状态，同文件内不复位会污染后续用例

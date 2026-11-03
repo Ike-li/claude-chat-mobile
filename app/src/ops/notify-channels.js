@@ -99,8 +99,9 @@ export function createNotifyChannels({
   const NTFY_TIMEOUT_MS = 8000;
 
   // ②2b：向 ntfy 发一条（Node 原生 fetch，零依赖）。没配 / 出错都静默——尽力而为，绝不阻断主流程。
+  // 交回投递结果 'disabled' | 'sent' | 'failed'：只有「发一条测试推送」要看它（验收 O1），其余调用点照旧不 await。
   async function ntfyNotify(title, body, meta = {}) {
-    if (!ntfyEnabled) return;
+    if (!ntfyEnabled) return 'disabled';
     try {
       const { url, init } = ntfyRequestInit({ url: ntfyUrl, topic: ntfyTopic, token: ntfyToken }, title, body, meta);
       const res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(NTFY_TIMEOUT_MS) });
@@ -110,12 +111,34 @@ export function createNotifyChannels({
         console.error(`[ntfy] 推送失败: HTTP ${res.status}`);
         metrics.inc('ntfy_failure'); metrics.gauge('ntfy_failure_last_ts', Date.now()); onDeliveryFailure();
         metrics.label('delivery_failure_reason', `HTTP ${res.status}`);
+        return 'failed';
       }
+      return 'sent';
     } catch (e) {
-      console.error('[ntfy] 推送失败:', e.message);
+      // 日志带上与告警同一个原因码：fetch 的 e.message 对 DNS 失败、拒连、断连都是同一句 fetch failed（验收 O110）
+      const reason = describeDeliveryError(e);
+      console.error(`[ntfy] 推送失败: ${reason}`, e.message);
       metrics.inc('ntfy_failure'); metrics.gauge('ntfy_failure_last_ts', Date.now()); onDeliveryFailure();
-      metrics.label('delivery_failure_reason', describeDeliveryError(e));
+      metrics.label('delivery_failure_reason', reason);
+      return 'failed';
     }
+  }
+
+  // 「发一条测试推送」（push:test）：两条通道各发一条，回报各自结果。sent / failed 是这次 Web Push 的成功 / 失败条数
+  // （按进程计数器前后差算），ntfy 是 ntfyNotify 的投递结果。
+  // 两条通道互不相干，并发发：串行时 Web Push 慢、ntfy 又接近 8s 超时，加起来会超过前端的 emit 时限（#231 review）。
+  // Web Push 的差值在它发完时就取，不等 ntfy：那段时间别的通知也在动同一组计数器。
+  async function pushTest(title, body, ntfyMeta) {
+    const before = metrics.snapshot().counters;
+    const webPush = pushNotify(title, body).then(() => {
+      const after = metrics.snapshot().counters;
+      return {
+        sent: (after.push_success ?? 0) - (before.push_success ?? 0),
+        failed: (after.push_failure ?? 0) - (before.push_failure ?? 0),
+      };
+    });
+    const [{ sent, failed }, ntfy] = await Promise.all([webPush, ntfyNotify(title, body, ntfyMeta)]);
+    return { sent, failed, ntfy };
   }
 
   return {
@@ -127,6 +150,7 @@ export function createNotifyChannels({
     removePushSubscription,
     pushNotify,
     ntfyNotify,
+    pushTest,
     subscriptionCount: () => pushSubscriptions.length,
   };
 }

@@ -15,20 +15,22 @@
 | `e2e/specs/` | 真浏览器 + 假后端，移动视口 | S3 | `npm run test:e2e` |
 | `e2e/mock/` | 那个假后端本身（零外部依赖，不碰 `~/.claude`） | — | — |
 | `smoke/` | 真 Claude，需显式授权 | S5 | `npm run test:smoke` |
-| `playground/` | 干净 Linux 用户视角的装机/拓扑验收 | — | `npm run test:docker:playground` |
+| `acceptance/` | 机主本机跑的 agent 驱动验收：agent 首跑用浏览器执行用例并写下判法，判法确定的之后由脚本重放；不是回归套件，见 [acceptance/README.md](acceptance/README.md) | 本机编排：A 档零 token（同 S3·S4 形态，连 127.0.0.1 上的 E1/E2 容器）· C 档真模型在 E3 容器（S5）；永不进 CI | `node tests/acceptance/run.mjs` |
+| `playground/` | 干净 Linux 用户视角的装机/拓扑验收；`e2e/` 是真浏览器 → 真 server → 假 CLI | S4（`e2e/`） | `npm run test:docker:playground` |
 | `gates/` | 门禁脚本（边界、契约、i18n、破坏性删除、变异…） | S0 | `npm run check` |
 | `infra/` | 测试基建：Dockerfile、compose、playwright config、分片编排 | — | — |
 | `fixtures/` `helpers/` `setup/` | 假 CLI、共用 UI helper、preload 隔离 | — | — |
 
-### ⚠ `infra/` 的编排脚本不在任何门禁覆盖范围
+### ⚠ `infra/` 的编排脚本大多不在门禁覆盖范围
 
-上表最后几行没有「怎么跑」是有代价的：`infra/` 下的编排脚本既不在 `npm run check` 链上，
-也不在 CI 里，改坏了不会有任何东西变红。`e2e-parallel.js` 就这么坏过——2026-09-03（`74fc46e`）把
-`playwright.config.ts` 从仓库根移进 `infra/` 时，`package.json` 的 `test:e2e` 补了 `-c`
-而它漏了，Playwright 静默回落内建默认（workers 变成 CPU/2、完全不起 webServer），266 条
-全红，一直到 2026-09-07 才被发现——因为在那之前没有任何路径会执行到它。
+上表最后几行没有「怎么跑」是有代价的：`infra/` 下的 Docker / compose / playground 编排既不在
+`npm run check` 链上，也不在 CI 里，改坏了不会有任何东西变红。`e2e-parallel.js` 就这么坏过——
+2026-09-03（`74fc46e`）把 `playwright.config.ts` 从仓库根移进 `infra/` 时，`package.json` 的
+`test:e2e` 补了 `-c` 而它漏了，Playwright 静默回落内建默认（workers 变成 CPU/2、完全不起
+webServer），266 条全红，一直到 2026-09-07 才被发现——因为在那之前没有任何路径会执行到它。
+现在 CI 的 e2e job 跑的就是 `npm run test:e2e:parallel`，它和 `playwright.config.ts` 已有覆盖；其余照旧没有。
 
-**改 `infra/` 下的东西，必须手动跑一次它编排的那条命令**，check 和 CI 都不会替你发现。
+**改 `infra/` 下上面两样以外的东西，必须手动跑一次它编排的那条命令**，check 和 CI 都不会替你发现。
 （同类的第二份真相已经消除：分片子进程现在直接 spawn `npm run test:e2e --`，config 路径
 只有 `package.json` 一处。）
 
@@ -52,10 +54,10 @@
 | **S1** 决策与真磁盘 | 纯函数 + 一次性目录上的真 fs / git / symlink / FIFO | 不起 `app.js`、不 spawn Claude |
 | **S2** 真 server + 假 CLI | 真组装根，HTTP + Socket，`CLAUDE_BIN` 指向 `fixtures/fake-claude.sh` | 模型回合 |
 | **S3** 真浏览器 + 假后端 | 真 `app/public`，假 server 只模拟信封 | 无 CLI、无真组装根 |
-| **S4** 薄跨缝 | 真浏览器 → 真 server → 假 CLI，只覆盖「假后端可能与真 server 字段分叉且用户看得见」的几条 | 模型回合 |
+| **S4** 薄跨缝 | 真浏览器 → 真 server → 假 CLI，只覆盖「假后端可能与真 server 字段分叉且用户看得见」的几条。落点 `playground/e2e/`，跑法 `npm run test:docker:playground`（容器，不进 CI） | 模型回合 |
 | **S5** 授权真 Claude | 真 CLI + 真 SDK + 隔离的 `CCM_DATA_DIR` / `HOME` | — |
 | **S6** 变异 | 故意改坏源码再跑 S1（`npm run mutate:docker`） | 永不在宿主机真实 HOME 上跑 |
-| **S7** Darwin | Swift 逻辑 + `CCMProcess` 资源 + 能编出 bundle | 唯一只能在宿主机跑的槽（容器无 `swiftc`） |
+| **S7** Darwin | Swift 逻辑 + `CCMProcess` 资源 + 能编出 bundle | 唯一没有容器跑法的槽（容器无 `swiftc`）。验收编排也只在宿主机跑，但它是调度而不是槽：被测环境与真模型都在容器里 |
 
 ## 不变量编号
 
@@ -93,22 +95,32 @@
 |---|---|
 | `SCOPE-01` | 任何用户可控路径经 `realpath` 后仍须落在授权工作区内。**三层窗口各有编号，缺一层就是一个可逃逸的时间窗**：`FILES-1` readdir 之后复校（目录级）· `FILES-2` mkdir 之后用 realpath 后的目录做前缀校验（中间路径级）· `FILES-3` `O_NOFOLLOW` 打开（叶节点级） |
 | `SCOPE-02` | 上传：只留 basename、去控制字符与前导点；不把服务端绝对路径交给不可信面；个数/单文件/总量上限前后端必须同一数字（`FILES-4` 缩略图上限两侧对齐） |
-| `SCOPE-03` | 授权工作区列表必须来自**显式配置**；一个都解析不出时拒绝启动，**绝不回落家目录**。`SCOPE-01` 管的是「路径必须落在白名单内」，白名单本身 = `[家目录]` 时它全绿而整个家目录已经暴露 —— 这是它的上游，不是同一条 |
+| `SCOPE-04` | git linked worktree 只在**连接范围里**随所属仓库归组（托管的 `<仓库>/.claude/worktrees/*`、父目录整个连着时的平级目录）；**范围外的不凭 worktree 身份授权**，要显式连接——照官方桌面端：它只认自己建的 worktree，用户自建的平级 worktree 就是普通文件夹。归属只能**从已授权仓库一侧双向回验**：worktree 的 `.git` 必须是普通文件（不是 symlink）且指向 `<仓库>/.git/worktrees/<名>`，**同时**仓库侧 `<仓库>/.git/worktrees/<名>/gitdir` 回链到这个 worktree 的 `.git`；任一侧缺失、指向不一致一律不认。两侧元数据都在模型写得动的地方、可以一起伪造，所以 worktree 身份只决定抽屉里挂在哪个仓库下，不授予连接范围以外的访问。**判定全程不执行 git**（`.git/config` 模型可写，能让 git 执行任意命令，`AUTH-06` 同一理由）<br>*（2026-10-10 改：原先范围外的平级 worktree 随仓库授权；review 指出两侧可一起伪造，照桌面端收紧）* |
+| `SCOPE-05` | 已连接文件夹的子目录经 `realpath` 后即是合法 cwd（官方桌面端语义：子文件夹直接可达）；嵌套时归最长的那个根。禁区（`~/.claude`、CCM 数据目录）的子树永远不是合法 cwd；scratch 根下只认 app 用 `mkdtemp` 建的 `scratch-YYYY-MM-DD-xxxxxx` 单段目录。**显式传入的越界 cwd 一律拒绝并记审计**，不得静默回落到别的目录——抽屉按项目请求会话列表后，回落 = 把 A 文件夹的会话画到 B 的标题下。已连接、但已从磁盘消失的（连接根被删、其下 worktree 被删）同样拒绝，但不记越界——抽屉每 12 秒轮询它，记了就把环形审计挤光 |
+| `SCOPE-03` | 授权工作区列表必须来自**显式配置**；清单为空或一个都解析不出时照常启动、只剩「无文件夹」（2026-10-15 前是拒绝启动），**绝不回落家目录**；外置清单文件（`WORK_DIRS_FILE`）读不出来是配置坏了，拒绝启动并点名那个文件。`SCOPE-01` 管的是「路径必须落在白名单内」，白名单本身 = `[家目录]` 时它全绿而整个家目录已经暴露 —— 这是它的上游，不是同一条 |
 | `FILE-01` | 编辑器直写不走审批链，但走独立的闸：已存在文件、大小硬顶、`baseHash`、写前后范围门、审计、`FILE_EDIT=off` 整段关闭 |
 | `FILE-02` | `open` 之前拒绝 FIFO / 字符设备 / unix socket。实现是**白名单**（只放行常规文件与 symlink），测试要按白名单写，否则新增一种特殊文件类型时不会红 |
 | `FILE-03` | 控制面状态文件（设备、审批、配置、审计、上传附件）owner-only `0600` |
+| `FOLDER-01` | 手机上「添加文件夹 / 新建文件夹」扩的是授权面，只能照官方桌面端的口径放：浏览**只回目录名**（不回文件、不跟随 symlink、隐藏点目录、有上限），范围以家目录为界；**不能添加**的：家目录本身、磁盘根、家目录以外、禁区（`~/.claude`、CCM 数据目录、scratch 根）内、仓库 `.claude/worktrees/` 下 Claude Code 建的 worktree（跟随所属仓库，要加就加仓库；用户自建的平级 worktree 能加）。新建只接受单段名字、非递归，建完用 realpath 复核仍在范围内，不在就撤掉那个空目录再拒。已经是连接根时添加不重复写（`added:false`）。**断开**只认与当前清单精确相等的连接根，其余条目连同 `sessionLimit` 原样保留，剩下的全都找不到时照样生效，开着的会话照常跑、只拒新开。来源不可改（环境变量 / 外置文件、没有配置文件）时，instances 广播的 `foldersReadonly` 提前说清原因<br>*（2026-09-24 建：WORKDIRS 改为「已连接的文件夹」、手机上可直接添加；2026-10-15 补断开）* |
+| `FOLDER-02` | 抽屉文件夹的手动顺序（长按拖动排序，2026-10-26 取代置顶）只改展示顺序：授权用的根列表（`workDirs`）、主工作目录、查看目录的回落、新会话的缺省目录、文件访问范围**一律不读排序后的顺序，也不被它回写**。`folders:reorder` 只认当前清单的**精确排列**（缺根、多出子文件夹 / 前缀相似 / 已移除的根、重复都拒，存储与广播不动）；handler 里 `deviceApproved !== true` 就拒（统一注册器只拦 `=== false`）。顺序存数据目录（沿用置顶时的 `pinned-roots.json`，旧置顶直接当初始顺序）、不写 `ccm.config.json`，读坏了当作没有；断开的根不清记录，期间没重新排序的话重连后回到原位<br>*（2026-10-23 建，#305；2026-10-26 改为拖动排序）* |
+| `SCRATCH-01` | 删除「无文件夹」会话的 scratch 目录是 `app/src` 里唯一一处递归删除，只在**全部**成立时才删：realpath 后的父目录**恰好是** scratch 根、目录名是 `mkdtemp` 建的 `scratch-YYYY-MM-DD-xxxxxx` 形态、目录本身不是 symlink、scratch 根不是家目录也不是磁盘根、目录里没有别的会话的 transcript（`/clear` 之后同一目录会有多条）、没有活实例开在里面。任一条不成立就不删——留下一个空目录只是垃圾，删错是数据丢失<br>*（2026-09-24 建，同上）* |
 
 ### 会话与 Claude
 
 | ID | 红线 |
 |---|---|
 | `MSG-01` | 同一 `clientMessageId` 对 Claude `send` 至多一次。校验失败不得 commit；并发重发靠 in-flight claim，无论成败都要 release（`REL-01` 两阶段 + claim/release · `SRV-001` FRESH 分支**同样**要单飞——「FRESH 不去重」是修过的坑） |
+| `MSG-02` | 客户端手里的实例句柄（`instanceId`）不得指到另一个会话。句柄活得比 server 进程久：离线队列存在 localStorage 里、通知深链和断线续传也都带着它，所以发号**跨重启不复用**（每次启动带一段随机段）。进程内计数从 1 重新发号的话，A 项目里排着的消息会投进 B 项目恰好同号的会话，模型在错误的仓库里执行它。离线重放另带入队时的 `sessionId`，会话才是身份：句柄失效（规则 5 置换、切 effort 只换实例号不换会话）或命中的实例此刻跑的不是那个会话时，改投那个会话此刻的活实例，下游的置换、续接分叉闸、在途轮闸照常过；那个会话正在续接（置换进行到一半：旧实例已移出、新实例还没登记）就先等它落定再判；既没有活实例也没有在续接，才按 stale 拒收，不投递，也不替用户把会话重新拉起来<br>*（2026-10-16 建：云端全量 review P0-2。同日补改投：同一批离线消息的第 1 条触发置换之后，第 2 条起带着旧句柄被判 stale、永久失败，review P2；以及置换进行中到达的重放，PR #218 review）* |
 | `SESSION-01` | 终端仍在驾驶时 Web 不得向同一会话发新消息；接管前若有外部增长先 dispose + resume 吸收（`SRV-003` 该置换时置换、**忙碌时禁止置换**，两侧都要钉） |
+| `SESSION-02` | 活着的实例在抽屉里必须有一行：不依赖 `session:list` 有没有返回它（被分页挤出本页、transcript 被 EnterWorktree 迁到别的 project 目录），不依赖它有没有 sessionId（懒开的 worktree 新会话），也不依赖它的 cwd 还属不属于某个工作区。行都没有，用户就既看不到它在跑、也关不掉它。<br>*（2026-09-24 建：真机会话 `1c401b5d` 正在跑，抽屉里整行消失）* |
+| `SESSION-03` | 会话中途 `EnterWorktree` / `ExitWorktree` 之后，实例的驾驶轴 cwd 必须跟到新目录——CLI 已把整份 transcript 迁到新 cwd 的 project 目录，停在旧值 = 历史、resume、附件全按一个空目录解析。信号以主链 `tool_use_result`（`worktreePath` / `originalCwd`）为准：CLI 2.1.280 实测 EnterWorktree **不派发** CwdChanged，hook 只是另一条冗余通道。两路先后到达必须幂等；子 agent 的、`is_error` 的、别的工具的结果一律不采信；采信前仍过 server 的范围判据。<br>*（2026-09-24 建：9/13 那版只接了 hook，真机会话 `1c401b5d` 证明它从未生效）*  外部 Desktop/CLI 搬家时，读盘位置单独恢复；仅认同项目授权范围内、有明确归属证据的唯一候选，多份拒绝猜测，发送前在新目录安全续接。 |
+| `SESSION-04` | 续接时若 CLI 会接上的链不含物理上最新的对话消息（开着的旧终端在旧叶子下写过行、又比手机侧晚重贴 `last-prompt`——谁最后重贴谁说了算），Web **不得静默发送**：发送闸先拒收、由用户选「从最新那条分叉」或「仍然发送」；额度墙自动继续同样不得代发。判定读不动时 fail-open（不拦，等于改动前的行为）。判定在后台读 spawn 前那段字节、不挡切换回执，发送闸与自动继续都要先等它落定（上限 10s，超时同读不动）。依据是 2026-10-16 对 CLI 2.1.281–2.1.301 的零 token 实测，见 [architecture.md](../docs/architecture.md)「续接锚点」。<br>*（2026-10-16 建：真机会话 `c78e8b47` 下次续接会丢掉 45 条手机消息）* |
 | `SOCKET-01` | Socket 断开不得杀死 Agent；Agent 死必须清 busy、通知客户端、允许恢复 |
 | `SYNC-01` | 出向唯一信封 `agent:event`（`seq` + `epoch` + `type`）。重连用 `sync:since` 补缺口，超缓冲或换 epoch 走鉴权 `session:history`。一台设备连入触发的追平重定基线只对它自己生效：其余在线端照样收到终端刚写的那段 `history_append`，待审批设备连入不触发 |
-| `READ-01` | 未读位点跨设备共享、按时间戳单调合并。手动标未读**不得**用「删条目」表达已读——LWW 合并里会被另一台设备复活；标记也**不得**被分页截断吞掉——`session:list` 要把挤出本页的那些补回列表（否则确认框承诺的「会一直显示未读」当场食言） |
-| `APPROVAL-01` | 一次审批只有一个终态。所批即所行：前后端同一份 `canonicalizeOp`（`app/public/js/canonicalize.js` 是前后端唯一豁免的共用文件），指纹不符不得执行 |
+| `READ-01` | 未读位点跨设备共享、按时间戳单调合并。手动标未读**不得**用「删条目」表达已读——LWW 合并里会被另一台设备复活；标记也**不得**被分页截断吞掉——`session:list` 要把挤出本页的那些补回列表（否则确认框承诺的「会一直显示未读」当场食言）。文件夹「全部标为已读」**必须**覆盖还没加载出来的旧会话（服务端记文件夹水位，回执折进每行 seen），否则「显示更多」拉出一片假未读 |
+| `APPROVAL-01` | 一次审批只有一个终态。所批即所行：前后端同一份 `canonicalizeOp`（`app/public/js/canonicalize.js` 是前后端唯一豁免的共用文件），指纹不符不得执行。普通「允许」只放行这一次：CLI 随审批附带的 `setMode` 建议与规则建议同档，只在「总是允许」时回传（ExitPlanMode 退出时用户自选的档除外——切档就是被批准的那件事）<br>*（2026-10-16 补：全量 review P0-3，批一次写文件，整个会话就被升到 acceptEdits）* |
 | `APPROVAL-02` | 启动时磁盘上残留的 pending 标为 expired（`decidedBy=system:restart`），不可再批准执行 |
+| `APPROVAL-03` | 仓库自带的 settings（project 层 `.claude/settings.json`、local 层 `.claude/settings.local.json`）不得把 Web 新会话的初始权限档升级成 `bypassPermissions` / `auto`：这两档只认 policy / user / flag 层，`permissions.defaultMode` 是这两档时先过 SDK 的 `filterEscalatingDefaultMode`（与 CLI 的信任分层同源），被剔掉就落回 `default`。`acceptEdits` 与终端一致，哪一层写的都照常采纳：SDK 那个函数连 project 层的 `acceptEdits` 也剔，比终端严，所以不把这一档交给它。user 层 `~/.claude/settings.json` 照常生效。CCM 把这个档作为显式 `permissionMode` 交给 SDK，`bypassPermissions` 还由 CCM 自己在 `canUseTool` 里放行，所以 CLI 自己那道过滤一次都轮不到<br>*（2026-10-16 建：云端全量 review P0-1，第三方仓库提交一份 settings 就能让手机上新开的会话整场不弹审批。同日机主定 `acceptEdits` 照终端采纳）* |
 
 ### 配置、通知、分发
 
@@ -116,7 +128,7 @@
 |---|---|
 | `CONFIG-01` | 面板/CLI 写入的必须是启动时读的那一份。schema 单一事实源 `env-schema.js`，读写归一在 `config-file.js`；shell env 压过文件 |
 | `CONFIG-02` | `.env` 的 dotenv 与 `source` 两个消费者必须**同时**安全，不轮流迁就一侧 |
-| `CONFIG-03` | 存放凭据的配置文件（`ccm.config.json` 三形态 · `.env` 系列 · `workdirs.json`）必须被 `.gitignore` 覆盖——本仓是 **public** 的。gitleaks 钩子不是替代品：它扫的是「内容像不像凭据」，这条管的是「路径会不会被收进来」。**由门禁守而非用例守**（`tests/gates/check-config-gitignored.js`，在 check 链上）：它要跑 `git`，而 linked worktree 检出的 `.git` 是指向宿主机的指针文件，放进 `tests/invariants/` 会让容器全量档在测到任何代码之前就 128。<br>*（2026-09-17 反向补登：hard-rules §4.6 早写着「删掉那三行 `.gitignore` 不会让任何东西变红」，一直没人管）* |
+| `CONFIG-03` | 存放凭据的配置文件（`ccm.config.json` 三形态 · `.env` 系列 · `workdirs.json` · 验收套件的 `tests/acceptance/local/secrets.json`）必须被 `.gitignore` 覆盖——本仓是 **public** 的。gitleaks 钩子不是替代品：它扫的是「内容像不像凭据」，这条管的是「路径会不会被收进来」。**由门禁守而非用例守**（`tests/gates/check-config-gitignored.js`，在 check 链上）：它要跑 `git`，而 linked worktree 检出的 `.git` 是指向宿主机的指针文件，放进 `tests/invariants/` 会让容器全量档在测到任何代码之前就 128。<br>*（2026-09-17 反向补登：hard-rules §4.6 早写着「删掉那三行 `.gitignore` 不会让任何东西变红」，一直没人管）*<br>*（2026-10-18 补：验收套件的 `local/` 整个目录由一条 `.gitignore` 规则盖住，哨兵挑其中最敏感的 `secrets.json`）* |
 | `NOTIFY-01` | 审批/提问/后台任务完成无条件推；`result` 仅当 approved 房间有**前台可见**连接时抑制，判据是 `client:presence` 而非 socket 连着（`SEC-04` 正文不进第三方明文通道 · `OPS-3` `notify_failed` 须覆盖 push 与 ntfy 双通道） |
 | `ALERT-01` | 服务告警与「需要你(N)」是两根轴，绝不混判（`OPS-1` doctor readiness 假绿） |
 | `DISPLAY-01` | 模型列表、effort、statusline 只做 [display-contracts.md](../docs/display-contracts.md) 允许的变换（`OPS-2` `utilization` 必须夹在 `[0,100]`） |

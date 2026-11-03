@@ -11,8 +11,11 @@ import {
   READONLY_DIAGNOSTICS,
   WRITABLE_KEYS,
   buildEnvView,
+  overlyBroadWorkdir,
   validateEnvChanges,
 } from '../../app/src/ops/env-schema.js';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 // 跨模块引一次 doctor 的 D18：本文件末尾那条「判据同源」断言要拿它当对照物。
 import { envOverrideDiagnostic } from '../../app/src/ops/doctor-checks.js';
 // 同理，末尾 CCM_AGENT_PROGRESS_SUMMARIES 那组要把「配置侧投影」与「消费侧判据」串起来跑，
@@ -745,7 +748,7 @@ test('validateEnvChanges: WORKDIRS 接受路径字符串与 {path,sessionLimit} 
   assert.equal(validateEnvChanges({ WORKDIRS: ['/a', { path: '/b', sessionLimit: 3 }] }, d).ok, true);
 });
 
-test('validateEnvChanges: WORKDIRS 空数组本身合法（列表是否为空由 server preflight 判，见 SCOPE-03）', () => {
+test('validateEnvChanges: WORKDIRS 空数组合法（一个文件夹都不连是正常状态，server 照常启动、只剩「无文件夹」，见 SCOPE-03）', () => {
   const d = { current: {}, fileExists: () => true, isExecutable: () => true, probePort: () => false };
   assert.equal(validateEnvChanges({ WORKDIRS: [] }, d).ok, true);
 });
@@ -877,4 +880,27 @@ test.describe('buildEnvView：老式 .env 安装下的结构化列表', () => {
     assert.equal(findWorkdirs(buildEnvView({}, { structured, shellEnv: { WORK_DIRS: '' } })).overriddenByEnv, false,
       '空串按「未设置」口径不计');
   });
+});
+
+// 过宽根与家目录是拒绝名单：比较前要落到磁盘上的真实写法。macOS 缺省不分大小写，/USERS 就是 /Users、
+// 家目录换个大小写还是家目录——按字面比会被换个大小写绕过去。分大小写的系统上（Linux CI）构造不出来，跳过。
+test('过宽根与家目录换个大小写照样拒（不分大小写的文件系统）', { skip: !(existsSync('/Users') && existsSync('/USERS')) }, () => {
+  assert.equal(overlyBroadWorkdir('/USERS', '/Users/nobody'), 'work_dir_too_broad');
+  const home = homedir();
+  assert.equal(overlyBroadWorkdir(home.toUpperCase(), home), 'work_dir_is_home');
+});
+
+// 验收 O47（AC-17-11）：「服务与配置」面板有几段说明原样露出了 markdown 的 **加粗**（TRUSTED_PROXY / WORKDIRS /
+// WORK_DIRS_FILE）。面板按纯文本渲染这些文案，** 就是两个星号。两种语言的 label / help 都不许出现。
+test('配置项的 label / help（中英）不含 markdown 加粗符号：面板按纯文本渲染', () => {
+  const offenders = [];
+  for (const [key, spec] of Object.entries(ENV_SCHEMA)) {
+    for (const field of ['label', 'help']) {
+      for (const lang of ['zh', 'en']) {
+        const text = spec?.[field]?.[lang];
+        if (typeof text === 'string' && text.includes('**')) offenders.push(`${key}.${field}.${lang}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, []);
 });

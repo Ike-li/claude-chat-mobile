@@ -151,7 +151,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 两级导航取代了平铺 + sticky 分段 chip。入口文案换到作用域轴（「设置与状态」），副标题点名
   // 「会有人专门来找」的四件事——旧文案里「本机提醒」在面板中根本不存在，而设备信任/吊销这个
   // 全站唯一能踢掉丢失手机的地方，四个词零指向。
-  test('P0-28g 侧栏入口文案与 L1 目录：六行可扫，点进去是 L2 页，返回回得来', async ({ page }) => {
+  test('P0-28g 侧栏入口文案与 L1 目录：七行可扫，点进去是 L2 页，返回回得来', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoMock(page);
     await page.locator('#btnSessions').click();
@@ -160,15 +160,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#btnGeneralSettings').click();
     await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
 
-    // L1：六行目录，且默认就停在目录层（不记住上次翻到哪一页）
+    // L1：七行目录，且默认就停在目录层（不记住上次翻到哪一页）
     await expect(page.locator('[data-testid="general-nav-home"]')).toBeVisible();
-    await expect(page.locator('#generalNavRows > [data-nav-to]')).toHaveCount(6);
+    await expect(page.locator('#generalNavRows > [data-nav-to]')).toHaveCount(7);
     await expect(page.locator('[data-testid="general-back"]')).toBeHidden();
 
     // 平铺时代的 sticky 分段导航已随两级化退役
     await expect(page.locator('[data-testid="general-section-nav"]')).toHaveCount(0);
 
-    // L1 → L2：标题跟着换，返回键出现，其余五页收起
+    // L1 → L2：标题跟着换，返回键出现，其余六页收起
     await page.locator('[data-testid="general-nav-devices"]').click();
     await expect(page.locator('#generalPage-devices')).toBeVisible();
     await expect(page.locator('#generalPage-notify')).toBeHidden();
@@ -193,8 +193,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   // 缺口 3：MCP 服务器与 skills 数早就随 init 事件到了浏览器（agent.js emit('init')），
   // 但前端从来没有渲染面——grep mcpServers / skillsCount 在 app/public 下零命中。
-  // 失败态必须带上原始 status：'failed' 与 'needs-auth' 是两种完全不同的处置。
-  test('P0-28j 「宿主机」页显示 MCP 服务器与 skills 数，失败的那台带原始状态', async ({ page }) => {
+  // 失败态必须带上状态：'failed' 与 'needs-auth' 是两种完全不同的处置。
+  // #457 起进页先现查 mcp:status；mock 默认没有活实例（live:false），这里走的是 init 快照那条退路。
+  test('P0-28j 「宿主机」页显示 MCP 服务器与 skills 数，失败的那台带状态；没有活实例时标快照、不出按钮', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoMock(page);
     await ensureComposerReady(page);
@@ -207,10 +208,85 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(body).toBeVisible();
     await expect(body).toContainText('MCP');
     await expect(body).toContainText('filesystem');
-    // 连不上的那台：名字后面必须跟着原始 status，不能压成一个笼统的「异常」
-    await expect(body).toContainText('postgres（failed）');
+    // 连不上的那台：名字后面必须跟着状态，不能压成一个笼统的「异常」
+    await expect(body.locator('[data-mcp-name="postgres"]')).toContainText('连接失败');
+    await expect(body).toContainText('快照');
+    await expect(body.locator('[data-mcp-action]')).toHaveCount(0);
     await expect(body).toContainText('Skills');
     await expect(body).toContainText('7');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // #457：状态改为现查（mcpServerStatus），连接中 / 已停用不算故障；能像终端 /mcp 一样重连、启停。
+  // 名字是用户 / 插件写的配置键、错误来自 CLI：一律按纯文本显示。
+  test('P0-28r MCP 实时状态：连接中 / 已停用是灰档，失败的能重连（失败原因原样显示），停用要确认', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.request.post('/__arm-mcp-live'); // gotoMock 会重置 mock，武装要在它之后
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-host"]').click();
+
+    const body = page.locator('[data-testid="host-env-body"]');
+    const row = name => body.locator(`[data-mcp-name="${name}"]`);
+    await expect(row('linear')).toContainText('连接中');
+    await expect(row('linear').locator('.text-danger')).toHaveCount(0);
+    await expect(row('notion')).toContainText('已停用');
+    await expect(body).not.toContainText('快照');
+
+    // 失败原因原样显示；第一次重连失败，CLI 的错误落在这一行；再点一次连上了，重连按钮随之消失
+    await expect(row('postgres')).toContainText('spawn postgres-mcp ENOENT');
+    await row('postgres').locator('[data-mcp-action="reconnect"]').click();
+    await expect(row('postgres')).toContainText('Connection closed');
+    await row('postgres').locator('[data-mcp-action="reconnect"]').click();
+    await expect(row('postgres')).not.toContainText('连接失败');
+    await expect(row('postgres').locator('[data-mcp-action="reconnect"]')).toHaveCount(0);
+
+    // 启用不确认；停用是持久写入，先过确认 sheet
+    await row('notion').locator('[data-mcp-action="toggle"]').click();
+    await expect(row('notion')).not.toContainText('已停用');
+    await row('filesystem').locator('[data-mcp-action="toggle"]').click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmOk').click();
+    await expect(row('filesystem')).toContainText('已停用');
+
+    // 要授权的只提示去电脑上授权；名字里的 HTML 不执行
+    const authRow = body.locator('[data-mcp-name^="<img"]');
+    await expect(authRow).toContainText('需在电脑上完成授权');
+    await expect(body.locator('img')).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__mcpXss)).toBeUndefined();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // #467 review：「宿主机」页开着时，另一台设备把共享的查看会话切走了。卡片要跟着新会话重画、现查；
+  // 停用的确认 sheet 开着时被切走，确认之后也不得把停用发出去——不管发给原来那个还是新看的那个，
+  // 都不是用户确认时看着的那张卡片（停用会写那个项目的配置）。
+  test('P0-28s MCP 卡片：查看的会话被别的设备切走 → 卡片跟着换，确认中的停用不发出去', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.request.post('/__arm-mcp-live');
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-host"]').click();
+
+    const body = page.locator('[data-testid="host-env-body"]');
+    const row = name => body.locator(`[data-mcp-name="${name}"]`);
+    const mcpLog = async () => (await page.request.get('/__mcp-log')).json();
+    await expect(row('filesystem').locator('[data-mcp-action="toggle"]')).toBeVisible();
+
+    await row('filesystem').locator('[data-mcp-action="toggle"]').click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.request.post('/__other-device-views');
+    await expect.poll(async () => (await mcpLog()).some(r => r.event === 'mcp:status' && r.instanceId === 'inst_other'),
+      { message: '查看的会话换了，卡片要按新会话现查' }).toBe(true);
+
+    await page.locator('#confirmOk').click();
+    await expect(row('filesystem')).not.toContainText('已停用');
+    expect((await mcpLog()).filter(r => r.event === 'mcp:toggle')).toEqual([]);
 
     await expectNoBrowserErrors(page);
   });

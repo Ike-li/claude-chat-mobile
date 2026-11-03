@@ -47,3 +47,12 @@ export function encodeProjectDir(cwd) {
   // hash 喂的是**归一后、sanitize 前**的原串（对齐 SDK 的 EZ(e)，不是 EZ(t)）——这里错一个字节就白修
   return `${sanitized.slice(0, MAX_SEGMENT)}-${Math.abs(hash32(normalized)).toString(36)}`;
 }
+
+// cwd 的子孙目录的 project 目录名共有的前缀——只能用来挑候选，归属还得看 transcript 记的 cwd。
+// 不截断时就是「编码 + '-'」（子孙截断了也保留这一段）；cwd 自己的编码超过 200 字符时，它和子孙各接不同的
+// hash，只剩前 200 个字符相同，拿带 hash 的整段去比一个子孙都挑不出来（2026-10-10 第五轮 review）。
+// 截断时这个前缀还会挑进前 200 个字符恰好相同的别的目录，所以说它只是候选。
+export function projectDirDescendantPrefix(cwd) {
+  const sanitized = String(cwd || '').normalize('NFC').replace(/[^a-zA-Z0-9]/g, '-');
+  return `${sanitized.slice(0, MAX_SEGMENT)}-`;
+}

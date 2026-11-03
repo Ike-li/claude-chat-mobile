@@ -28,6 +28,8 @@ export function createRewindCommandController({
   // 拿打开面板时冻结的 sessionId 继续做，等于对一个用户已经不在看的会话执行破坏性操作。
   getCurrentSession = () => ({ sessionId: null, cwd: null }),
   onRewound = () => {},
+  // 单测可压短；生产默认 20s（candidates / preview / confirm 共用）
+  emitTimeoutMs = 20_000,
 } = {}) {
   const modal = byId('rewindModal');
   const listEl = byId('rewindList');
@@ -48,23 +50,28 @@ export function createRewindCommandController({
   let session = null;       // { sessionId, cwd } —— 打开面板那一刻冻结，避免中途切会话打到别的会话上
   let busy = false;         // confirm 在飞：防连击（服务端 G3 也有锁，这里是少发一次请求）
   let items = [];           // 当前清单：返回上一步要重渲它，选中某条时正文/文件数也直接取自它
+  // 第二步预览算出的模式轴约束。confirm 失败/超时要按这两轴重新启用按钮——
+  // setModeButtons 的 code/fork 默认 true，丢了会把原本禁用的模式错误解锁（#404）。
+  let modeCaps = { canCode: true, canFork: true };
 
   function emitAsync(event, payload) {
     return new Promise(resolve => {
       let settled = false;
       const done = (r) => { if (!settled) { settled = true; resolve(r); } };
       socket.emit(event, payload, done);
-      setTimeout(() => done({ ok: false, error: t('请求超时，请重试') }), 20000);
+      setTimeout(() => done({ ok: false, error: t('请求超时，请重试') }), emitTimeoutMs);
     });
   }
 
   function close() {
     closeSheet(modal);
     picked = null; session = null; busy = false;
+    modeCaps = { canCode: true, canFork: true };
   }
 
   function showStep1() {
     picked = null;
+    modeCaps = { canCode: true, canFork: true };
     listEl.classList.remove('hidden');
     step2El.classList.add('hidden');
     backBtn.classList.add('hidden');
@@ -86,19 +93,25 @@ export function createRewindCommandController({
       const disabled = !item.canForkConversation && !item.canRestoreCode;
       // changedFiles=null 是「未知」而不是 0：最后一轮的改动还没有下一个 snapshot 来反映，
       // 报「无代码改动」会把「改了一堆」说成没改。准确值由第二步的 preview 给。
-      const changed = item.changedFiles == null
-        ? `<span class="text-ink-soft">${t('代码改动待确认')}</span>`
-        : item.changedFiles > 0
-          ? `<span class="text-accent-deep">${item.changedFiles} ${t('个文件改动')}</span>`
-          : `<span class="text-ink-soft">${t('无代码改动')}</span>`;
+      // 分叉前复制来的轮次另说一句：它的快照留在原会话里，这里永远查不到，「待确认」等于让人白点一次。
+      const changed = item.inheritedFromFork
+        ? `<span class="text-ink-soft">${t('快照在原会话')}</span>`
+        : item.changedFiles == null
+          ? `<span class="text-ink-soft">${t('代码改动待确认')}</span>`
+          : item.changedFiles > 0
+            ? `<span class="text-accent-deep">${item.changedFiles} ${t('个文件改动')}</span>`
+            : `<span class="text-ink-soft">${t('无代码改动')}</span>`;
       const reason = !item.canForkConversation
         ? `<div class="text-xs text-ink-soft mt-0.5">${t('会话首轮，只能恢复代码')}</div>` : '';
-      return `<div class="py-2.5 border-b border-line ${disabled ? 'opacity-40' : 'active:bg-sunk cursor-pointer'}"
+      // 可选项用原生 button：接入 sheets.js 焦点陷阱 Tab 循环，Enter/Space 激活（#403）
+      const tag = disabled ? 'div' : 'button';
+      const typeAttr = disabled ? '' : ' type="button"';
+      return `<${tag}${typeAttr} class="w-full text-left py-2.5 border-b border-line ${disabled ? 'opacity-40' : 'active:bg-sunk cursor-pointer'}"
         ${disabled ? '' : `data-uuid="${esc(item.promptUuid)}"`}>
         <div class="text-sm text-ink break-words line-clamp-2">${esc(item.text) || `<em class="text-ink-soft">${t('（空消息）')}</em>`}</div>
         <div class="text-xs mt-1">${changed}</div>
         ${reason}
-      </div>`;
+      </${tag}>`;
     }).join('');
   }
 
@@ -158,9 +171,11 @@ export function createRewindCommandController({
       // 两个轴都不行 = 没有任何模式可点，得说清是死路而不是让人对着全灰的按钮猜。
       codeLine = !canFork
         ? t('这一轮既没有可恢复的文件，也无法分叉对话。')
-        : res.reason === 'no-checkpoint'
-          ? t('找不到这一轮的文件快照，只能恢复对话。')
-          : t('这一轮没有代码改动，只能恢复对话。');
+        : picked.inheritedFromFork
+          ? t('这一轮在分叉之前，文件快照留在原会话里，这里只能恢复对话。要恢复代码，请回原会话执行 /rewind。')
+          : res.reason === 'no-checkpoint'
+            ? t('找不到这一轮的文件快照，只能恢复对话。')
+            : t('这一轮没有代码改动，只能恢复对话。');
     } else if (files.length) {
       const shown = files.slice(0, 3).map(esc).join(t('、'));
       codeLine = `${t('将恢复')} ${files.length} ${t('个文件：')}${shown}${files.length > 3 ? '…' : ''}`;
@@ -176,6 +191,7 @@ export function createRewindCommandController({
     }
     effectEl.innerHTML = `${forkLine}<div class="mt-1">${codeLine}</div>`;
     // 对话轴以 preview 的回答为准（清单那份是同源算的，但 preview 更晚、更权威）。
+    modeCaps = { canCode, canFork };
     setModeButtons(true, canCode, canFork);
   }
 
@@ -216,7 +232,9 @@ export function createRewindCommandController({
       // 失败留在面板里说，不写进被 sheet 盖住的消息流（2026-09-12 的教训：
       // 操作在哪一层发起，回执就得在哪一层）。
       effectEl.innerHTML = `<span class="text-danger">${esc(res?.error || t('回退失败'))}</span>`;
-      setModeButtons(true);
+      // 必须带回 preview 时记下的 canCode/canFork：裸 setModeButtons(true) 默认两轴都 true，
+      // 会把「无快照 / 首轮」原本禁用的模式错误解锁（#404）。
+      setModeButtons(true, modeCaps.canCode, modeCaps.canFork);
       return;
     }
     close();

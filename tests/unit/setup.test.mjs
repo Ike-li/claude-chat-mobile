@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,7 +30,8 @@ test.describe('buildConfigContent —— 结构化生成，不再依赖模板匹
   // 【这条曾经叫「省略 workDir 时不写这个 key —— 缺省回落到 $HOME 由 config.js:66 负责」】
   // 它把一个洞写成了预期行为：那个 `|| home` 回落 2026-09-08 实测可达，删掉配置里的工作区行
   // 就能让整个家目录成为工作区，零报错。现在的正确行为是**根本没有回落**——一个工作区都没有时
-  // server 拒绝启动（守护：SCOPE-03，tests/invariants/server/workdir-source.test.mjs）。
+  // server 照常启动、只剩「无文件夹」（2026-10-15 前是拒绝启动；守护：SCOPE-03，
+  // tests/invariants/server/workdir-source.test.mjs）。
   test('一个工作区都没给 → 不写 WORKDIRS 键（而不是编一个出来）', () => {
     const parsed = JSON.parse(buildConfigContent({ authToken: 'abc123' }));
     assert.equal(Object.hasOwn(parsed, 'WORKDIRS'), false);
@@ -82,8 +83,19 @@ test('parseSetupArgs: 未知参数被收集而非静默忽略', () => {
   assert.deepEqual(parseSetupArgs(['--yes', '--workdir=/tmp/w']).unknown, ['--workdir=/tmp/w']);
 });
 
-test('resolveSetupPlan: 非交互缺 --work-dir 时拒绝，不静默用 $HOME', () => {
-  const plan = resolveSetupPlan({ args: parseSetupArgs(['--yes']), envExists: false });
+// 2026-10-15 起工作目录可以不给：不给就一个文件夹都不连，手机上新建会话时再选（server 照常启动、
+// 只剩「无文件夹」，SCOPE-03）。不变的是绝不回落 $HOME——plan.workDir 必须是 undefined，而不是被补成什么。
+test('resolveSetupPlan: 非交互不给 --work-dir → 照常装、不连任何文件夹，绝不补成 $HOME', () => {
+  const plan = resolveSetupPlan({ args: parseSetupArgs(['--yes']), envExists: false, home: '/Users/you' });
+  assert.equal(plan.refuse, undefined);
+  assert.equal(plan.mode, 'noninteractive');
+  assert.equal(plan.workDir, undefined);
+});
+
+// 显式给了空值多半是脚本里变量没展开（--work-dir=$DIR 而 DIR 未设）：意图是「要一个目录」，
+// 悄悄当成跳过会让人以为配上了。
+test('resolveSetupPlan: 非交互 --work-dir= 给了空值 → 拒绝，不当成跳过', () => {
+  const plan = resolveSetupPlan({ args: parseSetupArgs(['--yes', '--work-dir=']), envExists: false });
   assert.equal(plan.refuse?.code, 'work_dir_required');
 });
 
@@ -271,6 +283,26 @@ test('CLI：无 TTY 且未给 --yes → exit 2，不写配置', () => {
   }
 });
 
+test('CLI：--yes 不给 --work-dir → 照常写出配置，不含 WORKDIRS，并说明以后在哪选', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-setup-nofolder-'));
+  const config = join(dir, 'ccm.config.json');
+  try {
+    const res = spawnSync(process.execPath, [SETUP, '--yes', '--hooks=off', `--config=${config}`], {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, LANG: 'C' },
+      cwd: fileURLToPath(new URL('../..', import.meta.url)),
+    });
+    assert.equal(res.status, 0, res.stderr || res.stdout);
+    const parsed = JSON.parse(readFileSync(config, 'utf8'));
+    assert.equal(Object.hasOwn(parsed, 'WORKDIRS'), false, '没给目录就不该凭空写出一个');
+    assert.equal(typeof parsed.AUTH_TOKEN, 'string');
+    assert.ok(res.stdout.includes(MESSAGES.en.noFolderNote), `没告诉用户以后去哪选文件夹：\n${res.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('CLI：--config 写到别处时，仓库根已有 ccm.config.json 不挡', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-setup-cfg-'));
   const work = join(dir, 'work');
@@ -429,7 +461,7 @@ test.describe('runInteractive —— 桌面控制台的回答必须生效', () =
 // 一个 typo 就得从头再来。这里把「问一次」换成「问到对或到上限」，上限是必须的：
 // 没有上限时，ask 若因 stdin 关闭恒返回空串就成了死循环（文件头注释记的正是这类 EOF 事故）。
 test('promptWorkDir：输错可以重来，逐次报出具体原因', async () => {
-  const answers = ['', '/Users/you', '/Users/you/code/app'];
+  const answers = ['code/project', '/Users/you', '/Users/you/code/app'];
   const seen = [];
   let asked = 0;
 
@@ -441,7 +473,7 @@ test('promptWorkDir：输错可以重来，逐次报出具体原因', async () =
   assert.equal(r.ok, true);
   assert.equal(r.workDir, '/Users/you/code/app');
   assert.equal(asked, 3);
-  assert.deepEqual(seen, ['work_dir_required', 'work_dir_is_home'], '每次拒绝的理由要各自报出来，不能只报最后一次');
+  assert.deepEqual(seen, ['work_dir_not_absolute', 'work_dir_is_home'], '每次拒绝的理由要各自报出来，不能只报最后一次');
 });
 
 test('promptWorkDir：连错到上限就停，不无限追问', async () => {
@@ -505,9 +537,40 @@ test.describe('promptWorkDirs —— 向导支持一次登记多个工作区', (
   });
 
   test('首个就不合法且重试耗尽 → 失败原样上抛（与 promptWorkDir 同契约）', async () => {
-    const r = await promptWorkDirs(async () => '', async () => '', { home: '/Users/you', maxAttempts: 2 });
+    const r = await promptWorkDirs(async () => 'relative', async () => '', { home: '/Users/you', maxAttempts: 2 });
     assert.equal(r.ok, false);
-    assert.equal(r.code, 'work_dir_required');
+    assert.equal(r.code, 'work_dir_not_absolute');
+  });
+
+  // 2026-10-15 起第一问可以跳过（以后在手机上新建会话时再选）。stdin 关闭时 ask 恒返回空串，
+  // 跳过也让它不会在这里打转。
+  test('首个直接回车 → 跳过：不登记任何文件夹，也不追问「再加一个」', async () => {
+    let more = 0;
+    const r = await promptWorkDirs(async () => '', async () => { more += 1; return '/Users/you/code/x'; }, { home: '/Users/you' });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.workDirs, []);
+    assert.equal(r.workDir, undefined, '跳过就是没有，绝不补成家目录');
+    assert.equal(more, 0);
+  });
+
+  test('runInteractive：问文件夹时直接回车 → 照常写配置、一个文件夹都不登记，提示里说了可以跳过', async () => {
+    let written;
+    const asked = [];
+    await runInteractive(
+      { plan: { workDir: undefined, hooks: 'off', desktop: 'off' }, outPath: '/tmp/ccm.config.json', existingConfig: undefined, t: MESSAGES.zh },
+      {
+        createRl: () => ({ question: async (q) => { asked.push(q); return ''; }, close: () => {} }),
+        writeFile: (args) => { written = args; },
+        buildDesktop: () => {},
+        installHooks: () => {},
+        platform: 'linux',
+      },
+    );
+    assert.ok(written, '回车跳过不该让向导半路退出、一个字不写');
+    assert.deepEqual(written.workDirs, []);
+    assert.equal(written.workDir, undefined);
+    assert.match(asked.find(q => q.includes(MESSAGES.zh.workDirLabel)) ?? '', /回车跳过/, '不说能跳过，用户只会以为必须填');
+    assert.equal(asked.some(q => q.includes(MESSAGES.zh.moreDirPrompt)), false, '跳过了就别再问「再加一个」');
   });
 });
 

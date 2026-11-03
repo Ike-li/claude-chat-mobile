@@ -22,10 +22,10 @@
 // 代价：会话 id 会变（本仓的会话身份就是 CLI 的 sessionId，没有 Desktop 那层映射）。
 // 用户看到的是「回退后进入一个新会话」，与既有的 session:fork 同款，不是新概念。
 
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
-import { getProjectDir, isSafeSessionId, splitAttachmentBlock } from './history.js';
+import { readRegularText } from '../shared/regular-file.js';
+import { getProjectDir, isCliSystemLine, isSafeSessionId, reconstructSlashCommand, splitAttachmentBlock } from './history.js';
 
 // forkSession / resumeSessionAt 真正认得的 entry 类型。逆向 SDK 的 transcript 读取器
 // （Desktop 1.52386.6 内嵌的那份）得到的白名单原文：
@@ -88,12 +88,35 @@ export function planRewind(entries, promptUuid) {
   const at = entries.findIndex(e => e && e.uuid === promptUuid);
   if (at < 0) return { ok: false, reason: 'prompt-not-found' };
 
-  // K = 目标轮之前最后一条 chain entry。取「最后一条」而不是「最后一条 assistant」：
+  // K = 目标轮之前、【本支上】最后一条 chain entry。取「最后一条」而不是「最后一条 assistant」：
   // 被中断（Esc）且完成过工具的轮次尾部是 tool_result，它同样是保留轮自己的内容，
   // 锚在更早的 assistant 上会把它一起丢掉。
+  //
+  // 【沿父链，不按物理行序】（2026-10-26）同一个父节点下常挂着两条 prompt：先发的那条被放弃或重发，
+  // 后一条从同一个父节点接着写。物理上的前一条于是是被放弃那条的尾巴，forkSession 切出来的新会话
+  // 停在一句已经放弃的话上。父指针为 null 的是根 prompt，本支在它之前什么都没有。
+  // 压缩边界 parentUuid 为 null、接续写在 logicalParentUuid 上（同 planFork）。
+  // 没有 parentUuid 字段的老形态行沿用物理行序：那种 transcript 里本就分不出支。
+  const target = entries[at];
   let keepUuid = null;
-  for (let i = at - 1; i >= 0; i--) {
-    if (isChainEntry(entries[i])) { keepUuid = entries[i].uuid; break; }
+  if ('parentUuid' in target) {
+    const before = new Map();
+    for (let i = 0; i < at; i++) if (entries[i]?.uuid) before.set(entries[i].uuid, entries[i]);
+    const parentOf = e => e?.parentUuid ?? e?.logicalParentUuid;
+    let cur = parentOf(target);
+    const seen = new Set();
+    while (typeof cur === 'string' && cur && !seen.has(cur)) {
+      seen.add(cur);
+      const e = before.get(cur);
+      // 父链断在这份文件外：不知道本支在哪，拒绝而不是退回行序去猜。
+      if (!e) return { ok: false, reason: 'anchor-not-found' };
+      if (isChainEntry(e)) { keepUuid = e.uuid; break; }
+      cur = parentOf(e);
+    }
+  } else {
+    for (let i = at - 1; i >= 0; i--) {
+      if (isChainEntry(entries[i])) { keepUuid = entries[i].uuid; break; }
+    }
   }
   // 目标轮就是会话第一轮：其前面没有可保留的锚点，分叉退化成「复制一个空会话」，不做。
   // 与 Desktop 同款判断（它的措辞是 "has assistant-less history before it; declining rather than clearing"）。
@@ -175,7 +198,11 @@ export function listRewindCandidates(entries) {
       snapshots.set(e.messageId, e.snapshot?.trackedFileBackups ?? {});
     }
   }
-  const prompts = entries.filter(e => isHumanPrompt(e) && typeof e.uuid === 'string');
+  // CLI 的注入与包装不是人开的一轮，不进清单（验收 O61：<local-command-caveat>、<local-command-stdout>、打断标记
+  // 原样列在这里，还能选）。判据与会话正文同一份（history.js）。只在这张清单上过滤：isHumanPrompt 还决定轮次边界，
+  // 动它会改 planRewind / planFork 的切点。
+  const prompts = entries.filter(e => isHumanPrompt(e) && typeof e.uuid === 'string'
+    && !e.isMeta && !isCliSystemLine(extractPromptText(e)));
   return prompts.map((e, i) => {
     // 【这一轮动了几个文件 = 下一轮的 snapshot 减本轮的】snapshot 在 prompt 落盘那一刻拍摄，
     // 记的是「本轮【开始前】」的还原点，所以两个相邻 snapshot 的差反映的是【前一轮】干了什么。
@@ -184,8 +211,13 @@ export function listRewindCandidates(entries) {
     // 错位一行：真动了文件的那轮报 0，紧随其后的纯提问轮报 N。
     const cur = snapshots.get(e.uuid);
     const next = i + 1 < prompts.length ? snapshots.get(prompts[i + 1].uuid) : undefined;
+    // 从原会话复制来的轮次（forkSession 给每条打 forkedFrom）：它们的快照没有跟过来，留在原会话里。
+    // 报 0 是说「这一轮没改代码」，其实是这里查不到——/rewind 本身就产生分叉会话，第二次回退必然撞上。
+    const inheritedFromFork = !!e.forkedFrom;
     let changedFiles;
-    if (i + 1 >= prompts.length) {
+    if (inheritedFromFork) {
+      changedFiles = null;
+    } else if (i + 1 >= prompts.length) {
       // 最后一轮的改动还没有「下一个 snapshot」来反映，从 transcript 上无从得知。报 0 是撒谎
       // （它可能改了一堆）；标未知，准确值由第二步的 preview（rewindFiles dryRun）给。
       changedFiles = null;
@@ -197,11 +229,14 @@ export function listRewindCandidates(entries) {
         .filter(([path, info]) => before[path]?.version !== info?.version)
         .length;
     }
+    const raw = extractPromptText(e);
     return {
       promptUuid: e.uuid,
-      text: extractPromptText(e),
+      // slash 命令的落盘形式是 <command-name>…</command-name> 包装，显示成用户打的那一行（同会话正文）
+      text: reconstructSlashCommand(raw) ?? raw,
       timestamp: e.timestamp ?? null,
       changedFiles,
+      inheritedFromFork,
       // 【两个轴分开，不要压成一个 canRewind】planRewind 是【对话轴】判据：首轮之前没有可保留
       // 的锚点，fork 会退化成复制一个空会话。但「只恢复代码」根本不 fork，首轮的文件快照照样能
       // 还原——压成一个字段等于让单轮会话完全用不了 Restore code，而终端能（PR #102 review）。
@@ -219,11 +254,25 @@ export function planFork(entries, anchorUuid, { keepAnchorTurn } = {}) {
   // 丢弃方向与 planRewind 是同一个问题，直接委派——两条路径对同一个问题必须同一个答案。
   if (!keepAnchorTurn) return planRewind(entries, anchorUuid);
 
-  // 保留方向：从 anchor 往后走到下一条人类 prompt 之前，取沿途最后一条 chain entry。
+  // 保留方向：从 anchor 往后走到【本支】下一条人类 prompt 之前，取沿途最后一条 chain entry。
+  //
+  // 【只走 anchor 的后代，不按物理行序】两个进程写同一会话时（电脑上开着的终端 + 手机这边的 SDK 进程，
+  // 2026-10-16），各自挂在自己的叶子下，物理行序里两支交错。按行序会把另一支的行当成本轮尾巴——
+  // 真机 c78e8b47 手机末条后紧跟着终端的 informational，锚到它上面，forkSession 的 inclusive slice
+  // 就把它切进新会话、成为物理最后一行，新会话 resume 时又接回终端那支；另一支的人类 prompt 夹在
+  // 本轮中间时，按行序会在那里截断，本轮的 tool_result 被丢、tool_use 悬空。
+  // 判据：带着父指针、且父不在本轮已保留集合里的，属于别的分支，跳过。不带父指针的老形态行照旧算本轮。
+  // 压缩边界 parentUuid 为 null、接续写在 logicalParentUuid 上（?? 只在 null/undefined 时落到后者）。
+  const kept = new Set([anchorUuid]);
   let keepUuid = null;
   for (let i = at; i < entries.length; i++) {
-    if (i > at && isHumanPrompt(entries[i])) break;
-    if (isChainEntry(entries[i])) keepUuid = entries[i].uuid;
+    const e = entries[i];
+    if (i > at) {
+      const parent = e?.parentUuid ?? e?.logicalParentUuid;
+      if (typeof parent === 'string' && parent && !kept.has(parent)) continue;
+      if (isHumanPrompt(e)) break;
+    }
+    if (isChainEntry(e)) { keepUuid = e.uuid; kept.add(e.uuid); }
   }
   return keepUuid ? { ok: true, keepUuid } : { ok: false, reason: 'anchor-not-found' };
 }
@@ -258,13 +307,13 @@ export function describeRewindBlocker(plan) {
  * transcript 通常几百 KB，一次读可接受；真成为瓶颈再谈增量。
  *
  * 失败一律返回空数组（不抛）：调用方拿空数组走 planRewind，必然得到 prompt-not-found ⇒ 拒绝。
- * 失败方向仍是拒绝，与 §5.2 的整体口径一致。
+ * 失败方向仍是拒绝，与 §5.2 的整体口径一致。不是普通文件（FIFO 等）同属读失败，见 shared/regular-file.js。
  */
 export async function readSessionEntries(cwd, sessionId, { baseDir = CLAUDE_PROJECTS_DIR } = {}) {
   if (!isSafeSessionId(sessionId)) return []; // SS-003：非法 id 不拼进 join
   try {
     const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
-    const raw = await readFile(file, 'utf8');
+    const raw = await readRegularText(file);
     const out = [];
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue;

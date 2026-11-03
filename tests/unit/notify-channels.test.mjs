@@ -127,6 +127,22 @@ test.describe('createNotifyChannels · 通道开关与失败上报', () => {
     assert.equal(failures, 1);
   });
 
+  // 验收 O110：ntfy 失败的日志只记 e.message——DNS 失败、拒连、断连在日志里都是同一句「fetch failed」，原因码只进了
+  // 告警面板。日志要带上与告警同一个原因码，排查时从日志就看得出是哪一类。
+  test('ntfy fetch 抛异常 → 日志带上原因码（底层 cause.code），不只一句 fetch failed', async t => {
+    const lines = [];
+    t.mock.method(console, 'error', (...args) => { lines.push(args.join(' ')); });
+    const n = createNotifyChannels({
+      dataDir: tempDataDir(t),
+      env: { NTFY_URL: 'https://ntfy.example', NTFY_TOPIC: 'top' },
+      fetchImpl: async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); },
+    });
+    await n.ntfyNotify('title', 'body');
+    const ntfyLines = lines.filter(l => l.includes('[ntfy]'));
+    assert.equal(ntfyLines.length, 1);
+    assert.match(ntfyLines[0], /ENOTFOUND/);
+  });
+
   // 2026-08-03 review：ntfy 请求此前无显式超时，靠 undici 默认（headers 300s）兜底——挂死的
   // ntfy 网关会把每次通知的 pending promise 吊住数分钟。对齐 cf-access.js 的显式超时纪律。
   test('ntfy 请求带显式超时 signal（挂死网关不再靠 undici 默认 300s 兜底）', async t => {
@@ -138,6 +154,17 @@ test.describe('createNotifyChannels · 通道开关与失败上报', () => {
     });
     await n.ntfyNotify('title', 'body');
     assert.ok(seenSignal instanceof AbortSignal, 'fetch init 必须带 AbortSignal 超时信号');
+  });
+
+  // 验收 AC-16-06 / O1：「发一条测试推送」只看 Web Push 的计数，ntfy 明明投递成功，界面只说「还没订阅」。
+  // 测试推送要能如实回报 ntfy 这条通道，ntfyNotify 就得把投递结果交回来（其余调用点照旧不 await、不看）。
+  test('ntfyNotify 交回投递结果：没配 disabled、2xx sent、非 2xx 与抛错都是 failed', async t => {
+    const dir = tempDataDir(t);
+    const env = { NTFY_URL: 'https://ntfy.example', NTFY_TOPIC: 'top' };
+    assert.equal(await createNotifyChannels({ dataDir: dir, env: ENV_OFF }).ntfyNotify('t', 'b'), 'disabled');
+    assert.equal(await createNotifyChannels({ dataDir: dir, env, fetchImpl: async () => ({ ok: true, status: 200 }) }).ntfyNotify('t', 'b'), 'sent');
+    assert.equal(await createNotifyChannels({ dataDir: dir, env, fetchImpl: async () => ({ ok: false, status: 404 }) }).ntfyNotify('t', 'b'), 'failed');
+    assert.equal(await createNotifyChannels({ dataDir: dir, env, fetchImpl: async () => { throw new Error('boom'); } }).ntfyNotify('t', 'b'), 'failed');
   });
 
   test('ntfy 2xx → 不触发 onDeliveryFailure', async t => {
@@ -193,5 +220,44 @@ test.describe('createNotifyChannels · pushNotify 按订阅 prefs 选 body/previ
     n.savePushSubscription({ endpoint: 'https://e/preview-on', keys: { p256dh: 'a', auth: 'b' }, prefs: { preview: true } });
     await n.pushNotify('标题', '正文', { instanceId: 'inst_1' }, '预览');
     assert.deepEqual(webpush.sent[0].payload.data, { instanceId: 'inst_1' });
+  });
+});
+
+// #231 review：发一条测试推送时两条通道各发一条。串行发的话 Web Push 慢、ntfy 又接近 8s 超时，加起来超过前端 12s 的
+// emit 时限，界面报成断网；而且 Web Push 的计数要等 ntfy 回来才取，这段时间别的通知的成功 / 失败会被算进这次测试。
+test.describe('pushTest · 测试推送回执', () => {
+  const ENV_BOTH = { ...ENV_PUSH_ON, NTFY_URL: 'https://ntfy.example', NTFY_TOPIC: 'top' };
+
+  // 双向屏障：两条通道各自在开始发时报到，都等对方也开始了才返回。先 Web Push 后 ntfy、先 ntfy 后 Web Push
+  // 两种串行顺序都会在这里互等卡死、超时变红；只等一个方向的话，另一种顺序的串行照样绿。
+  test('两条通道并发发：两边都等对方开始了才返回（任一种串行顺序都会在这里互等卡死）', { timeout: 3000 }, async t => {
+    let webPushStarted, ntfyStarted;
+    const webPushStartedP = new Promise(resolve => { webPushStarted = resolve; });
+    const ntfyStartedP = new Promise(resolve => { ntfyStarted = resolve; });
+    const n = createNotifyChannels({
+      dataDir: tempDataDir(t),
+      env: ENV_BOTH,
+      webpushImpl: { setVapidDetails: () => {}, sendNotification: async () => { webPushStarted(); await ntfyStartedP; } },
+      fetchImpl: async () => { ntfyStarted(); await webPushStartedP; return { ok: true, status: 200 }; },
+    });
+    n.savePushSubscription({ endpoint: 'https://e/1', keys: {} });
+    assert.deepEqual(await n.pushTest('t', 'b', {}), { sent: 1, failed: 0, ntfy: 'sent' });
+  });
+
+  test('Web Push 的条数在它发完时就取：ntfy 还挂着时别的通知发成功，不算进这次测试', async t => {
+    let releaseNtfy;
+    const ntfyGate = new Promise(resolve => { releaseNtfy = resolve; });
+    const n = createNotifyChannels({
+      dataDir: tempDataDir(t),
+      env: ENV_BOTH,
+      webpushImpl: fakeWebpush(),
+      fetchImpl: async () => { await ntfyGate; return { ok: true, status: 200 }; },
+    });
+    n.savePushSubscription({ endpoint: 'https://e/1', keys: {} });
+    const pending = n.pushTest('t', 'b', {});
+    await new Promise(resolve => setImmediate(resolve)); // 测试推送的 Web Push 已发完，ntfy 还没回来
+    await n.pushNotify('别的通知', '同一时刻发生的一条'); // 也经 Web Push 发成功
+    releaseNtfy();
+    assert.deepEqual(await pending, { sent: 1, failed: 0, ntfy: 'sent' });
   });
 });

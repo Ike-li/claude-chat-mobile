@@ -1,12 +1,18 @@
 // tests/unit/cli-settings-defaults.test.mjs —— FRESH/空首页配置权威源纯函数（零 token）。
 // 契约：新会话 L0 pending > L3 CLI settings > L4 硬默认；resume 的 mode/model 不走本模块，
-// effort 例外（resolveResumeEffort：saved > inherited > L3，见该函数注释）。
+// effort 例外（resolveResumeEffort：saved > L3，见该函数注释）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { resolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import {
   normalizePermissionMode,
   normalizeEffortLevel,
   defaultsFromEffectiveSettings,
+  defaultsFromResolvedSettings,
+  autoModeBlocked,
   permissionRulesFromEffectiveSettings,
   resolveFreshPrefs,
   resolveResumeEffort,
@@ -112,13 +118,13 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
 
   test('无 pending、无 cli → L4 硬默认', () => {
     assert.deepEqual(resolveFreshPrefs({}), {
-      mode: 'default', effort: null, ultracode: false, model: undefined,
+      mode: 'default', effort: null, effortSource: 'default', ultracode: false, model: undefined,
     });
   });
 
   test('无 pending、有 cli → 用 L3', () => {
     assert.deepEqual(resolveFreshPrefs({ cliDefaults: cliLow }), {
-      mode: 'acceptEdits', effort: 'low', ultracode: false, model: undefined,
+      mode: 'acceptEdits', effort: 'low', effortSource: 'cli-settings', ultracode: false, model: undefined,
     });
   });
 
@@ -129,7 +135,7 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
         pendingMode: 'plan',
         cliDefaults: cliLow,
       }),
-      { mode: 'plan', effort: 'low', ultracode: false, model: undefined },
+      { mode: 'plan', effort: 'low', effortSource: 'cli-settings', ultracode: false, model: undefined },
     );
   });
 
@@ -140,7 +146,7 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
         pendingEffort: null,
         cliDefaults: cliLow,
       }),
-      { mode: 'acceptEdits', effort: null, ultracode: false, model: undefined },
+      { mode: 'acceptEdits', effort: null, effortSource: 'default', ultracode: false, model: undefined },
     );
   });
 
@@ -158,7 +164,7 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
   test('cliDefaults.effort 缺省键 → null，不把 undefined 当有值', () => {
     assert.deepEqual(
       resolveFreshPrefs({ cliDefaults: { mode: 'default' } }),
-      { mode: 'default', effort: null, ultracode: false, model: undefined },
+      { mode: 'default', effort: null, effortSource: 'default', ultracode: false, model: undefined },
     );
   });
 
@@ -169,14 +175,14 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
         pendingEffort: 'ultracode',
         cliDefaults: cliLow,
       }),
-      { mode: 'acceptEdits', effort: 'xhigh', ultracode: true, model: undefined },
+      { mode: 'acceptEdits', effort: 'xhigh', effortSource: 'user', ultracode: true, model: undefined },
     );
   });
 
   test("pending auto → effort 保留 'auto' 字面量，不被折叠成 null（null 会按 L3/inherit 走，丢掉用户选的 auto）", () => {
     assert.deepEqual(
       resolveFreshPrefs({ hasPendingEffort: true, pendingEffort: 'auto', cliDefaults: cliLow }),
-      { mode: 'acceptEdits', effort: 'auto', ultracode: false, model: undefined },
+      { mode: 'acceptEdits', effort: 'auto', effortSource: 'user', ultracode: false, model: undefined },
     );
   });
 
@@ -188,80 +194,75 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
   });
 });
 
-test.describe('resolveResumeEffort（resume 专用：saved > inherited > L3，全部按归一后 ?? 语义折叠）', () => {
+test.describe('resolveResumeEffort（resume 专用：saved > L3，全部按归一后 ?? 语义折叠；带出来源）', () => {
   const cliHigh = { mode: 'default', effort: 'high', model: undefined };
 
-  test('saved 有非空值 → 直接采用，不看后两层', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: 'low', inheritedEffortValue: 'max', cliDefaults: cliHigh }),
-      'low',
+  test('saved 有非空值 → 直接采用，不看 L3', () => {
+    assert.deepEqual(
+      resolveResumeEffort({ savedEffort: 'low', savedEffortSource: 'user', cliDefaults: cliHigh }),
+      { effort: 'low', source: 'user' },
     );
   });
 
-  test('saved 缺失（undefined，从未在 web 端记录过）→ 落到 inherited', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'max', cliDefaults: cliHigh }),
-      'max',
+  test('saved 没记来源（本字段之前落盘的旧会话）→ 按用户自选处理，与改动前显示一致', () => {
+    assert.deepEqual(
+      resolveResumeEffort({ savedEffort: 'low', cliDefaults: cliHigh }),
+      { effort: 'low', source: 'user' },
     );
+  });
+
+  // 验收 O56：此前这里有一层「同 cwd 末个存活实例继承」——只在某个会话里临时选过一次 low，之后恢复的
+  // 旧会话全带着 --effort=low 启动。现在会话自己没记过就看 settings，别的会话的档不参与（调用方也不再传）。
+  test('saved 缺失（undefined，从未在 web 端记录过）→ 落到 L3 CLI settings', () => {
+    assert.deepEqual(resolveResumeEffort({ savedEffort: undefined, cliDefaults: cliHigh }), { effort: 'high', source: 'cli-settings' });
   });
 
   test('saved 显式 null（陷阱：可能是用户选过模型默认，也可能只是上次冷启动兜底写入）→ 仍继续往下兜底，不当终值', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: 'max', cliDefaults: cliHigh }),
-      'max',
-    );
+    assert.deepEqual(resolveResumeEffort({ savedEffort: null, cliDefaults: cliHigh }), { effort: 'high', source: 'cli-settings' });
   });
 
-  test('saved / inherited 都空 → 落到 L3 CLI settings（本次修复的核心场景：从未碰过 web 的旧会话）', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: null, cliDefaults: cliHigh }),
-      'high',
-    );
-    assert.equal(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: undefined, cliDefaults: cliHigh }),
-      'high',
-    );
-  });
-
-  test('inherited 显式 null（该 cwd 末活实例本身也是模型默认）→ 同样继续往下兜底到 L3', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: null, cliDefaults: cliHigh }),
-      'high',
-    );
-  });
-
-  test('三层全空、L3 也未配置 effortLevel → 落回 null（诚实边界，非 bug）', () => {
-    assert.equal(resolveResumeEffort({}), null);
-    assert.equal(
-      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: null, cliDefaults: null }),
-      null,
-    );
+  test('saved 空、L3 也未配置 effortLevel → 落回 null（诚实边界，非 bug）', () => {
+    assert.deepEqual(resolveResumeEffort({}), { effort: null, source: 'default' });
+    assert.deepEqual(resolveResumeEffort({ savedEffort: null, cliDefaults: null }), { effort: null, source: 'default' });
   });
 
   test('cliDefaults.effort 缺省键 → 视为 null，不把 undefined 当有值', () => {
-    assert.equal(resolveResumeEffort({ cliDefaults: { mode: 'default' } }), null);
+    assert.deepEqual(resolveResumeEffort({ cliDefaults: { mode: 'default' } }), { effort: null, source: 'default' });
   });
 
   test('非法档一律归一为 null 再继续兜底', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: 'garbage', inheritedEffortValue: null, cliDefaults: cliHigh }),
-      'high',
-    );
+    assert.deepEqual(resolveResumeEffort({ savedEffort: 'garbage', cliDefaults: cliHigh }), { effort: 'high', source: 'cli-settings' });
   });
 
-  // 用户显式选过 auto 的会话，重启 / 实例回收后 resume 不得落回 L3 或继承值——那等于把 auto 悄悄换成
+  // 用户显式选过 auto 的会话，重启 / 实例回收后 resume 不得落回 L3——那等于把 auto 悄悄换成
   // settings 里存的档（PR #167 review 指出）。auto 与 null 的区别正在这里：null 是「没指定、继续兜底」。
   test("saved 'auto' → 终值 'auto'，不往下兜底", () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: 'auto', inheritedEffortValue: 'max', cliDefaults: cliHigh }),
-      'auto',
+    assert.deepEqual(resolveResumeEffort({ savedEffort: 'auto', cliDefaults: cliHigh }), { effort: 'auto', source: 'user' });
+  });
+
+  // 当初从 CLI settings 继承来的档不是会话自己的选择。终端 claude --resume 每次现读 settings，
+  // 这里对齐它：settings 读得到就跟它此刻的值，读不到（缓存冷 / 读失败）才沿用当时记下的档。
+  test('saved 来源是 CLI settings → settings 读得到时跟它此刻的值', () => {
+    assert.deepEqual(
+      resolveResumeEffort({ savedEffort: 'high', savedEffortSource: 'cli-settings', cliDefaults: cliHigh }),
+      { effort: 'high', source: 'cli-settings' },
+    );
+    assert.deepEqual(
+      resolveResumeEffort({ savedEffort: 'high', savedEffortSource: 'cli-settings', cliDefaults: { mode: 'default', effort: 'low' } }),
+      { effort: 'low', source: 'cli-settings' },
+      'settings 已改成 low：终端续接用 low，这里不能还钉着当初的 high',
+    );
+    assert.deepEqual(
+      resolveResumeEffort({ savedEffort: 'high', savedEffortSource: 'cli-settings', cliDefaults: { mode: 'default', effort: null } }),
+      { effort: null, source: 'default' },
+      'settings 里已删掉 effortLevel：回到没指定',
     );
   });
 
-  test("inherited 'auto'（该 cwd 末活实例是 auto）→ 与具体档同样被继承", () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'auto', cliDefaults: cliHigh }),
-      'auto',
+  test('saved 来源是 CLI settings、settings 这次没读到 → 沿用记下的档，仍标 CLI 默认', () => {
+    assert.deepEqual(
+      resolveResumeEffort({ savedEffort: 'high', savedEffortSource: 'cli-settings', cliDefaults: null }),
+      { effort: 'high', source: 'cli-settings' },
     );
   });
 });
@@ -553,4 +554,72 @@ test('审批规则：三档都是空数组 → total 为 0 且不为 null（确�
   });
   assert.notEqual(view, null);
   assert.equal(view.total, 0);
+});
+
+// #461：settings 里禁用了 auto 模式（disableAutoMode）时，CLI 不会进 auto——Shift+Tab 轮换里没有它，
+// defaultMode:'auto' 也从 default 启动（SDK 文档：'default' where auto mode is unavailable）。
+// 手机上照样能点 Auto、新会话页照样预显 Auto，用户就会以为分类器在帮他放行，实际还是逐条审批。
+test.describe('defaultsFromResolvedSettings：disableAutoMode（#461）', () => {
+  const resolvedOf = (effective) => ({ effective, provenance: {}, sources: [] });
+
+  test("顶层 / permissions 下的 'disable'，以及常见误写 true，都判为禁用", () => {
+    for (const effective of [
+      { disableAutoMode: 'disable' },
+      { permissions: { disableAutoMode: 'disable' } },
+      { permissions: { disableAutoMode: true } },   // SDK 0.3.312 之前 resolveSettings 原样返回这种写法，先兼容
+    ]) {
+      assert.equal(defaultsFromResolvedSettings(resolvedOf(effective)).autoModeDisabled, true,
+        `${JSON.stringify(effective)} 没判成禁用：手机上的 Auto 照样可点`);
+    }
+  });
+
+  test('没有这个键、或值不认识 → 不禁用', () => {
+    for (const effective of [{}, { permissions: { allow: ['Read'] } }, { disableAutoMode: 'enable' }, { permissions: { disableAutoMode: false } }]) {
+      assert.equal(defaultsFromResolvedSettings(resolvedOf(effective)).autoModeDisabled, false,
+        `${JSON.stringify(effective)} 被判成禁用：用户没关的 Auto 被置灰`);
+    }
+  });
+
+  // defaultMode:'auto' 要先过 SDK 的 filterEscalatingDefaultMode（看来源层），造的 provenance 喂不准，
+  // 这两条用真 SDK resolveSettings 读一次性目录里的 user 层 settings。
+  let root;
+  const userSettings = (json) => {
+    root ??= mkdtempSync(join(tmpdir(), 'ccm-auto-disabled-'));
+    const dir = join(root, 'user-claude');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify(json));
+    process.env.CLAUDE_CONFIG_DIR = dir;   // SDK 每次调用现读；不碰真实 ~/.claude
+    return resolveSettings({ settingSources: ['user'] });
+  };
+  test.after(() => {
+    delete process.env.CLAUDE_CONFIG_DIR;
+    if (root) rmSync(root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+  });
+
+  test("禁用且 defaultMode:'auto' → 新会话默认档落 default（与 CLI 实际启动的档一致）", async () => {
+    const d = defaultsFromResolvedSettings(await userSettings({ permissions: { defaultMode: 'auto', disableAutoMode: 'disable' } }));
+    assert.equal(d.mode, 'default', '新会话页预显 Auto，CLI 实际从 default 启动');
+    assert.equal(d.autoModeDisabled, true);
+  });
+
+  test("正对照：没禁用时 user 层 defaultMode:'auto' 照旧是 auto", async () => {
+    const d = defaultsFromResolvedSettings(await userSettings({ permissions: { defaultMode: 'auto' } }));
+    assert.equal(d.mode, 'auto', '没禁用也把 auto 改成了 default：用户自己设的默认档失效');
+    assert.equal(d.autoModeDisabled, false);
+  });
+});
+
+test.describe('autoModeBlocked：服务端拦截切到 Auto 的判据（#461）', () => {
+  test('禁用时拒 auto，其余档照常', () => {
+    const disabled = { autoModeDisabled: true };
+    assert.equal(autoModeBlocked('auto', disabled), true, '禁用了还把 auto 发给 CLI：图标先显 Auto，要等下次 init 对账才拨回');
+    for (const m of CCM_PERMISSION_MODES.filter(x => x !== 'auto')) {
+      assert.equal(autoModeBlocked(m, disabled), false, `${m} 被一并拦掉`);
+    }
+  });
+  test('没禁用、或还没读到 settings → 不拦（不知道就交给 CLI，不在这里替它拒）', () => {
+    assert.equal(autoModeBlocked('auto', { autoModeDisabled: false }), false);
+    assert.equal(autoModeBlocked('auto', null), false);
+    assert.equal(autoModeBlocked('auto', undefined), false);
+  });
 });

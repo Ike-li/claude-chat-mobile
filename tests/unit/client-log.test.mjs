@@ -77,6 +77,29 @@ test.describe('createClientLogger 持久化', () => {
     assert.equal(logger.size(), 0);
   });
 
+  test('persistStats：累计每次落盘（序列化+写入）的次数、总耗时、最长一次、最后一次的字节数，读一次清零', () => {
+    let t = 1000;
+    let clock = 0;
+    const storage = fakeStorage();
+    const orig = storage.setItem.bind(storage);
+    let cost = 7;
+    storage.setItem = (k, v) => { clock += cost; orig(k, v); };
+    const logger = createClientLogger(fakeContext(() => t), { storage, persistIntervalMs: 2000, clock: () => clock });
+
+    assert.equal(logger.persistStats(), null, '还没落过盘');
+    logger.log('conn', 'a');           // 写，7ms
+    logger.log('conn', 'b');           // 节流，不写不计
+    cost = 12;
+    logger.flush();                     // 写，12ms
+    const bytes = storage._map.get('ccm_client_logs').length;
+    assert.deepEqual(logger.persistStats(), { n: 2, totalMs: 19, maxMs: 12, bytes });
+    assert.equal(logger.persistStats(), null, '读过一次就清零');
+    t = 5000;
+    cost = 3;
+    logger.log('conn', 'c');
+    assert.deepEqual(logger.persistStats(), { n: 1, totalMs: 3, maxMs: 3, bytes: storage._map.get('ccm_client_logs').length });
+  });
+
   test('send/recv 带 currentModel，其它类型不带', () => {
     const logger = createClientLogger(fakeContext(() => 1, { currentModel: 'opus', viewingInstanceId: 'inst_1' }), {});
     assert.equal(logger.log('send', 'hi').model, 'opus');

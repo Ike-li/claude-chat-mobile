@@ -1,7 +1,8 @@
 // tests/invariants/server/sync-catchup.test.mjs —— 重连补缺口：sync:since 的 ack 契约与回放形态
 // 守护：SYNC-01（重连用 sync:since 补环形缓冲内缺口；补发必须标 replay；实例对不上要说 found=false 让客户端清屏重载，而不是把残缺当完整）
 // 覆盖：全量/增量/零补三档 + replay 标记 + 补发内容与原件逐字段一致 + found=false 两条独立判据 + diskLen 的读取条件 + 幂等 + epoch 稳定
-// 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR；CLAUDE_BIN 走 stub，无真 turn）
+//       + 元数据（models / slash_commands）照样回放、但不计入 replayed
+// 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR；CLAUDE_BIN 走 stub，无真 turn；元数据那条另起一个可驱动 stub 的 server）
 //
 // 分层：eventsSince 的【纯逻辑】已在 tests/unit/agent-core.test.mjs 覆盖（seq 过滤、2002 条造 trim 的
 // gap 检测、已答 question / 已决 permission_request 不重放）。本文件只测它外面那层 handler——
@@ -15,8 +16,8 @@
 // 不测什么 + 为什么：
 //  ① gap=true（超出缓冲窗口）—— 要塞满 2000 条事件才会 trim，而 stub 一条模型事件都不产出。
 //     判据本身是 eventsSince 里的纯表达式，agent-core.test.mjs 用 2002 次 emit 直接构造，比这里可靠。
-//  ② replayed 排除 models —— 需要缓冲里有 models 事件，而它来自 q.supportedModels()，stub 下拿不到。
-//     这条的后果很重（切入后聊天区空白），但在这一层造不出真实形态，硬造只会得到一个自证的夹具。
+//  ② （已移出本节）replayed 排除 models —— 当初的理由是默认 stub 不应答 initialize、造不出 models 事件。
+//     可驱动 stub（CCM_FAKE_CLAUDE_MODE=init）应答 initialize，models 与 slash_commands 都是真形态，见文件末那条。
 //  ③ 「clone 而非原地改 envelope」—— 源码注释担心的污染在当前结构下【没有可观测差异】：
 //     buffer 的唯一消费者就是 eventsSince，而已广播出去的 envelope 早被 socket.io 序列化，
 //     事后改动影响不到它。注释是防御性的（将来多一个消费者就成立），不为它编一条假断言。
@@ -26,20 +27,23 @@ import '../../setup/require-disposable-env.mjs';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { io as ioClient } from 'socket.io-client';
-import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
+import { spawnServer, killServer, waitForCondition } from '../../integration/_spawn-server.mjs';
+import { encodeProjectDir } from '../../../app/src/shared/project-dir.js';
+import { HISTORY_MAX_MESSAGES } from '../../../app/src/sessions/history.js';
 
 const TOKEN = 'inv-sync-catchup-token';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let dir, server, seeder, instanceId, seededEvent;
 
-async function connect(tag) {
+async function connect(tag, port = server.port) {
   const events = [];
-  const sock = ioClient(`http://127.0.0.1:${server.port}`, {
+  const sock = ioClient(`http://127.0.0.1:${port}`, {
     auth: { token: TOKEN, deviceToken: `inv-sync-${tag}` },
     transports: ['websocket'], reconnection: false, timeout: 4000,
     extraHeaders: { Host: 'localhost' },   // 本机直连：bypass 设备门，本文件只测补缺口
@@ -62,11 +66,13 @@ async function connect(tag) {
   //
   // 只保留【真·补发件】：占 seq 的缓冲事件，或服务端为本次 sync 单发的 replay 件（gap 提示是
   // seq=0 但带 replay:true）。握手快照两者都不是，靠这条判据摘干净，不必依赖到达时序。
+  // 瞬时事件（transient:true）也不是：它的 seq 沿用实例当前值、并不占位（agent.emitTransient），只看 seq>0
+  // 会把 sync 收尾补推的当前态快照（前台任务集合、后台任务进度）误算成重发。
   const since = async payload => {
     const from = events.length;
     const ack = await call('sync:since', { sessionId: null, ...payload });
     await sleep(250);
-    return { ack, replayedEvents: events.slice(from).filter(e => e.seq > 0 || e.replay === true) };
+    return { ack, replayedEvents: events.slice(from).filter(e => e.transient !== true && (e.seq > 0 || e.replay === true)) };
   };
   return { sock, events, call, since, tag };
 }
@@ -164,6 +170,7 @@ test('diskLen 只在 replayed=0 时读：活缓冲有内容就不必对账磁盘
   const active = await c.since({ lastSeq: 0, instanceId });
   assert.ok(active.ack.replayed > 0, '前置：这次应有补发内容');
   assert.equal(active.ack.diskLen, null, 'replayed>0 时不读磁盘，diskLen 必须留空');
+  assert.equal(active.ack.diskTotal, null, 'diskTotal 与 diskLen 同口径：replayed>0 时也留空');
   // stub 下种子那一轮永不收尾（pendingTurns 恒 1）：有在途轮时连 diskExternalLen 也不读——文件正被
   // 己方追加、缓存必失效，这一读是全量重建，会把前台探活（5s）拖成超时重连。
   assert.equal(active.ack.diskExternalLen, null, '有在途轮时不该为 diskExternalLen 读磁盘');
@@ -200,4 +207,65 @@ test('epoch 在同一实例内稳定，且补发件与实时件同源', async ()
   assert.equal(got.epoch, seededEvent.epoch, '补发件的 epoch 必须与实时发出时相同');
   assert.ok(got.epoch, 'epoch 不得为空——空值等于放弃了这条判据');
   c.sock.close();
+});
+
+// 打开一个空闲会话：续接出的实例一起来，就把 models（supportedModels）与 slash_commands（supportedCommands，#456）
+// 推进缓冲——两条都出自 initialize 应答，赶在用户发第一条之前。它们照样要回放（前端拿来填模型下拉与斜杠菜单），
+// 但不是对话内容。算进 replayed 的话：models 那条会让没有 DOM 缓存的切入跳过 loadHistory、聊天区空白
+// （已修过）；slash_commands 那条会让 shouldReloadOnEnter 判「有回放 → reload」，清屏重拉一遍历史，
+// 点击时预取的那份（#491）白拉，diskLen 也因 replayed>0 留空、对账不了。
+// transcript 故意摆成超过截顶线（HISTORY_MAX_MESSAGES）：diskLen 只到 2000，预取要凭削顶前的 diskTotal 核对。
+test('刚续接、缓冲里只有元数据（models / slash_commands）：照样回放，但 replayed=0 并带回 diskLen 与 diskTotal', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-inv-sync-meta-'));
+  const ws = join(root, 'ws');
+  mkdirSync(ws);
+  const cwd = realpathSync(ws);
+  const sessionId = randomUUID();
+  // session:switch 先查 transcript 在不在。只在容器 / CI 跑，那里的 HOME 是一次性目录；cwd 是 mkdtemp 出来的，
+  // 编码出的项目目录也不会撞上别的会话。整段要串成 parentUuid 链，history.js 只认链上的条目。
+  const projectDir = join(homedir(), '.claude', 'projects', encodeProjectDir(cwd));
+  mkdirSync(projectDir, { recursive: true });
+  const line = (type, text, parentUuid, uuid) => `${JSON.stringify({
+    type, uuid, parentUuid, entrypoint: 'cli', timestamp: new Date().toISOString(), sessionId, cwd, isMeta: false,
+    message: { role: type, content: [{ type: 'text', text }] },
+  })}\n`;
+  const onDisk = HISTORY_MAX_MESSAGES + 2;
+  let parent = null;
+  let transcript = '';
+  for (let i = 0; i < onDisk; i++) {
+    const uuid = randomUUID();
+    transcript += line(i % 2 ? 'assistant' : 'user', `终端里的第 ${i} 条`, parent, uuid);
+    parent = uuid;
+  }
+  writeFileSync(join(projectDir, `${sessionId}.jsonl`), transcript);
+  const modelListFile = join(root, 'models.txt');
+  writeFileSync(modelListFile, 'fake-listed-model\n');
+
+  const metaServer = await spawnServer({
+    AUTH_TOKEN: TOKEN, WORK_DIRS: cwd, CCM_DATA_DIR: root,
+    CCM_FAKE_CLAUDE_MODE: 'init', // 应答 initialize：models 与命令清单都藏在这条应答里
+    CCM_FAKE_CLAUDE_MODEL_LIST_FILE: modelListFile,
+    CCM_FAKE_CLAUDE_COMMANDS: JSON.stringify([{ name: 'deploy', description: 'Deploy the app', argumentHint: '' }]),
+  });
+  let c;
+  try {
+    c = await connect('meta', metaServer.port);
+    const opened = await c.call('session:switch', { sessionId, cwd });
+    assert.equal(opened.ok, true, `前置：要能打开这个会话，实际 ${JSON.stringify(opened)}`);
+    // 两条都是 initialize 应答回来后异步推的：等它们以实时件（占 seq）到了再问，否则测的是「还没来」
+    const live = type => c.events.some(e => e.type === type && e.instanceId === opened.instanceId && e.seq > 0);
+    await waitForCondition(() => live('models') && live('slash_commands'), { timeoutMs: 15000, label: '实例推的 models 与 slash_commands' });
+
+    const { ack, replayedEvents } = await c.since({ sessionId, lastSeq: 0, instanceId: opened.instanceId });
+    assert.equal(ack.found, true, `前置：实例应匹配这个会话，实际 ${JSON.stringify(ack)}`);
+    assert.deepEqual(replayedEvents.map(e => e.type).sort(), ['models', 'slash_commands'],
+      '元数据照样回放：前端要靠它们填模型下拉与斜杠菜单，只是不计数');
+    assert.equal(ack.replayed, 0, `缓冲里没有对话内容，replayed 必须是 0，实际 ack=${JSON.stringify(ack)}`);
+    assert.equal(ack.diskLen, HISTORY_MAX_MESSAGES, `replayed=0 才带回磁盘条数（截顶后的），前端靠它对账、复用预取，实际 ack=${JSON.stringify(ack)}`);
+    assert.equal(ack.diskTotal, onDisk, `截顶时条数核对不了，要带回削顶前的总条数，实际 ack=${JSON.stringify(ack)}`);
+  } finally {
+    try { c?.sock.close(); } catch { /* 已关闭 */ }
+    await killServer(metaServer.proc);
+    rmSync(root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+  }
 });

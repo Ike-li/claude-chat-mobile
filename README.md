@@ -13,6 +13,7 @@
   <a href="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml"><img src="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
+  <a href="https://deepwiki.com/Ike-li/claude-chat-mobile"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
 ![登录与设备准入](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
@@ -36,7 +37,7 @@
 
 * **手机上驱动的就是你电脑上那个 claude。** 通过 Agent SDK 驱动本机的 `claude` CLI，同一份 CLAUDE.md、MCP、skills、登录和权限规则。目标是终端里能做的事，手机上都能做。
 * **官方 Remote Control 进不去的配置，它都能用。** 中转、第三方网关、API key、国产模型、Bedrock / Vertex、关了遥测，你的 `claude` 怎么配就怎么用。
-* **会话不用提前准备。** 放行工作区里的全部会话都能看能续，终端里开的、上周的、忘了开远程开关的都在。
+* **会话不用提前准备。** 已连接文件夹里的全部会话都能看能续，终端里开的、上周的、忘了开远程开关的都在。
 * **控制面在你自己机器上。** 服务、会话记录、设备信任、审计全在本机，局域网内可以完全闭环，不用注册任何账号。
 
 ## 终端里的哪些事，手机上也能做
@@ -46,18 +47,18 @@
 | 终端里 | 手机上 |
 | --- | --- |
 | **工具审批**（按 y / n） | 弹审批卡：允许 / 拒绝 / **中止本轮**（对齐 `Esc`）。可勾「总是允许」，并选仅本会话或永久 |
-| **它问你问题**（`AskUserQuestion`） | 选项直接点。多选、「其他…」自己填、「跳过并中止本轮」都在 |
+| **它问你问题**（`AskUserQuestion`） | 选项直接点。多选、「其他…」自己填；可以「不回答」让它接着做，也可以「中止本轮」 |
 | **跑完了？还是卡住了？** | 推到锁屏。审批、提问、后台任务完成**无条件推**，不看你在不在前台 |
 
 剩下的是「接着干活」：
 
 | 终端里 | 手机上 |
 | --- | --- |
-| `claude` 起新会话 / `--resume` 翻历史 | 顶栏 `+` 新建，选工作区、分支、要不要开在新 worktree；侧栏列出该工作区全部会话，标题自动生成、可搜索、在跑的标「运行中」 |
+| `claude` 起新会话 / `--resume` 翻历史 | 顶栏 `+` 新建，选文件夹（手机上就能添加、新建，也可以「无文件夹」）、分支、要不要开在新 worktree；侧栏按项目列出全部会话（子文件夹各成一节、worktree 归到所属仓库），标题自动生成、可搜索、在跑的标「运行中」 |
 | `Esc` 打断 | 底栏停止键 |
 | `/model`、权限档、思考强度 | 底栏 chip 点开就改，下一条起效；权限六档齐全 |
-| `@` 引用文件 | 输入 `@` 搜工作区文件，点选插入路径 |
-| `/` 斜杠命令 | 输入 `/` 列候选，含你装的 skills |
+| `@` 引用文件 | 输入 `@` 搜工作区文件，点选插入 `@路径`（与终端一致，CLI 会把文件内容附进上下文） |
+| `/` 斜杠命令 | 输入 `/` 列候选，含你装的 skills，每条带说明和参数提示；新工作区不发消息也有 |
 | 看它到底改了什么 | 工具卡点开预览变更；回合末尾有文件变更汇总（± 行数） |
 | `git diff` 扫一眼 | 工作区面板的「改动」页 |
 | 回退重来 / 另开一支 | 输入 `/rewind`，两步和终端一样：先选回到哪一轮之前，再选恢复代码和对话、只恢复对话或只恢复代码。动到对话的会分叉出一个回到那一刻的新会话，原会话保留。只想另开一支：点回复下方的「分叉」（刚流式输出完的回复，重新打开会话后才有这个按钮），只复制对话、不动文件 |
@@ -75,7 +76,7 @@
 | --- | --- | --- |
 | **模型通路** | 需 claude.ai 订阅登录 + 直连 `api.anthropic.com`。API key、Bedrock / Google Agent Platform / Microsoft Foundry、指向别处的 `ANTHROPIC_BASE_URL`、`DISABLE_TELEMETRY` 一类遥测开关、ZDR 合规组织——命中任一条即整条不可用 | 你的 `claude` CLI 怎么配就怎么用——第三方网关 / API key / Bedrock / Vertex / 关了遥测，都行 |
 | **控制面数据** | 会话 transcript 存到 Anthropic 服务器做跨设备同步 | 服务、transcript、设备信任、审计全在你机器上，局域网内可完全闭环 |
-| **能看见什么** | 只有显式开过 Remote Control 的会话（或开了 auto-connect 之后新起的）；`/resume` 是终端专属命令，手机上翻不到历史会话 | 放行工作区里的**全部**会话——终端开的、上周的、忘了开开关的，都可见可续 |
+| **能看见什么** | 只有显式开过 Remote Control 的会话（或开了 auto-connect 之后新起的）；`/resume` 是终端专属命令，手机上翻不到历史会话 | 已连接文件夹里的**全部**会话——终端开的、上周的、忘了开开关的，都可见可续 |
 | **两端同时驾驶同一会话** | 可以，终端 / 网页 / 手机随便发 | **做不到**——单驾驶员模型，Web 接管要显式续接且可能分叉 |
 | **部署成本** | 零 | 自己跑一个 server |
 
@@ -113,6 +114,8 @@ npm ci --omit=dev && npm run setup && npm start
 
 **一个要知道的边界**：同一个实时会话同一时刻只有一个驾驶端。终端正在驾驶时 Web 默认只读，可以显式续接但可能产生会话分叉——两端不会同时向同一个 Claude 进程输入。
 
+离开电脑前，在终端里 `/exit` 关掉会话；回来时用 `claude -c` 或 `claude --resume` 重新打开。一直开着的终端不知道你在手机上聊了什么，它之后再写点东西或退出，下次续接就会接回它那一支，手机上这段不在模型的上下文里。真遇上了，发送前会弹窗让你选：分叉出新会话保住手机这段，或者照常发送。
+
 双通道、事件同步、会话接管：**→ [架构说明](docs/architecture.md)**
 
 ## 远程访问
@@ -134,7 +137,7 @@ npm ci --omit=dev && npm run setup && npm start
 
 1. **单用户。** 没有多用户或租户隔离，鉴权通过后的权限就是运行 `claude` 的本机账号的权限。
 2. **没有 Token 就不启动。** `AUTH_TOKEN` 是启动前提，任何绑定模式都一样——本机浏览器打开也要令牌，不存在「本地免鉴权」。
-3. **工作区显式放行。** 文件、会话和相关操作只能进入配置的 `WORKDIRS`。别为了方便把整个 Home 目录加进去。
+3. **只在已连接的文件夹里干活。** 文件、会话和相关操作只能进入 `WORKDIRS` 里的文件夹、它们的子文件夹，以及这些仓库自己的 git worktree；「无文件夹」会话跑在应用自建的一次性目录里。手机上可以添加文件夹，但家目录本身、磁盘根、`~/.claude` 不能添加。连接得越宽，手机能碰到的就越多：像 `~/code` 这样的大目录一连上，里面每个项目都可达。
 4. **新设备需要信任。** 除本机样 Host 的直连或已通过公网身份层（当前为 Cloudflare Access）外，持正确 Token 的新设备仍需一次审批。两点注意：**开着 Access 时它替代设备审批**，那张信任表管不到经它进来的连接；**本机判据读的是 Host 头，而 Host 由客户端填**，纯 TCP 转发（`ssh -R`、frp tcp）下远程来客发 `Host: localhost` 即可冒充本机。想让审批对所有路径生效，设 `DEVICE_APPROVAL_SCOPE=all`。
 5. **继承 Claude Code 权限。** `permissions.allow` 等已有规则继续生效，公网使用前应检查 Bash、Write 的自动放行规则。
 6. **文件编辑属于直接写入。** 内置编辑器**不经过 Agent 的工具审批链**（有范围校验、大小限制、哈希冲突检测和审计），`FILE_EDIT=off` 可关闭，长期公网暴露建议关闭。

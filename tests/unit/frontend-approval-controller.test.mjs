@@ -4,6 +4,7 @@
 // 本文件只覆盖「跨卡片/跨会话的残留状态」这一域——那是整体搬迁最容易漏的一类：
 // 原来散在顶层的量各自被四段逐字复制的清理序列照顾，收敛成一个 clearAll() 之后，
 // 漏进那个动词的量就再也没人清了。
+// 多题组卡的两条也属这一域：别的设备先答掉组里一题、切会话收卡后再重建（E2E 造不出旧页面逐题作答那一档）。
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -19,8 +20,13 @@ function fakeEl(id = '') {
   const el = {
     id,
     children: [],
-    textContent: '',
-    innerHTML: '',
+    _textContent: '',
+    get textContent() { return el._textContent; },
+    // 对齐真实 DOM：写 textContent 会清掉子节点（多选切换 ☐/☑ 时靠此再挂回 description）
+    set textContent(v) { el._textContent = v; el.children.length = 0; },
+    // 控制器重绘列表前写 innerHTML = '' 清空；替身照做，否则 children 会叠着上一次的选项
+    set innerHTML(v) { if (v === '') el.children.length = 0; },
+    get innerHTML() { return ''; },
     value: '',
     checked: false,
     disabled: false,
@@ -40,6 +46,7 @@ function fakeEl(id = '') {
     setAttribute: (k, v) => el.attrs.set(k, v),
     querySelectorAll: () => [],
     appendChild: child => { el.children.push(child); return child; },
+    prepend: child => { el.children.unshift(child); return child; },
     after: sibling => { el.children.push(sibling); return sibling; },
     remove: () => {},
     focus: () => {},
@@ -48,13 +55,24 @@ function fakeEl(id = '') {
   return el;
 }
 
-function mount() {
+function mount({ getViewingInstanceId = () => null, connected = true } = {}) {
   const dom = new Map();
   const byId = id => {
     if (!dom.has(id)) dom.set(id, fakeEl(id));
     return dom.get(id);
   };
   const emitted = [];
+  const bars = [];
+  const interrupts = [];
+  const socketListeners = new Map();
+  const socket = {
+    connected,
+    emit: (name, payload) => emitted.push({ name, payload }),
+    on: (name, fn) => {
+      if (!socketListeners.has(name)) socketListeners.set(name, []);
+      socketListeners.get(name).push(fn);
+    },
+  };
   const context = createAppContext({});
   const queues = createInteractionQueueState(context);
   const approvals = createApprovalController(context, {
@@ -62,11 +80,21 @@ function mount() {
     $: byId,
     el: () => fakeEl(),
     render: t => t,
-    socket: { connected: true, emit: (name, payload) => emitted.push({ name, payload }) },
+    addBar: (text, cls) => bars.push({ text, cls }),
+    socket,
     permModal: byId('permModal'),
     questionModal: byId('questionModal'),
+    requestInterrupt: () => interrupts.push(1),
+    getViewingInstanceId,
   });
-  return { approvals, byId, emitted, warnHidden: () => byId('permIntegrityWarn').classList.contains('hidden') };
+  return {
+    approvals, byId, emitted, bars, interrupts, socket, socketListeners,
+    warnHidden: () => byId('permIntegrityWarn').classList.contains('hidden'),
+    sheetError: id => {
+      const el = byId(id);
+      return el.classList.contains('hidden') ? null : el.textContent;
+    },
+  };
 }
 
 // 服务端算的指纹；随便给个对不上的值就能让前端预检判"不符"，不需要 mock crypto。
@@ -115,4 +143,515 @@ test('作答与 resolvePermission 各自清掉自己那条指纹记录', async (
 
     assert.equal(warnHidden(), true, `${settle} 之后同号新卡片仍带着旧的指纹警示`);
   }
+});
+
+// 验收 O28：完整性核验是异步的，结果可能晚于防误触结束才出来——那时「允许」已经解禁，
+// 得在出结果那一刻重新禁用，而不是只在防误触结束时算一次。
+test('防误触结束后才核验出指纹不符，「允许」也随即禁用，「拒绝」不受影响', async () => {
+  const { approvals, byId } = mount();
+  approvals.enqueuePermission(permRequest('perm_1', { fp: BAD_FP }));
+  assert.equal(byId('permAllow').disabled, true, '前提：刚弹出时处在防误触期');
+  approvals.cancelPermArming(); // 与防误触计时器到点走同一处状态转移
+  assert.equal(byId('permAllow').disabled, false, '前提：防误触结束、核验还没出结果时「允许」可点');
+
+  await approvals.verifyPermIntegrity(permRequest('perm_1', { fp: BAD_FP }));
+  assert.equal(byId('permAllow').disabled, true, '核验出不符后「允许」仍可点');
+  assert.equal(byId('permDeny').disabled, false, '「拒绝」不该因完整性不符被禁用');
+});
+
+// ── 多题组卡（对齐 CLI：一次问多道时合成一张卡，答案攒成草稿、最后整组提交）──────────────
+const groupQ = (i, count = 3) => ({
+  requestId: `toolu_g#${i}`, text: `Q${i + 1}`, options: ['A', 'B'], questionIndex: i, questionCount: count,
+});
+// 点当前题的第 n 个选项（选项外包一层 wrap，按钮是 wrap 的第一个子节点）
+const pickOption = (byId, n) => byId('questionOptions').children[n].children[0].onclick();
+const lastAnswer = emitted => emitted.filter(e => e.name === 'user:answer').at(-1)?.payload;
+
+// 别的设备上没刷新的旧页面仍走逐题即交：服务端已收下那一题，整组提交再带上它会被整组拒收
+// （agent.js resolveQuestionGroup 要求恰好覆盖未答题），而本机早已乐观关卡——这一轮就悬到 TTL。
+test('多题组卡：别的设备先答掉组里一题，那题从组卡移除，本机整组提交只交剩下的题', () => {
+  const { approvals, byId, emitted } = mount();
+  [0, 1, 2].forEach(i => approvals.enqueueQuestion(groupQ(i)));
+  approvals.resolveQuestion('toolu_g#0');
+  assert.equal(approvals.hasPending(), true, '组里还有没答的题，卡不能关');
+
+  approvals.cancelQuestionArming(); // 过防误触窗再作答（对齐 cancelPermArming）
+  pickOption(byId, 1); // 第 2 题 → B，自动跳第 3 题
+  pickOption(byId, 0); // 第 3 题 → A，跳到复查页
+  byId('questionGroupSubmit').onclick();
+
+  assert.deepEqual(lastAnswer(emitted), {
+    requestId: 'toolu_g',
+    answers: [{ index: 1, optionIndex: 1 }, { index: 2, optionIndex: 0 }],
+    instanceId: null,
+  });
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('多题组卡：切会话收卡（clearAll）再切回来，快照重建的组卡接着用之前的草稿', () => {
+  const { approvals, byId, emitted } = mount();
+  [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2)));
+  approvals.cancelQuestionArming();
+  pickOption(byId, 1); // 第 1 题 → B
+  approvals.clearAll();
+
+  [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2))); // 切回来时 pending 快照补发
+  approvals.cancelQuestionArming(); // 重建开窗再次上锁
+  byId('questionTabs').children[1].onclick(); // 直接切到第 2 题
+  pickOption(byId, 0);
+  byId('questionGroupSubmit').onclick();
+
+  assert.deepEqual(lastAnswer(emitted)?.answers, [{ index: 0, optionIndex: 1 }, { index: 1, optionIndex: 0 }],
+    '第 1 题的草稿在收卡后丢了，用户切个会话回来就得从头答');
+});
+
+// PR #413 review（Codex P2）：各题的 question 事件分开送达。后几题还在路上时只答了已到的就能提交——服务端因没覆盖
+// 全部未答题整组拒收，本机却已关卡、把整组标成已答，后到的题和重连快照都被吞掉，这一轮挂到 TTL。
+test('多题组卡：后几题还没送到时不放行提交，收齐答完才交整组', () => {
+  const { approvals, byId, emitted } = mount();
+  approvals.enqueueQuestion(groupQ(0));
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0); // 唯一已到的题答完 → 复查页
+  assert.equal(byId('questionGroupSubmit').disabled, true, '还有两题没送到，提交不该可点');
+  byId('questionGroupSubmit').onclick();
+  assert.equal(lastAnswer(emitted), undefined, '不完整的整组被发了出去');
+  assert.equal(approvals.hasPending(), true);
+
+  approvals.enqueueQuestion(groupQ(1));
+  approvals.enqueueQuestion(groupQ(2));
+  byId('questionTabs').children[1].onclick();
+  pickOption(byId, 1); // 第 2 题，自动跳第 3 题
+  pickOption(byId, 0); // 第 3 题，跳复查页
+  byId('questionGroupSubmit').onclick();
+  assert.deepEqual(lastAnswer(emitted)?.answers.map(a => a.index), [0, 1, 2]);
+});
+
+// #455：机主 2026-10-29 改判，对齐 CLI 允许留题不答直接提交；没答的题按 skipped 发（服务端仍要整组覆盖）
+test('多题组卡：题都到了、留一题不答也能提交，那题以 skipped 发出', () => {
+  const { approvals, byId, emitted } = mount();
+  [0, 1, 2].forEach(i => approvals.enqueueQuestion(groupQ(i)));
+  approvals.cancelQuestionArming();
+  pickOption(byId, 1); // 第 1 题 → B
+  byId('questionTabs').children[2].onclick(); // 跳过第 2 题，直接去第 3 题
+  pickOption(byId, 0); // 第 3 题 → A，到复查页
+  assert.equal(byId('questionGroupSubmit').disabled, false, '题都到了，留一题没答也应可以提交');
+  byId('questionGroupSubmit').onclick();
+  assert.deepEqual(lastAnswer(emitted)?.answers, [{ index: 0, optionIndex: 1 }, { index: 1, skipped: true }, { index: 2, optionIndex: 0 }]);
+  assert.equal(approvals.hasPending(), false);
+});
+
+
+// ── #388：作答路由到审批/提问所属实例，不是当前查看实例 ──────────────────────
+// nav-escape 允许审批卡开着切会话；若 emit 仍带 viewingInstanceId，服务端打到错误实例静默 no-op。
+const lastApprove = emitted => emitted.filter(e => e.name === 'user:approve').at(-1)?.payload;
+
+test('审批：切到别的会话后作答，仍路由到入队时的所属实例', () => {
+  const { approvals, byId, emitted } = mount({ getViewingInstanceId: () => 'inst-B' });
+  approvals.enqueuePermission(permRequest('perm_1'), 'inst-A');
+  byId('permAllow').onclick();
+  assert.equal(lastApprove(emitted)?.instanceId, 'inst-A', '作答带了当前查看实例而非所属实例');
+  assert.equal(lastApprove(emitted)?.requestId, 'perm_1');
+});
+
+test('单题提问：切会话后作答仍路由到所属实例', () => {
+  const { approvals, byId, emitted } = mount({ getViewingInstanceId: () => 'inst-B' });
+  approvals.enqueueQuestion({
+    requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'],
+  }, 'inst-A');
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0);
+  assert.equal(lastAnswer(emitted)?.instanceId, 'inst-A');
+});
+
+test('多题组卡：整组提交路由到首题所属实例，不受 viewing 影响', () => {
+  const { approvals, byId, emitted } = mount({ getViewingInstanceId: () => 'inst-B' });
+  [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2), 'inst-A'));
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0);
+  pickOption(byId, 1);
+  byId('questionGroupSubmit').onclick();
+  assert.equal(lastAnswer(emitted)?.instanceId, 'inst-A');
+  assert.equal(lastAnswer(emitted)?.requestId, 'toolu_g');
+});
+
+// ── #373：连续审批换卡回到顶部 ───────────────────────────────────────────────
+// answerPerm 里 closeSheet→showNextPerm→openSheet 同步发生，面板不隐藏、scrollTop 不会自己归零：
+// 上一张卡滚到按钮处作答，下一张卡就停在同一滚动位置，工具名与命令开头在视口外。
+test('连续审批：上一张卡滚到底后作答，下一张卡回到面板顶部（#373）', () => {
+  const { approvals, byId, emitted } = mount();
+  const panel = fakeEl('permPanel');
+  byId('permModal').firstElementChild = panel;
+  approvals.enqueuePermission(permRequest('perm_1'));
+  approvals.enqueuePermission(permRequest('perm_2', { name: 'Write' }));
+  panel.scrollTop = 240;
+  byId('permAllow').onclick();
+  assert.equal(lastApprove(emitted)?.requestId, 'perm_1');
+  assert.equal(approvals.hasPending(), true, '第二张卡应接着弹出');
+  assert.equal(panel.scrollTop, 0, '第二张卡沿用了上一张卡的滚动位置');
+});
+
+// ── #371：断线/校验失败写进浮层内，不被 z-40 遮罩挡住 ─────────────────────────
+test('审批：断线点允许时浮层内可见错误，且不 emit', () => {
+  const { approvals, byId, emitted, sheetError } = mount({ connected: false });
+  approvals.enqueuePermission(permRequest('perm_1'));
+  byId('permAllow').onclick();
+  assert.match(sheetError('permSheetError') || '', /网络未连接/);
+  assert.equal(emitted.length, 0);
+  assert.equal(approvals.hasPending(), true, '断线时浮层应保持打开');
+});
+
+test('单题提问：断线点选项时浮层内可见错误，且不 emit', () => {
+  const { approvals, byId, emitted, sheetError } = mount({ connected: false });
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0);
+  assert.match(sheetError('questionSheetError') || '', /网络未连接/);
+  assert.equal(emitted.length, 0);
+  assert.equal(approvals.hasPending(), true);
+});
+
+test('提问「不回答」「中止本轮」：断线时都不发，错误写在浮层内', () => {
+  const { approvals, byId, emitted, interrupts, sheetError } = mount({ connected: false });
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
+  approvals.cancelQuestionArming();
+  byId('questionSkip').onclick();
+  assert.equal(emitted.length, 0, '断线时「不回答」不应 emit');
+  assert.match(sheetError('questionSheetError') || '', /网络未连接/);
+  byId('questionInterrupt').onclick();
+  assert.equal(interrupts.length, 0, '断线时不应触发 interrupt');
+  assert.equal(approvals.hasPending(), true);
+});
+
+// #455：「跳过」原来复用 user:interrupt，用户只是不想答，整轮工作却被打断。拆成两个按钮：
+// 「不回答」关卡、本轮继续（服务端 allow + 空 answers）；「中止本轮」照旧 interrupt，等价终端 Esc。
+test('提问「不回答」：按整组 key 发 user:answer { dismiss }、本机关卡，不中止本轮', () => {
+  const { approvals, byId, emitted, interrupts } = mount({ getViewingInstanceId: () => 'inst-B' });
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] }, 'inst-A');
+  approvals.cancelQuestionArming();
+  byId('questionSkip').onclick();
+  assert.deepEqual(lastAnswer(emitted), { requestId: 'toolu_q', dismiss: true, instanceId: 'inst-A' });
+  assert.equal(interrupts.length, 0, '「不回答」不能顺带把这一轮停掉');
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('提问「中止本轮」：requestInterrupt，不发 user:answer', () => {
+  const { approvals, byId, emitted, interrupts } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
+  approvals.cancelQuestionArming();
+  byId('questionInterrupt').onclick();
+  assert.equal(interrupts.length, 1);
+  assert.equal(emitted.filter(e => e.name === 'user:answer').length, 0);
+});
+
+test('多题组卡「不回答」：整组一起关，不要求先答完', () => {
+  const { approvals, byId, emitted } = mount();
+  [0, 1, 2].forEach(i => approvals.enqueueQuestion(groupQ(i)));
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0); // 只答了第 1 题
+  byId('questionSkip').onclick();
+  assert.deepEqual(lastAnswer(emitted), { requestId: 'toolu_g', dismiss: true, instanceId: null });
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('空「其他答案」提示写在提问浮层内', () => {
+  const { approvals, byId, sheetError } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
+  approvals.cancelQuestionArming();
+  byId('questionOtherInput').value = '   ';
+  byId('questionOtherSubmit').onclick();
+  assert.match(sheetError('questionSheetError') || '', /请先输入其他答案/);
+  assert.equal(approvals.hasPending(), true);
+});
+
+test('重连后清掉浮层内断线错误', () => {
+  const { approvals, byId, socketListeners, sheetError } = mount({ connected: false });
+  approvals.enqueuePermission(permRequest('perm_1'));
+  byId('permAllow').onclick();
+  assert.match(sheetError('permSheetError') || '', /网络未连接/);
+  for (const fn of socketListeners.get('connect') || []) fn();
+  assert.equal(sheetError('permSheetError'), null);
+});
+
+test('surfaceError 写到当前打开的审批浮层', () => {
+  const { approvals, sheetError } = mount();
+  approvals.enqueuePermission(permRequest('perm_1'));
+  approvals.surfaceError('停止请求超时，可再试一次');
+  assert.equal(sheetError('permSheetError'), '停止请求超时，可再试一次');
+});
+
+
+// ── #372：提问 sheet 对齐审批的 600ms 防误触窗口 ─────────────────────────────
+test('提问弹出后 questionModal 带 sheet-arming；cancelQuestionArming 解除', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true,
+    '刚弹出时应处于防误触期（对齐 #permModal.sheet-arming）');
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true,
+    '防误触期内选项应 native disabled（挡键盘 Enter，不只靠 pointer-events）');
+  assert.equal(byId('questionSkip').disabled, true, '防误触期内「不回答」应 disabled');
+  assert.equal(byId('questionInterrupt').disabled, true, '防误触期内「中止本轮」应 disabled');
+  approvals.cancelQuestionArming();
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), false,
+    'cancelQuestionArming 应清掉 sheet-arming，与计时器到点同效');
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, false,
+    '解除后选项应恢复可点');
+  assert.equal(byId('questionSkip').disabled, false, '解除后「不回答」应恢复可点');
+  assert.equal(byId('questionInterrupt').disabled, false, '解除后「中止本轮」应恢复可点');
+});
+
+test('提问防误触期内选项点击与跳过不 emit', () => {
+  const { approvals, byId, emitted, interrupts } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true);
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true);
+  assert.equal(byId('questionSkip').disabled, true);
+  // 程序化 onclick 仍会跑到 handler；arming 守卫必须 no-op，不能只靠 CSS pointer-events
+  pickOption(byId, 0);
+  byId('questionSkip').onclick();
+  byId('questionInterrupt').onclick();
+  assert.equal(emitted.filter(e => e.name === 'user:answer').length, 0,
+    '防误触期内点选项或「不回答」不得 emit user:answer');
+  assert.equal(interrupts.length, 0, '防误触期内「中止本轮」不得 requestInterrupt');
+  assert.equal(approvals.hasPending(), true, '防误触期内误触不得关卡');
+});
+
+test('提问防误触解除后点选项才 emit user:answer', () => {
+  const { approvals, byId, emitted } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true);
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true);
+  // cancel 与计时器到点走同一处状态转移（清 flag + sync disabled）
+  approvals.cancelQuestionArming();
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, false);
+  pickOption(byId, 0);
+  assert.equal(lastAnswer(emitted)?.optionIndex, 0);
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('提问防误触计时器到点后选项可 emit', () => {
+  const { approvals, byId, emitted } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true);
+  // 与 cancelQuestionArming 同效：模拟 arm 窗口自然到期
+  approvals.cancelQuestionArming();
+  pickOption(byId, 1);
+  assert.equal(lastAnswer(emitted)?.optionIndex, 1);
+});
+
+test('排队的下一题再次弹出时重新上防误触锁', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A'] });
+  approvals.cancelQuestionArming();
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), false);
+  pickOption(byId, 0);
+  approvals.enqueueQuestion({ requestId: 'toolu_b#0', text: 'Q2', options: ['B'] });
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true,
+    '下一题开窗应再次 sheet-arming，不能沿用上一题已解除的状态');
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true,
+    '下一题开窗时选项应再次 native disabled');
+});
+
+test('resume 提问浮层时重新上防误触锁', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
+  approvals.cancelQuestionArming();
+  approvals.suspend();
+  approvals.resume();
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true,
+    'resume 开窗应先上锁，时长同 showNextQuestion');
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true,
+    'resume 后选项应再次 native disabled');
+  assert.equal(byId('questionSkip').disabled, true, 'resume 后跳过应再次 disabled');
+});
+
+// ── #400 / #382：选项卡可点区域与多选 checkbox 语义 ─────────────────────────
+test('选项 description 在 button 内，点说明与点标题走同一 onclick（#400）', () => {
+  const { approvals, byId, emitted } = mount();
+  approvals.enqueueQuestion({
+    requestId: 'toolu_q#0',
+    text: 'Pick',
+    options: [{ label: 'Alpha', description: 'details about Alpha' }, 'B'],
+  });
+  approvals.cancelQuestionArming();
+  const wrap = byId('questionOptions').children[0];
+  const btn = wrap.children[0];
+  assert.equal(wrap.children.length, 1, 'description 不应再作为 wrap 的兄弟节点（死区）');
+  assert.equal(btn.children.length, 1, 'description 应挂在 button 内');
+  assert.equal(btn.children[0].textContent, 'details about Alpha');
+  // 点「说明」等价于激活按钮（同一控件）
+  btn.onclick();
+  assert.equal(lastAnswer(emitted)?.optionIndex, 0);
+});
+
+test('选项 preview 仍在 button 外，可独立展开且不代替选题（#400）', () => {
+  const { approvals, byId, emitted } = mount();
+  approvals.enqueueQuestion({
+    requestId: 'toolu_q#0',
+    text: 'Pick',
+    options: [{ label: 'Alpha', description: 'd', preview: 'secret preview' }, 'B'],
+  });
+  approvals.cancelQuestionArming();
+  const wrap = byId('questionOptions').children[0];
+  const btn = wrap.children[0];
+  const prevBtn = wrap.children[1];
+  const prevBox = wrap.children[2];
+  assert.ok(prevBtn && prevBox, 'preview 开关与内容应在 wrap 上、button 外');
+  assert.equal(btn.children.length, 1, 'preview 不应塞进 button');
+  assert.equal(prevBox.textContent, 'secret preview');
+  const before = prevBox.classList.contains('hidden');
+  prevBtn.onclick({ stopPropagation() {} });
+  assert.notEqual(prevBox.classList.contains('hidden'), before, '预览应能单独切换显隐');
+  assert.equal(emitted.length, 0, '点预览不应提交答案');
+  btn.onclick();
+  assert.equal(lastAnswer(emitted)?.optionIndex, 0);
+});
+
+test('多选选项带 role=checkbox 与 aria-checked，切换时同步（#382）', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({
+    requestId: 'toolu_q#0',
+    text: 'Pick many',
+    multiSelect: true,
+    options: [
+      { label: 'A', description: 'desc A' },
+      { label: 'B', description: 'desc B' },
+    ],
+  });
+  approvals.cancelQuestionArming();
+  const wrap0 = byId('questionOptions').children[0];
+  const btn0 = wrap0.children[0];
+  // 子节点顺序：[☐/☑ 字形, description]；标签是 button 自己的文本
+  const mark = () => btn0.children[0];
+  assert.equal(btn0.getAttribute('role'), 'checkbox');
+  assert.equal(btn0.getAttribute('aria-checked'), 'false');
+  assert.equal(btn0.textContent, 'A', '可访问名称里只该有选项标签');
+  assert.equal(mark().textContent, '☐ ');
+  assert.equal(mark().getAttribute('aria-hidden'), 'true', '☐/☑ 字形应对读屏隐藏，勾选态交给 aria-checked');
+  assert.equal(btn0.children[1].textContent, 'desc A');
+
+  btn0.onclick();
+  assert.equal(btn0.getAttribute('aria-checked'), 'true');
+  assert.equal(mark().textContent, '☑ ');
+  assert.equal(mark().getAttribute('aria-hidden'), 'true');
+  assert.equal(btn0.children.length, 2, '切换勾选后 description 仍在 button 内');
+  assert.equal(btn0.children[1].textContent, 'desc A');
+  assert.equal(wrap0.classList.contains('border-accent'), true);
+
+  btn0.onclick();
+  assert.equal(btn0.getAttribute('aria-checked'), 'false');
+  assert.equal(mark().textContent, '☐ ');
+  assert.equal(wrap0.classList.contains('border-accent'), false);
+});
+
+
+// ── #377：连续审批/提问浮层写明队列剩余条数 ───────────────────────────────────
+function queueProgress(byId, id) {
+  const el = byId(id);
+  return el.classList.contains('hidden') ? null : el.textContent;
+}
+
+test('单条审批不显示队列进度', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueuePermission(permRequest('perm_1'));
+  assert.equal(queueProgress(byId, 'permQueueProgress'), null);
+});
+
+test('连续多条审批显示「第 N 条，后面还有 M 条」，答完推进', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueuePermission(permRequest('perm_1'));
+  approvals.enqueuePermission(permRequest('perm_2'));
+  approvals.enqueuePermission(permRequest('perm_3'));
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 1 条，后面还有 2 条');
+
+  byId('permAllow').onclick();
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 2 条，后面还有 1 条');
+
+  byId('permAllow').onclick();
+  // 最后一条仍属同批，应能看出「不是新的打断」；M=0。
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 3 条，后面还有 0 条');
+
+  byId('permAllow').onclick();
+  assert.equal(approvals.hasPending(), false);
+  assert.equal(queueProgress(byId, 'permQueueProgress'), null, '整批结束后进度应隐藏并归零');
+});
+
+test('单条提问不显示队列进度', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+});
+
+test('提问进度按「还要弹几张卡」数：排队的 3 题组卡只算 1 条', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A', 'B'] });
+  approvals.cancelQuestionArming();
+  [0, 1, 2].forEach(i => approvals.enqueueQuestion(groupQ(i, 3)));
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条', '一张 3 页签的组卡被数成了 3 条');
+
+  pickOption(byId, 0);
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 2 条，后面还有 0 条');
+});
+
+test('连续多条提问显示队列进度；clearAll 清掉', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A', 'B'] });
+  approvals.enqueueQuestion({ requestId: 'toolu_b#0', text: 'Q2', options: ['C', 'D'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0);
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 2 条，后面还有 0 条');
+
+  approvals.clearAll();
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+});
+
+test('卡仍开着时 resolve 掉排队项：M 下降；只剩当前卡时隐藏', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueuePermission(permRequest('perm_1'));
+  approvals.enqueuePermission(permRequest('perm_2'));
+  approvals.enqueuePermission(permRequest('perm_3'));
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 1 条，后面还有 2 条');
+
+  // 多设备/回放：别的客户端已处理 perm_2，本机仍停在第 1 张。
+  approvals.resolvePermission('perm_2');
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.resolvePermission('perm_3');
+  // 队列空、当前卡仍开 → 整批看起来又只剩一张，进度应隐藏（与单条 enqueue 一致）。
+  assert.equal(queueProgress(byId, 'permQueueProgress'), null);
+
+  byId('permAllow').onclick();
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('提问卡仍开着时 resolve 掉排队项：M 下降并最终隐藏', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A', 'B'] });
+  approvals.enqueueQuestion({ requestId: 'toolu_b#0', text: 'Q2', options: ['C', 'D'] });
+  approvals.enqueueQuestion({ requestId: 'toolu_c#0', text: 'Q3', options: ['E'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 2 条');
+
+  approvals.resolveQuestion('toolu_b#0');
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.resolveQuestion('toolu_c#0');
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0);
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('组卡仍开着时 resolve 掉后面排队的单题：M 下降', () => {
+  const { approvals, byId } = mount();
+  [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2)));
+  // 同组两题合成一张组卡后队列空 → 无进度；再排队一张别的单题。
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+  approvals.enqueueQuestion({ requestId: 'toolu_solo#0', text: 'Solo', options: ['X'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.resolveQuestion('toolu_solo#0');
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null, '组卡单独留下时应隐藏进度');
+  assert.equal(approvals.hasPending(), true, '组卡仍在');
 });

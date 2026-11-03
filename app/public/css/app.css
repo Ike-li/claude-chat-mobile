@@ -1,15 +1,17 @@
-/* ── Claude 设计 token（暖米白浅色单主题；改色只动此处，tw-config.js 把它们桥接成语义类）── */
+/* ── Claude 设计 token（暖米白浅色默认；深色走 data-theme=dark 或系统 prefers-color-scheme；改色只动此处，tailwind.config.js 把它们桥接成语义类）── */
 :root {
   color-scheme: light dark;
   --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
   --line:#E3E0D6; --line-soft:#ECEAE1;
-  --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A;
+  /* ink-faint 是小字（10–11px 的时间戳、副标题、小按钮）：在 surface / canvas / sunk / 用户气泡上都要 ≥4.5（验收 O79，原 #73706A 在 sunk 上 4.21） */
+  --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#6B6863;
   /* UI-001：accent 提至 AA 正文对比（白字 5.17 / 字面 4.95）；cta 专供实底白字按钮（深浅一致） */
-  --accent:#AE5238; --accent-deep:#8F422C; --accent-bright:#D97757; --accent-wash:#F0E4DD;
+  --accent:#A44D35; --accent-deep:#8F422C; --accent-bright:#D97757; --accent-wash:#F0E4DD;
   --cta:#AE5238;
-  --user-bubble:#ECE8DF; --info:#1B6FB3; --success:#3D8A50; --danger:#BC4334;
+  --user-bubble:#ECE8DF; --info:#1A6AAB; --success:#337343; --danger:#B34032;
+  --danger-solid:#B34032; /* 白字实底（侧滑「关闭」）：深色不覆盖——深色 danger 为当文字而提亮，当底色白字只剩 3.5 */
   /* warning 加深：字面/surface 4.98（旧 #C77D33 = 3.14） */
-  --warning:#9A5F22;
+  --warning:#915920; /* O102：语义色当文字要在 surface/canvas/sunk/user-bubble/accent-wash 五种底上都 ≥4.5，只调明度 */
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-read: "Source Serif 4", Georgia, Charter, "Songti SC", "Noto Serif SC", "Times New Roman", serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -17,10 +19,24 @@
   --shadow-card:0 1px 2px rgba(60,50,40,.05), 0 4px 16px rgba(60,50,40,.06);
   --shadow-pop:0 8px 32px rgba(40,32,24,.16);
   --shadow-lift:0 4px 12px rgba(60,50,40,.08);
+  /* #368：交互日志抽屉固定用深色终端色板（设计 token 深色变体，非 Tailwind gray）。
+     浅/深主题都保持终端感；色相跟 --canvas/--ink 深色档对齐，避免冷灰块。 */
+  --console-bg:#121211;
+  --console-surface:#1C1B1A;
+  --console-sunk:#161514;
+  --console-line:#2E2C2A;
+  --console-ink:#EEEEEC;
+  --console-ink-soft:#A3A19D;
+  --console-ink-faint:#8F8C88;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
+/* 手动深色（data-theme=dark）与「跟随系统且系统为深色」共用同一套 token。
+   强制浅色写 data-theme=light，把下面媒体查询挡掉；跟随系统则不写 data-theme。
+   color-scheme 也要跟着手动档走：:root 的 light dark 让原生控件（滚动条、未勾选的复选框、<select> 弹层）
+   按【系统】配色，手动深色配浅色系统时就是深色页面上一排白色原生控件。 */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] {
+    color-scheme: dark;
     --canvas:#121211;
     --surface:#1C1B1A;
     --surface-sunk:#161514;
@@ -28,7 +44,7 @@
     --line-soft:#242221;
     --ink:#EEEEEC;
     --ink-soft:#A3A19D;
-    --ink-faint:#7A7874;
+    --ink-faint:#8F8C88; /* 原 #7A7874 在 surface 上只有 3.90（验收 O79） */
     --accent:#D97757;
     --accent-deep:#F0E4DD;
     --accent-bright:#E2886A;
@@ -36,8 +52,31 @@
     --cta:#AE5238; /* 深色实底白字仍用深砖橙，勿用提亮的 accent */
     --user-bubble:#282623;
     /* UI-001：深色 danger/info 提亮一档；warning 保持可读（继承浅色过深会掉到 3.3） */
-    --danger:#E55D4C;
-    --info:#3D8FD4;
+    --danger:#E66555;
+    --info:#4493D5;
+    --success:#47A15D; /* 此前沿用浅色值，深色 user-bubble 上只有 3.56（O102） */
+    --warning:#D4A04A;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas:#121211;
+    --surface:#1C1B1A;
+    --surface-sunk:#161514;
+    --line:#2E2C2A;
+    --line-soft:#242221;
+    --ink:#EEEEEC;
+    --ink-soft:#A3A19D;
+    --ink-faint:#8F8C88; /* 原 #7A7874 在 surface 上只有 3.90（验收 O79） */
+    --accent:#D97757;
+    --accent-deep:#F0E4DD;
+    --accent-bright:#E2886A;
+    --accent-wash:#2D231E;
+    --cta:#AE5238; /* 深色实底白字仍用深砖橙，勿用提亮的 accent */
+    --user-bubble:#282623;
+    /* UI-001：深色 danger/info 提亮一档；warning 保持可读（继承浅色过深会掉到 3.3） */
+    --danger:#E66555;
+    --info:#4493D5;
+    --success:#47A15D; /* 此前沿用浅色值，深色 user-bubble 上只有 3.56（O102） */
     --warning:#D4A04A;
   }
 }
@@ -48,13 +87,36 @@
 
 body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 
+/* #364：全局键盘焦点环（:focus-visible，非 :focus）——鼠标/触控点击不留粘性描边；
+   热区伪元素 .hit-44::after 等无 outline，勿误加。 */
+:where(button, [role="button"], a, input, textarea, select, summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* ── Claude 回复正文：serif 阅读态（区别于其他 AI 聊天 UI 的标志性一笔）── */
 .msg-body { font-family: var(--font-read); font-size: 15.5px; line-height: 1.72; color: var(--ink); overflow-wrap: break-word; word-break: break-word; }
 .msg-body pre { font-family: var(--font-mono); border: 1px solid var(--line); border-radius: .5rem; padding: .75rem .85rem; overflow-x: auto; font-size: .82rem; line-height: 1.5; background: var(--surface-sunk); margin: .6rem 0; }
 .msg-body code:not(pre code) { font-family: var(--font-mono); background: var(--surface-sunk); color: var(--accent-deep); padding: .1rem .35rem; border-radius: .25rem; font-size: .85em; }
 .msg-body pre code { padding: 0; }
 .msg-body .hljs { background: transparent; color: var(--ink); }  /* 透出 pre 暖底；语法 token 色由 github-light 提供 */
-/* Per-code-block copy button — UI-003：pre 顶留白防遮代码；触点 ≥32px */
+/* github 主题的几种 token 色是按白底调的，落在 pre 的 surface-sunk 暖底上不到 4.5（O102）：只调明度、色相不变 */
+:root[data-theme="light"] .hljs .hljs-doctag, :root[data-theme="light"] .hljs .hljs-keyword, :root[data-theme="light"] .hljs .hljs-meta .hljs-keyword, :root[data-theme="light"] .hljs .hljs-template-tag, :root[data-theme="light"] .hljs .hljs-template-variable, :root[data-theme="light"] .hljs .hljs-type, :root[data-theme="light"] .hljs .hljs-variable.language_ { color: #CB2939; }
+:root[data-theme="light"] .hljs .hljs-built_in, :root[data-theme="light"] .hljs .hljs-symbol { color: #B14C07; }
+:root[data-theme="light"] .hljs .hljs-code, :root[data-theme="light"] .hljs .hljs-comment, :root[data-theme="light"] .hljs .hljs-formula { color: #636C75; }
+:root[data-theme="light"] .hljs .hljs-name, :root[data-theme="light"] .hljs .hljs-quote, :root[data-theme="light"] .hljs .hljs-selector-pseudo, :root[data-theme="light"] .hljs .hljs-selector-tag { color: #1F7A35; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .hljs .hljs-doctag, :root:not([data-theme="dark"]) .hljs .hljs-keyword, :root:not([data-theme="dark"]) .hljs .hljs-meta .hljs-keyword, :root:not([data-theme="dark"]) .hljs .hljs-template-tag, :root:not([data-theme="dark"]) .hljs .hljs-template-variable, :root:not([data-theme="dark"]) .hljs .hljs-type, :root:not([data-theme="dark"]) .hljs .hljs-variable.language_ { color: #CB2939; }
+  :root:not([data-theme="dark"]) .hljs .hljs-built_in, :root:not([data-theme="dark"]) .hljs .hljs-symbol { color: #B14C07; }
+  :root:not([data-theme="dark"]) .hljs .hljs-code, :root:not([data-theme="dark"]) .hljs .hljs-comment, :root:not([data-theme="dark"]) .hljs .hljs-formula { color: #636C75; }
+  :root:not([data-theme="dark"]) .hljs .hljs-name, :root:not([data-theme="dark"]) .hljs .hljs-quote, :root:not([data-theme="dark"]) .hljs .hljs-selector-pseudo, :root:not([data-theme="dark"]) .hljs .hljs-selector-tag { color: #1F7A35; }
+}
+:root[data-theme="dark"] .hljs .hljs-section { color: #337CED; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .hljs .hljs-section { color: #337CED; }
+}
+/* Per-code-block copy button — UI-003：pre 顶留白防遮代码；按钮本体 32px，热区 44。
+   不再半透明：11px 的字叠 opacity .7 只剩 2.6:1（验收 O79），降调交给 ink-faint 本身。手机没有 hover，「悬停才显形」从来不成立 */
 .code-block-wrap { position: relative; }
 .code-block-wrap > pre {
   padding-top: 2rem; /* 给右上角 copy 钮留行，避免压住首行代码 */
@@ -67,17 +129,15 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
   border-radius: 0.3rem; font-size: 11px;
   color: var(--ink-faint); background: var(--surface);
   border: 1px solid var(--line);
-  cursor: pointer; opacity: 0.7;
-  transition: opacity 0.15s;
+  cursor: pointer;
   z-index: 1;
 }
-/* 热区扩充：按钮本体 32px，::after 再扩一点 */
+/* 热区扩到 44：纵向 7px，::after 以 padding box 为基准、不含 1px 边框，扩 6px 只到 30+12=42（O130，同 O99） */
 .code-block-wrap .code-copy-btn::after {
   content: '';
   position: absolute;
-  inset: -6px;
+  inset: -7px -6px;
 }
-.code-block-wrap:hover .code-copy-btn { opacity: 1; }
 .code-block-wrap .code-copy-btn:hover {
   color: var(--accent-deep); border-color: var(--accent-deep);
 }
@@ -88,8 +148,14 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
 .msg-body h1 { font-size: 1.3em; } .msg-body h2 { font-size: 1.18em; } .msg-body h3 { font-size: 1.05em; }
 .msg-body a { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
 .msg-body blockquote { border-left: 3px solid var(--line); padding-left: .8rem; margin: .5rem 0; color: var(--ink-soft); }
-.msg-body table { border-collapse: collapse; margin: .5rem 0; font-size: .85em; }
+/* 宽表格在自己内部横向滚动（同 GitHub markdown 的做法）：不然 375 宽下 12 列的表格把整个 #messages 撑出横向滚动、
+   每格被压成一字一行（验收 O45） */
+.msg-body table { border-collapse: collapse; margin: .5rem 0; font-size: .85em; display: block; width: max-content; max-width: 100%; overflow-x: auto; }
 .msg-body td, .msg-body th { border: 1px solid var(--line); padding: .3rem .55rem; }
+/* .msg-body 的 word-break: break-word 会把格子的最小宽度压到一个字：表格里按词断行，宽了就让表格自己横向滚动。
+   keep-all：中文每个字之间都是合法断行点，normal 下中文格照样被压成一字一行（O45 残留）；keep-all 让中文
+   只在标点、空格处断，与英文按词断同一语义 */
+.msg-body td, .msg-body th { word-break: keep-all; overflow-wrap: normal; }
 .msg-body th { background: var(--surface-sunk); font-weight: 600; }
 .msg-body hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
 
@@ -129,8 +195,24 @@ details > summary::-webkit-details-marker { display: none; }
 
 .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
 .safe-top { padding-top: env(safe-area-inset-top); }
-/* 弹窗顶部 drag handle */
-.sheet-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto .75rem; }
+/* 弹窗顶部 drag handle（仅画在可手势关闭的面板上；审批/提问/确认见 #399 已去掉） */
+.sheet-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  margin: 0 auto .75rem;
+  touch-action: none;
+  cursor: grab;
+  position: relative;
+}
+/* 画出来的把手只有 36×4，手指几乎按不中；下拉手势绑在它身上（sheets.js），热区靠透明伪元素放大到约
+   124×26。上沿不越过面板 p-4 内边距，下沿不压到标题行（margin-bottom .75rem）。 */
+.sheet-handle::before {
+  content: '';
+  position: absolute;
+  inset: -12px -44px -10px;
+}
 /* 配置面板下拉关闭热区：扩大把手可点范围，禁浏览器默认手势抢 pointer */
 .settings-drag-zone {
   touch-action: none;
@@ -138,7 +220,8 @@ details > summary::-webkit-details-marker { display: none; }
   padding-top: 0.35rem;
 }
 .settings-drag-zone:active,
-#settingsSheet.is-dragging .settings-drag-zone {
+#settingsSheet.is-dragging .settings-drag-zone,
+.sheet-handle:active {
   cursor: grabbing;
 }
 #settingsSheet.is-dragging {
@@ -146,9 +229,15 @@ details > summary::-webkit-details-marker { display: none; }
   transition: none !important;
   will-change: transform;
 }
-#settingsSheet.is-dragging .sheet-handle {
+#settingsSheet.is-dragging .sheet-handle,
+.sheet-open.is-dragging .sheet-handle {
   background: var(--accent);
   width: 44px;
+}
+/* sheets.js 管理的 modal：拖动时禁用卡片 transition，跟手 */
+.sheet-open.is-dragging > div {
+  transition: none !important;
+  will-change: transform;
 }
 /* 配置面板打开：锁住背后主页面滚动（#messages 仍是 overflow-y-auto，不锁会把聊天顶穿面板）
    不用 touch-action:none on body——会误伤 fixed 面板内的滑动（部分 Android Chrome）。 */
@@ -295,8 +384,7 @@ body.ccm-sheet-open #messages {
 .composer-discover-hint {
   font-size: 10px;
   line-height: 1;
-  color: var(--ink-faint);
-  opacity: 0.75;
+  color: var(--ink-faint); /* 不再叠 opacity：10px 小字要 ≥4.5:1，ink-faint 本身刚好够（#244 review） */
   padding: 0 0.25rem;
   white-space: nowrap;
   pointer-events: none;
@@ -402,9 +490,14 @@ body.ccm-sheet-open #messages {
   transform: scale(0.97);
 }
 
+/* #368：交互日志抽屉的半透明底。tw-config 把 console-* 映射成裸 var(--x)，`bg-console/95` 这类透明度类
+   生成不出任何 CSS（同下方横幅注释）——写成那样，抽屉面板就是全透明的，近白字直接压在模糊的聊天上。 */
+.console-panel { background: color-mix(in srgb, var(--console-bg) 95%, transparent); }
+.console-footer { background: color-mix(in srgb, var(--console-sunk) 50%, transparent); }
+
 /* 连接状态横幅（header 与消息区之间的一行，非阻断）。
    刻意不在这里写 display —— 交给 Tailwind 的 hidden/flex 工具类（#unreadPill 是同款既有组合），
-   免得自建样式表与 Play CDN 运行时注入的 <style> 谁先谁后决定显隐，那是不确定的。
+   免得显隐要看 app.css 与 tw.css 在 index.html 里谁排在后面。
    淡底一律走 color-mix：语义 token 在 tw-config 里是裸 var(--x)，`色/NN` 透明度类对它们是死代码。 */
 .conn-banner {
   border-bottom: 1px solid var(--line-soft);
@@ -427,7 +520,8 @@ body.ccm-sheet-open #messages {
   color: var(--success);
 }
 .conn-banner__detail {
-  color: var(--ink-faint);
+  /* 落在 color-mix 出来的横幅底上，不是 surface：深色 warn 底上 ink-faint 只有约 4.18，换 ink-soft（#244 review） */
+  color: var(--ink-soft);
   font-size: 10px;
 }
 .conn-banner__detail.hidden {
@@ -436,14 +530,15 @@ body.ccm-sheet-open #messages {
 /* 重试按钮：继承横幅当前 tone 色（currentColor），不自带配色，三态下都不打架 */
 .conn-banner__retry {
   margin-left: auto;
-  padding: 0.15rem 0.6rem;
+  /* #395：断线「立即重试」抬到 ~32px 热区；不向外扩 ::after，避免压住下方消息首行 */
+  padding: 0.3rem 0.75rem;
   border-radius: 9999px;
   border: 1px solid currentColor;
   font-size: 11px;
   font-weight: 600;
   line-height: 1.4;
   white-space: nowrap;
-  min-height: 26px;
+  min-height: 32px;
 }
 .conn-banner__retry:active {
   transform: scale(0.96);
@@ -466,19 +561,22 @@ body.ccm-sheet-open #messages {
   overflow-wrap: break-word;
   word-break: break-word;
 }
+/* 桌面端 show_widget 图表（app/widget-render.js）：SVG 以 data URI 图片显示，宽跟消息流、高按 viewBox 比例；
+   底色已由 logic/widget.js 按 --surface 写进图里，这里只给边框 */
+.widget-card { margin: 0; }
+.widget-card img.widget-svg {
+  display: block; width: 100%; max-width: 680px; height: auto;
+  border: 1px solid var(--line); border-radius: var(--radius-md); cursor: zoom-in;
+}
 .empty-start {
   min-height: 0;
 }
+/* 消息操作栏（复制 / 改写 / 分叉）：原来整条 opacity .5、悬停才恢复——手机上没有悬停，11px 的字只剩 ~2:1（验收 O79） */
 .msg-action-bar {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   margin-top: 0.4rem;
-  opacity: 0.5;
-  transition: opacity 0.2s;
-}
-.msg-action-bar:hover, .msg-action-bar:focus-within {
-  opacity: 1;
 }
 .msg-action-btn {
   display: inline-flex;
@@ -533,7 +631,8 @@ header {
   #headerActions {
     display: flex !important;
     min-width: 0 !important;
-    gap: 0.35rem !important;
+    /* 8px：按钮热区各向外扩 4px（hit-44-tight），间距再小两个热区就互相压住 */
+    gap: 0.5rem !important;
   }
   .top-context-pill {
     max-width: min(100%, 46vw);
@@ -637,7 +736,25 @@ header {
   }
 }
 
+/* 顶栏右侧加了「⋯」（#307）之后，320px 宽装不下左侧延迟胶囊 +「需要你」chip + 右侧四颗按钮：实测整页被撑到 371px，
+   审批 sheet 的右半截出屏。不到 360px 时藏掉延迟胶囊——它只是信息，数值在日志抽屉里也看得到；可点的 chip 与按钮一个不少。 */
+@media (max-width: 359px) {
+  #connRtt {
+    display: none !important;
+  }
+}
+
 /* ── 桌面端响应式栅格布局 (Desktop Responsive Grid Layout) ── */
+/* #359：≥768px（平板竖屏、桌面窄窗、桌面）每条消息的阅读宽度与 composer 内层（max-w-2xl = 42rem）对齐居中。
+   #messages 自己仍铺满整列，滚动条留在列的最右；767 以下由上面那段把 #messages 本身收窄到 640px。 */
+@media (min-width: 768px) {
+  #messages > * {
+    max-width: 42rem;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
 @media (min-width: 1024px) {
   body {
     display: grid !important;
@@ -647,7 +764,7 @@ header {
        ★ 未显式定位的非 fixed body 子元素会被自动排版塞进隐式行（对横幅就是 300px 宽卡在侧栏底下，
        且新隐式行会从 1fr 消息行偷高度、被 overflow:hidden 裁掉 composer）——新增此类元素必须在这里定位。 */
     grid-template-rows: auto auto 1fr auto !important;
-    height: 100vh !important;
+    height: 100dvh !important; /* #359：同移动端用 dvh，iPad 横屏 Safari 地址栏伸缩时底部不被裁 */
     overflow: hidden !important;
   }
 
@@ -659,7 +776,7 @@ header {
     transform: none !important;
     width: 300px !important;
     max-width: 300px !important;
-    height: 100vh !important;
+    height: 100dvh !important; /* #359：同移动端用 dvh，iPad 横屏 Safari 地址栏伸缩时底部不被裁 */
     border-right: 1px solid var(--line) !important;
     box-shadow: none !important;
     background-color: var(--surface) !important;
@@ -708,30 +825,54 @@ header {
   body.sidebar-collapsed #leftSidebar {
     display: none !important;
   }
+
+  /* #359：等你答复的 sheet（审批 / 提问，带 .ccm-sheet-blocking）从常驻侧栏右边开始，挂着审批也能在侧栏切会话。
+     移动端靠 body.nav-escape 把侧栏抬到遮罩之上，桌面上面那句 z-index:10 !important 把它压死了；而抬 z-index
+     又会让侧栏盖住 sheet 面板最左 300px（按钮可能就在那里），所以让开而不是盖上。 */
+  body:not(.sidebar-collapsed) .ccm-sheet-blocking {
+    left: 300px;
+  }
 }
 
-/* ── 底栏弹层的统一滑入滑出过渡 (替代 hidden 硬切) ── */
-#permModal, #questionModal, #consoleModal, #confirmModal {
-    visibility: hidden;
+/* ── 底栏弹层的统一滑入滑出过渡 (替代 hidden 硬切) ──
+   #369：用 .ccm-sheet 类选择器，不再枚举 modal ID——新 sheet 只要带这个类（openSheet
+   也会补上）就自动具备同一开合过渡；ID 白名单会漏 #workspaceModal 等新面板。 */
+/* visibility 打开时【立即】切 visible、关闭时等淡出（.25s）后再切 hidden。不能双向都过渡 visibility：
+   打开那一帧还是 visibility:hidden，openSheet 在 rAF 里移焦落不进去，焦点留在 sheet 背后的触发按钮上，
+   Tab 陷阱与挂在 sheet 上的 Esc 也就都收不到（会话行「⋯」菜单曾为此单开一个只过渡 opacity 的修饰类）。 */
+.ccm-sheet {
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .25s ease, visibility 0s linear .25s;
+}
+.ccm-sheet > div {
+  transform: translateY(100%);
+  transition: transform .3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.ccm-sheet.sheet-open {
+  visibility: visible;
+  pointer-events: auto;
+  opacity: 1;
+  transition: opacity .25s ease, visibility 0s;
+}
+.ccm-sheet.sheet-open > div {
+  transform: translateY(0);
+}
+  /* UX-003：审批 / 提问 sheet 弹出后短暂防误触（过渡期按钮不可点） */
+  #permModal.sheet-arming button,
+  #questionModal.sheet-arming button {
     pointer-events: none;
-    opacity: 0;
-    transition: opacity .25s ease, visibility .25s ease;
   }
-  #permModal > div, #questionModal > div, #consoleModal > div, #confirmModal > div {
-    transform: translateY(100%);
-    transition: transform .3s cubic-bezier(0.16, 1, 0.3, 1);
+  /* 验收 O70：禁用要看得出来（防误触期内的动作按钮、完整性不符时的「允许」） */
+  #permModal button:disabled {
+    opacity: .45;
+    cursor: not-allowed;
   }
-  #permModal.sheet-open, #questionModal.sheet-open, #consoleModal.sheet-open, #confirmModal.sheet-open {
-    visibility: visible;
-    pointer-events: auto;
-    opacity: 1;
-  }
-  #permModal.sheet-open > div, #questionModal.sheet-open > div, #consoleModal.sheet-open > div, #confirmModal.sheet-open > div {
-    transform: translateY(0);
-  }
-  /* UX-003：审批 sheet 弹出后短暂防误触（过渡期按钮不可点） */
-  #permModal.sheet-arming button {
-    pointer-events: none;
+  /* 提问 sheet 禁用态对齐 #questionMultiSubmit / #questionGroupSubmit 的 disabled:opacity-40（P0-08i），勿与 perm 的 .45 共用 */
+  #questionModal button:disabled {
+    opacity: .4;
+    cursor: not-allowed;
   }
 
   /* ── 流内 live 活动行（busy 时挂在 #messages 末尾，不进 history/cache）── */
@@ -745,6 +886,10 @@ header {
     cursor: pointer;
   }
   #btnSend[data-mode="stop"]:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  #btnRestartServer:disabled {
     opacity: 0.55;
     cursor: not-allowed;
   }
@@ -768,6 +913,10 @@ header {
     right: -6px;
     bottom: -6px;
   }
+  /* 附件键与发送键只隔 2px（gap-0.5）：两边各向外扩 6px 时，发送键的热区（DOM 在后、叠在上面）压住附件键
+     右缘约 10px，点附件键边缘会把消息发出去（O98）。相邻那一侧各只扩到间隙中线，两键横向仍有 47px。 */
+  .chat-input-pill #btnAttach::after { right: -1px; }
+  .chat-input-pill #btnSend::after { left: -1px; }
 
   /* ── 规则动画选中过渡 ── */
   .perm-tile {
@@ -775,14 +924,17 @@ header {
   }
 
   /* ── 侧边栏工作区与会话高级动效 ── */
+  /* 展开后高度随内容走，不设上限：此前 max-height:1200px 只放得下二十来行，「显示全部」拉来的 50 行连同底部按钮
+     被裁掉一大半（2026-10-26 真机）。interpolate-size 让 0 ↔ auto 也能过渡；不支持的浏览器直接跳变，照样不裁。 */
   .subtree-container {
-    max-height: 0;
+    height: 0;
     opacity: 0;
     overflow: hidden;
-    transition: max-height 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease;
+    interpolate-size: allow-keywords;
+    transition: height 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease;
   }
   .subtree-container.expanded {
-    max-height: 1200px; /* 容纳多会话 */
+    height: auto;
     opacity: 1;
   }
   .dir-arrow {
@@ -792,13 +944,27 @@ header {
   .dir-arrow.rotated {
     transform: rotate(90deg);
   }
-  /* 侧滑动画及手势优化 */
+  /* 抽屉会话行 */
   .row-content {
     touch-action: pan-y; /* 仅允许纵向滚动，防止横向滑动与页面滚动冲突 */
-    -webkit-touch-callout: none; /* 长按是本 app 的手势（标为未读/已读），不要 iOS 原生弹出 */
+    -webkit-touch-callout: none; /* 长按会话行不弹 iOS 原生菜单（操作都在行尾「⋯」里） */
   }
-  .row-content.swiping {
-    transition: none !important; /* 拖拽中禁用过渡，紧贴指尖 */
+  /* 抽屉文件夹拖动排序（app/folder-drag.js）：拖起来后只剩各连接根的头行——展开区高矮不一，不收起来的话越过一个展开的根
+     要拖过它整段会话列表。收起是瞬时的（display 不走上面的高度过渡），被拖的行由 folder-drag.js 补 scrollTop 留在手指下。 */
+  #sessionPanel.folder-dragging .subtree-container,
+  #sessionPanel.folder-dragging [data-dir-kind="subfolder"] {
+    display: none;
+  }
+  #sessionPanel .folder-drag-active {
+    position: relative;
+    z-index: 1;
+    background: var(--surface-sunk);
+    box-shadow: 0 4px 14px rgb(0 0 0 / 0.12);
+  }
+  [data-dir-kind="connected"] > button:first-child {
+    -webkit-touch-callout: none; /* 长按连接根是拖动：不弹 iOS 原生菜单、不选中文字 */
+    -webkit-user-select: none;
+    user-select: none;
   }
   /* 骨架屏脉冲动画 */
   .skeleton-shimmer {
@@ -811,17 +977,32 @@ header {
     100% { background-position: -150% 0; }
   }
 
-  /* ── 尊重用户减弱动效偏好 ── */
+  /* ── 尊重用户减弱动效偏好 ──
+     #384：补全 sheet 之外仍未降级的动画——dashboard 入场、status-pill 闪烁、
+     thinking shimmer、未读锚点高亮，以及 Tailwind 的 animate-spin / animate-pulse
+     （原先只豁免了 #connBanner 那一颗）。thinking-shimmer 降级后仍保留 ::before
+     「思考中 · 」静态前缀。 */
   @media (prefers-reduced-motion: reduce) {
-    #permModal, #questionModal, #consoleModal,
-    #permModal > div, #questionModal > div, #consoleModal > div,
-    #leftSidebar, #settingsSheet {
+    .ccm-sheet, .ccm-sheet > div,
+    #leftSidebar, #settingsSheet, #generalSheet {
       transition: none !important;
     }
-    #connBanner .animate-spin {
+    .animate-spin, .animate-pulse {
       animation: none !important;
     }
     .skeleton-shimmer {
+      animation: none !important;
+    }
+    .dashboard-container {
+      animation: none !important;
+    }
+    .status-pill-chip.status-pill-flash {
+      animation: none !important;
+    }
+    details.thinking.thinking-live > summary {
+      animation: none !important;
+    }
+    .unread-anchor-flash {
       animation: none !important;
     }
   }
@@ -833,15 +1014,25 @@ header {
   position: absolute;
   inset: -8px;
 }
+/* 顶栏 36px 按钮的热区扩到 44（验收 O76）。::after 以 padding box 为基准、不含 1px 边框，所以扩 5px：34+10=44。
+   不用 hit-44 的 8px：顶栏按钮间距只有 8px，扩 8px 会让相邻按钮的热区互相压住（手机上点右边缘点到隔壁）。 */
+.hit-44-tight { position: relative; }
+.hit-44-tight::after {
+  content: '';
+  position: absolute;
+  inset: -5px;
+}
 .msg-action-btn {
   min-height: 32px;
   min-width: 32px;
   position: relative;
 }
+/* #375 / O99：纵向 7px 扩热区（padding box 不含边框）；横向 0，与 .msg-action-bar gap 0.5rem
+   相接不重叠——此前 inset 左右 -6px 会使相邻热区互相压住 4px。 */
 .msg-action-btn::after {
   content: '';
   position: absolute;
-  inset: -6px;
+  inset: -7px 0;
 }
 
 /* UI-010 回退：运行态恢复品牌 accent（用户偏好熟悉的红橙；与 CTA 同色是已知权衡）。
@@ -938,14 +1129,32 @@ details.thinking.thinking-live > summary::before {
   height: 13px;
 }
 
-/* 未读角标胶囊：#messages 的兄弟节点，viewport-fixed 悬浮于 composer 上方（避免依赖父级 position:relative，
-   composer 高度会随输入内容变化，固定偏移量取常见 1~2 行高度 + 安全距离，不追求逐像素贴合）。 */
+/* 未读角标胶囊（#359）：#composerFooter 的子节点，绝对定位在它顶边外侧——composer 长高（多行输入、横幅、
+   附件托盘、iOS 键盘 padding）时跟着上移。以前写死 viewport bottom:84px，composer 一高就叠在输入框上。
+   footer 是 body 的 flex / grid 子项，z-index 本来就生效，加 relative 不改层叠，只给胶囊当包含块。 */
+#composerFooter {
+  position: relative;
+}
 #unreadPill {
-  position: fixed;
+  position: absolute;
   right: 0.75rem;
-  bottom: calc(84px + env(safe-area-inset-bottom));
+  bottom: calc(100% + 12px);
   z-index: 15;
   border: none;
+}
+
+/* 回到最新（#376）：与未读胶囊同级悬浮，但靠左，避免两颗叠在同一个 right+bottom。
+   bottom 由 app/scroll-to-bottom.js 按 #composerFooter 顶边动态写入；这里只给首帧回落值。 */
+#scrollToBottomBtn {
+  position: fixed;
+  left: 0.75rem;
+  right: auto;
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  z-index: 15;
+  display: none; /* 与 .hidden 并用；去掉 hidden 后靠下方 flex 规则显示 */
+}
+#scrollToBottomBtn:not(.hidden) {
+  display: flex;
 }
 
 /* 跳到未读锚点后的短暂高亮，与 status-pill-flash（UX-019）同一手法：背景色脉冲一下再淡出 */
@@ -1015,6 +1224,13 @@ details.thinking.thinking-live > summary::before {
 .cm-ccm-viewer .cm-keyword { color: var(--info); font-weight: 600; }
 .cm-ccm-viewer .cm-variable-2, .cm-ccm-viewer .cm-property { color: var(--ink-soft); }
 .cm-ccm-viewer .cm-tag, .cm-ccm-viewer .cm-attribute { color: var(--warning); }
+/* 其余 token 原样落在 CM5 默认主题上（标题 / 定义 #00f、链接 #00c……），深色底上只有 2:1 上下（O102） */
+.cm-ccm-viewer .cm-header { color: var(--accent); font-weight: 600; }
+.cm-ccm-viewer .cm-link, .cm-ccm-viewer .cm-def, .cm-ccm-viewer .cm-type, .cm-ccm-viewer .cm-variable-3 { color: var(--info); }
+.cm-ccm-viewer .cm-builtin { color: var(--accent-deep); }
+.cm-ccm-viewer .cm-quote, .cm-ccm-viewer .cm-meta, .cm-ccm-viewer .cm-qualifier { color: var(--ink-soft); }
+.cm-ccm-viewer .cm-bracket, .cm-ccm-viewer .cm-hr { color: var(--ink-faint); }
+.cm-ccm-viewer .cm-error { color: var(--danger); }
 
 /* ── 导航逃生层（2026-07-30）──────────────────────────────────────────────
    审批 / 提问 sheet 是「等你答复」而不是「阻断一切」：它们的 z-40 全屏遮罩原本连顶栏也盖住，
@@ -1022,7 +1238,13 @@ details.thinking.thinking-live > summary::before {
    挂起期间（body.nav-escape，由 openSheet/closeSheet 同步）把顶栏与侧栏抬到 sheet 之上，
    答复完自动落回。刻意不改静态层级：deviceRequests 等页面级提示的 header < cards < modal
    契约（P0-15g 钉住）保持原样；登录门 / 确认弹窗（z-50）仍在最上，导航压不过它们。
-   注：≥1024px 桌面布局另有一套 !important 层级，未随此调整。 */
+   注：≥1024px 桌面布局另有一套 !important 层级，这几条压不过；桌面改由 .ccm-sheet-blocking 让开常驻侧栏（#359）。 */
 body.nav-escape header { z-index: 45; }
 body.nav-escape #sidebarScrim { z-index: 46; }
 body.nav-escape #leftSidebar { z-index: 47; }
+
+/* #392：composer / 与 @ 候选 listbox 当前项（键盘高亮；触控仍走 hover/active） */
+#cmdHints [role="option"][aria-selected="true"],
+#atMentionHints [role="option"][aria-selected="true"] {
+  background: var(--surface-sunk);
+}

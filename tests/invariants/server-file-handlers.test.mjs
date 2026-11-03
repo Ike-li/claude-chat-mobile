@@ -11,7 +11,7 @@
 //   属 S2 的 tests/invariants/server/files-scope.test.mjs）。三份各守一层，缺哪层都补不上另一层。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { registerFileSocketHandlers } from '../../app/src/server/socket-files.js';
+import { OUT_OF_SCOPE_ERROR, registerFileSocketHandlers } from '../../app/src/server/socket-files.js';
 import { attributePath as realAttributePath } from '../../app/src/files/file-preview.js';
 // R10 归属断言用真实 attributePath（纯函数、零 I/O）：手写 stub 曾把契约编错——它对 relPath 直接看
 // 前缀，而真实实现先 resolve(cwd, relPath)，于是测试与实现互相印证、恒绿。
@@ -52,6 +52,97 @@ test('file socket handlers fail closed and audit out-of-scope browse requests', 
   assert.equal(audits.length, 1);
   assert.equal(audits[0].action, 'scope_violation');
   assert.equal(audits[0].meta.via, 'browse:list');
+});
+
+// 验收 O39 / O80：范围门已经过了、只是读不了或已经不在的东西（FIFO、不是目录、编辑器开着时被删）——
+// file-browse 交回可判别值。这里要照样拒、说清是什么，但不能记 scope_violation：那是安全日志里并不存在的「越界」，
+// 把真正的越界淹没在噪音里。null（真越界）照旧记。
+test('browse:list / browse:read：范围内读不了或已经不在的，拒绝但不记越界；null 照旧记越界', async () => {
+  const cases = [
+    ['browse:list', { listDir: () => ({ notFound: true }) }],
+    ['browse:list', { listDir: () => ({ notDirectory: true }) }],
+    ['browse:read', { browseReadFile: () => ({ notFound: true }) }],
+    ['browse:read', { browseReadFile: () => ({ notOpenable: true }) }],
+  ];
+  for (const [event, extra] of cases) {
+    const { handlers, audits } = register(extra);
+    let response;
+    await handlers.get(event)({ cwd: '/repo', relPath: 'a' }, value => { response = value; });
+    assert.equal(response.ok, false, `${event} ${JSON.stringify(extra)}：读不了却回了 ok`);
+    assert.equal(typeof response.error, 'string');
+    assert.doesNotMatch(response.error, /授权范围/, `${event}：说成了越界`);
+    assert.deepEqual(audits.filter(a => a.action === 'scope_violation'), [], `${event}：记成了越界`);
+  }
+  const { handlers, audits } = register();
+  let response;
+  await handlers.get('browse:read')({ cwd: '/repo', relPath: '../x' }, value => { response = value; });
+  assert.equal(response.ok, false);
+  assert.equal(audits.filter(a => a.action === 'scope_violation').length, 1, '真越界不能跟着一起不记');
+});
+
+test('attachment:read：读到的是 notFound / notOpenable 时回「附件不存在」，不能当成功把空载荷交出去', async () => {
+  for (const result of [{ notFound: true }, { notOpenable: true }]) {
+    const { handlers } = register({
+      locateStoredAttachment: () => ({ baseDir: '/data/attach', storedName: '1700000000-abcd1234-a.png', scopeDirs: ['/data/attach'] }),
+      browseReadFile: () => result,
+    });
+    let response;
+    await handlers.get('attachment:read')({ cwd: '/repo', storedName: '1700000000-abcd1234-a.png' }, value => { response = value; });
+    assert.deepEqual(response, { ok: false, error: '附件不存在或已被删除' }, JSON.stringify(result));
+  }
+});
+
+// 显式越界的 cwd（routeCwd 判 null，SCOPE-05 起不再回落查看目录）：每个走 routeCwd 的文件事件都要
+// 明确拒绝、不碰盘、不跑 git。ok 必须是 false——前端按 ok 分支，ok:true 带 error 会被当成一次空结果画出来。
+test('显式越界 cwd（routeCwd → null）：八个文件事件一律 ok:false 并说明原因，不读盘、不跑 git', async () => {
+  const touched = [];
+  const spy = name => () => { touched.push(name); return null; };
+  const { handlers } = register({
+    routeCwd: () => null,
+    listDir: spy('listDir'),
+    browseReadFile: spy('browseReadFile'),
+    locateStoredAttachment: spy('locateStoredAttachment'),
+    listGitChanges: spy('listGitChanges'),
+    readGitDiff: spy('readGitDiff'),
+    listGitBranches: spy('listGitBranches'),
+    searchFiles: spy('searchFiles'),
+    writeFileInScope: spy('writeFileInScope'),
+  });
+  const cases = [
+    ['browse:list', { cwd: '/elsewhere', relPath: '.' }],
+    ['browse:read', { cwd: '/elsewhere', relPath: 'a.txt' }],
+    ['attachment:read', { cwd: '/elsewhere', storedName: '1700000000-abcd1234-a.png' }],
+    ['git:status', { cwd: '/elsewhere' }],
+    ['git:branches', { cwd: '/elsewhere' }],
+    ['git:diff', { cwd: '/elsewhere', path: 'a.js' }],
+    ['files:search', { cwd: '/elsewhere', query: 'a' }],
+    ['files:write', { cwd: '/elsewhere', relPath: 'a.txt', content: 'x', baseHash: null }],
+  ];
+  for (const [event, payload] of cases) {
+    let response;
+    await handlers.get(event)(payload, value => { response = value; });
+    assert.deepEqual(response, { ok: false, error: OUT_OF_SCOPE_ERROR }, event);
+  }
+  assert.deepEqual(touched, [], '判了越界还去读盘 / 跑 git');
+});
+
+// 文件夹被热移除后，上面已开的会话「继续运行、仍可查看」（读档放行活实例的 cwd），但写回是用户直写、
+// 不经工具审批——必须只认当前授权（开档）。读档与开档的裁决分开注入，写只问开档。
+test('写回只认当前授权：读档放行（热移除后的活实例目录）而开档拒绝时，files:write 拒绝且不落盘', async () => {
+  let wrote = false;
+  const { handlers } = register({
+    routeCwd: () => '/removed',        // 读档：活实例开在这里，照常放行
+    routeWriteCwd: () => null,          // 开档：已经不在连接的文件夹里
+    writeFileInScope: () => { wrote = true; return { ok: true, contentHash: 'h', bytesWritten: 1 }; },
+  });
+  let response;
+  await handlers.get('files:write')({ cwd: '/removed', relPath: 'a.txt', content: 'x', baseHash: null }, v => { response = v; });
+  assert.deepEqual(response, { ok: false, error: OUT_OF_SCOPE_ERROR });
+  assert.equal(wrote, false, '已移除的文件夹还能被文件编辑器直写');
+  // 正对照：读档照样放行
+  let listed;
+  await handlers.get('browse:list')({ cwd: '/removed', relPath: '.' }, v => { listed = v; });
+  assert.notDeepEqual(listed, { ok: false, error: OUT_OF_SCOPE_ERROR });
 });
 
 test('git:status 成功透传 listGitChanges', async () => {
@@ -343,5 +434,81 @@ test.describe('attachment:read 安全闸', () => {
     await handlers.get('attachment:read')({ storedName: 'x.png' }, v => { response = v; });
     assert.equal(response.ok, true);
     assert.equal(response.content, 'base64==');
+  });
+});
+
+// 验收 O55：历史工具卡的「展开全文」。tool:full 原来只认实例内存（live 卡片），历史卡片刷新或换台设备就取不到；
+// 带上会话坐标（cwd + sessionId）时回落去 transcript 取。顺序同 image:get：先过范围门与会话归属，再查内存、
+// 再读盘——先查内存再过门的话，带一个有效实例 id 就能绕开范围门（PR #201 review 同款）。
+test.describe('tool:full 历史卡片：先过门再取，内存没有就读 transcript', () => {
+  const run = async (handlers, payload) => {
+    let response;
+    await handlers.get('tool:full')(payload, value => { response = value; });
+    return response;
+  };
+
+  test('越界 cwd：拒绝且不碰内存、不读盘', async () => {
+    const touched = [];
+    const { handlers } = register({
+      routeCwd: () => null,
+      routeInstance: () => { touched.push('routeInstance'); return { sessionId: 's1', getToolOutput: () => 'mem' }; },
+      sessionFileExists: async () => { touched.push('sessionFileExists'); return true; },
+      readTranscriptToolResult: async () => { touched.push('readTranscriptToolResult'); return { ok: true, text: 'disk' }; },
+    });
+    const res = await run(handlers, { instanceId: 'i1', toolUseId: 't1', cwd: '/elsewhere', sessionId: 's1' });
+    assert.deepEqual(res, { ok: false, code: 'scope', error: OUT_OF_SCOPE_ERROR });
+    assert.deepEqual(touched, []);
+  });
+
+  test('会话不属于这个 cwd：拒绝，不碰内存', async () => {
+    const touched = [];
+    const { handlers } = register({
+      routeInstance: () => { touched.push('routeInstance'); return null; },
+      sessionFileExists: async () => false,
+      readTranscriptToolResult: async () => { touched.push('readTranscriptToolResult'); return { ok: true, text: 'disk' }; },
+    });
+    const res = await run(handlers, { toolUseId: 't1', cwd: '/repo', sessionId: 's-other' });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'not_found');
+    assert.deepEqual(touched, []);
+  });
+
+  test('过门后：实例就是这个会话且内存里有 → 用内存；否则读 transcript（带子代理提示）', async () => {
+    const reads = [];
+    const { handlers } = register({
+      routeInstance: id => (id === 'i-same' ? { sessionId: 's1', getToolOutput: () => 'from memory' }
+        : { sessionId: 's-else', getToolOutput: () => 'wrong session' }),
+      sessionFileExists: async () => true,
+      readTranscriptToolResult: async (sid, cwd, tid, opts) => { reads.push([sid, cwd, tid, opts.agentToolUseId]); return { ok: true, text: 'from disk' }; },
+    });
+    assert.deepEqual(await run(handlers, { instanceId: 'i-same', toolUseId: 't1', cwd: '/repo', sessionId: 's1' }), { ok: true, text: 'from memory' });
+    assert.deepEqual(await run(handlers, { instanceId: 'i-else', toolUseId: 't2', cwd: '/repo', sessionId: 's1', agentToolUseId: 'ag1' }), { ok: true, text: 'from disk' });
+    assert.deepEqual(reads, [['s1', '/repo', 't2', 'ag1']], '别的会话的实例内存不得当成这个会话的结果');
+  });
+
+  test('读盘结果同样受 512KB 上限，超出截断并告知；找不到给出原因', async () => {
+    const huge = 'y'.repeat(600 * 1024);
+    let next = { ok: true, text: huge };
+    const { handlers } = register({
+      sessionFileExists: async () => true,
+      readTranscriptToolResult: async () => next,
+    });
+    const res = await run(handlers, { toolUseId: 't1', cwd: '/repo', sessionId: 's1' });
+    assert.equal(res.ok, true);
+    assert.equal(res.truncated, true);
+    assert.equal(res.text.length, 512 * 1024);
+    assert.equal(res.totalLength, huge.length);
+    next = { ok: false, code: 'not_found' };
+    const missing = await run(handlers, { toolUseId: 't1', cwd: '/repo', sessionId: 's1' });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.code, 'not_found');
+    assert.ok(missing.error);
+  });
+
+  test('不带会话坐标的旧请求（live 卡片）行为不变：只认实例内存', async () => {
+    const { handlers } = register({ routeInstance: () => ({ getToolOutput: () => 'live text' }) });
+    assert.deepEqual(await run(handlers, { instanceId: 'i1', toolUseId: 't1' }), { ok: true, text: 'live text' });
+    const { handlers: none } = register({ routeInstance: () => null });
+    assert.deepEqual(await run(none, { instanceId: 'nope', toolUseId: 't1' }), { ok: false, error: '实例不存在' });
   });
 });

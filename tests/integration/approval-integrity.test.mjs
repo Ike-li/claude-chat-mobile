@@ -8,10 +8,10 @@
 // 两处实测撞见、单靠读代码不会想到的真实行为，记录下来避免后来者重踩：
 // ①用 Write 工具而非 Bash——`echo` 这类只读/无副作用命令，当前 claude CLI 有内置"安全命令"启发式，
 //   直接跳过 canUseTool、根本不触发 permission_request（与本项目 settings 白名单无关，是 SDK 内部行为）。
-// ②两条用例分处两个 WORK_DIRS 白名单目录（dirA/dirB）、各自独立 AgentSession——同一 cwd 内 Write 一旦
-//   被批准，SDK 会隐含下发 setMode→acceptEdits suggestion（resolvePermission 对 modeUpdate 无条件应用，
-//   见 agent.js 注释），导致同会话后续 Write 调用直接跳过 canUseTool；若两个用例共用一个会话，第二个
-//   永远等不到 permission_request。用两个 cwd 而非重启 server：app/server.js 用动态 import()，同进程二次
+// ②两条用例分处两个 WORK_DIRS 白名单目录（dirA/dirB）、各自独立 AgentSession——Write 的审批请求附带
+//   setMode→acceptEdits suggestion，当时 resolvePermission 不论是否「总是允许」都应用它，同会话后续 Write
+//   直接跳过 canUseTool；若两个用例共用一个会话，第二个永远等不到 permission_request。2026-10-16 起普通允许
+//   不再应用它（全量 review P0-3），但没有拿真 turn 重验过，两个 cwd 的布局照旧保留。用两个 cwd 而非重启 server：app/server.js 用动态 import()，同进程二次
 //   import 会命中 ESM 模块缓存、不会真正重新执行 preflight/listen（实测验证过，故不用「重启」方案）。
 //   ③user:message 的 payload.cwd 只在「当前无可路由实例」时才生效（routeInstance(undefined) 优先回落到
 //   viewingInstanceId，实测第一版直接在第二条消息带 cwd:dirB 仍复用了第一条消息留下的 dirA 实例）——
@@ -25,7 +25,7 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, realpathSync 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { reserveFreePort, waitForServerReady } from './_spawn-server.mjs';
+import { importServerInProcess, waitForServerReady } from './_spawn-server.mjs';
 
 let port, dataDir, dirA, dirB, httpServer, io;
 
@@ -38,13 +38,12 @@ async function startServer(authToken = 'nfr17-test-token') {
   for (const k of ['PORT', 'AUTH_TOKEN', 'IDLE_TIMEOUT_MS', 'WORK_DIR', 'WORK_DIRS', 'CCM_DATA_DIR',
     'CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   process.env.CCM_DATA_DIR = dataDir;
-  process.env.PORT = String(await reserveFreePort());
   process.env.IDLE_TIMEOUT_MS = '60000'; // 真实 SDK 轮次较慢，宽松空闲超时防误杀
   process.env.WORK_DIR = dirA; // 两个全新空目录：均无 .claude/settings.json，Write 不会被项目层白名单自动放行
   process.env.WORK_DIRS = dirB;
   process.env.AUTH_TOKEN = authToken;
 
-  const serverModule = await import('../../app/server.js');
+  const serverModule = await importServerInProcess();
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;

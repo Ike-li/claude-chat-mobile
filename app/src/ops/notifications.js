@@ -7,7 +7,8 @@ import { setCapped } from '../shared/bounded-map.js';
 //   · title 追加 cwdBase（已决：默认显示，不设隐藏配置项）——仅目录尾段（basename），
 //     非完整路径，帮多工作区场景分辨通知来自哪个项目；无 cwd（如未绑定实例）时不追加，向后兼容不带 cwd 的旧调用。
 //   · title 再追加 sessionTitle（抽屉可见的短标题）——同一项目常有多条会话，光有目录名横幅仍分不清；
-//     占位「新会话」/「(无标题)」不加。会话标题是身份不是正文，进 title 不进最小化 body。
+//     占位「新会话」/「(无标题)」不加。只进 Web Push 用的 title；ntfy 用的 ntfyTitle 不带它（验收 O33）：
+//     没有 AI 标题时会话标题就是用户某条消息的原文，而 ntfy 明文经第三方。
 //   · data 仅在传入 instanceId 时附带（{instanceId, sessionId, cwd}）——供深链回该会话。Web Push 的 data 走 RFC 8291
 //     端到端加密（push service 不见明文、不上锁屏），故保留完整 cwd 供深链；ntfy click 深链则不含完整 cwd（见 ntfyMetaFor）。
 //   · 不传 instanceId 时不含 data 键（向后兼容旧调用与单测的 deepEqual）。
@@ -86,7 +87,9 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
   const { hasClients = false, instanceId, sessionId, cwd, sessionTitle } = opts;
   const p = payload || {};
   const withData = (base) => (instanceId ? { ...base, data: { instanceId, sessionId, cwd } } : base);
-  const titleWithIdentity = (title) => formatNotifyIdentity(title, { cwd, sessionTitle });
+  // 两份标题：title 给 Web Push（端到端加密，带会话标题便于分辨同项目的多条会话）；ntfyTitle 给 ntfy——明文经第三方，
+  // 会话标题在没有 AI 标题时就是用户某条消息的原文（验收 O33），只留「事件 · 项目」。
+  const identity = (title) => ({ title: formatNotifyIdentity(title, { cwd, sessionTitle }), ntfyTitle: formatNotifyIdentity(title, { cwd }) });
   switch (type) {
     case 'result':
       if (hasClients) return null;
@@ -95,8 +98,17 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
       // ——真正的对话内容在 assistant 的 text_delta 流里，不在这个事件上。
       {
         const secs = ((p.durationMs ?? 0) / 1000).toFixed(1);
+        // ntfyType：ntfy 的标签跟标题同一个判断（ntfy 客户端把标签渲染成标题前的表情，按事件类型一律 ✅ 时
+        // 锁屏上就是「✅ ⚠️ 任务出错」，验收 O64）。emitNotify 优先用它。
+        const ntfyType = p.interrupted ? 'result_interrupted' : (p.isError ? 'result_error' : 'result');
+        // 验收 O30：本轮有审批等到过期时，CLI 以 is_error 收尾；用户要知道的是操作没执行、得重新触发，不是「出错」。
+        // 用户自己点了停止仍优先算「已中止」。
+        // 标签按「操作没执行」给 ⚠️：那一轮模型可能正常收尾（没有 is_error），跟着回合走就成了「✅ ⏰ 审批已过期」（O120）
+        if (p.approvalExpired && !p.interrupted) {
+          return { ...withData({ ...identity('⏰ 审批已过期'), body: `等太久没批，操作没有执行 · 用时 ${secs}s` }), ntfyType: 'result_error' };
+        }
         const title = p.interrupted ? '⏹ 任务已中止' : (p.isError ? '⚠️ 任务出错' : '✅ 任务完成');
-        return withData({ title: titleWithIdentity(title), body: `用时 ${secs}s` });
+        return { ...withData({ ...identity(title), body: `用时 ${secs}s` }), ntfyType };
       }
     case 'permission_request': {
       // body 最小化（SEC-04）：只保留工具名，【不含 input 命令/参数正文】；待批操作回 app 内经鉴权查看。
@@ -104,7 +116,7 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
       const inputStr = p.input && typeof p.input === 'object' ? JSON.stringify(p.input) : '';
       const previewBody = truncatePreview(inputStr ? `${p.name ?? '工具'} · ${inputStr}` : (p.name ?? '工具'));
       return withData({
-        title: titleWithIdentity('⚠️ Claude 请求许可'),
+        ...identity('⚠️ Claude 请求许可'),
         body: `需要你授权：${p.name ?? '工具'}`,
         previewBody
       });
@@ -112,15 +124,22 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
     case 'question':
       // 最小化：不含问题正文（消息正文），固定引导文案；正文回 app 内取。
       return withData({
-        title: titleWithIdentity('❓ Claude 有问题'),
+        ...identity('❓ Claude 有问题'),
         body: 'Claude 需要你的回答',
         previewBody: truncatePreview(p.text)
+      });
+    case 'elicitation':
+      // MCP 服务器要表单输入或 URL 授权（#460）。message 是第三方正文（可能让用户贴 token），body 只留服务器名。
+      return withData({
+        ...identity('🔐 MCP 需要你'),
+        body: `${p.serverName ?? 'MCP'} 需要你填写或授权`,
+        previewBody: truncatePreview(p.message)
       });
     case 'task_notification': {
       // 最小化：不含 summary 正文（可能含代码/结果），固定引导文案；成功/失败见 title。
       const failed = p.status === 'failed' || p.status === 'error';
       return withData({
-        title: titleWithIdentity(failed ? '⚠️ 后台任务失败' : '✅ 后台任务完成'),
+        ...identity(failed ? '⚠️ 后台任务失败' : '✅ 后台任务完成'),
         body: failed ? '后台任务未成功，点开查看' : '后台任务已完成，点开查看',
         previewBody: truncatePreview(p.summary)
       });
@@ -137,7 +156,7 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
       const secs = Number(p.seconds);
       const head = Number.isFinite(secs) && secs > 0 ? `已 ${Math.round(secs)} 秒无响应，` : '';
       return withData({
-        title: titleWithIdentity('⏳ 模型长时间无响应'),
+        ...identity('⏳ 模型长时间无响应'),
         body: `${head}仍在等待；持续无消息将自动中断`,
       });
     }
@@ -163,8 +182,9 @@ export function shouldNotifyBackgroundRunning({ hadForeground, hasForeground, ha
 // body 同样最小化（SEC-04）：不含会话内容/工具名，只提示"仍在运行、跑完会通知你"。
 export function notificationForBackgroundRunning({ instanceId, sessionId, cwd, sessionTitle } = {}) {
   const title = formatNotifyIdentity('⏳ 任务仍在后台运行', { cwd, sessionTitle });
+  const ntfyTitle = formatNotifyIdentity('⏳ 任务仍在后台运行', { cwd }); // ntfy 不带会话标题（同 notificationForEvent 的 identity）
   const body = '运行结束后会通知你';
-  return instanceId ? { title, body, data: { instanceId, sessionId, cwd } } : { title, body };
+  return instanceId ? { title, ntfyTitle, body, data: { instanceId, sessionId, cwd } } : { title, ntfyTitle, body };
 }
 
 // 终端直跑会话（CLI hooks 桥）的通知：与 notificationForEvent 分开，因为它按 envelope type 键控，
@@ -177,8 +197,9 @@ export function notificationForCliHook(hookEventName, { cwd, sessionId, instance
   else if (hookEventName === 'Notification') eventTitle = '⚠️ 终端会话需要你';
   else return null;
   const title = formatNotifyIdentity(eventTitle, { cwd, sessionTitle });
+  const ntfyTitle = formatNotifyIdentity(eventTitle, { cwd }); // ntfy 不带会话标题（同 notificationForEvent 的 identity）
   const body = hookEventName === 'Stop' ? '电脑上的 claude 跑完了这一轮' : '电脑上的 claude 在等你回应';
-  const base = { title, body };
+  const base = { title, ntfyTitle, body };
   return instanceId ? { ...base, data: { instanceId, sessionId, cwd } } : base;
 }
 
@@ -207,6 +228,7 @@ export function notificationForDeviceRequest({ count = 1 } = {}) {
 export const NOTIFY_CATEGORY = Object.freeze({
   permission_request: 'approval',
   question: 'input',
+  elicitation: 'input',
   result: 'finished',
   task_notification: 'finished',
   // system 型信封只有 gateway_stall notice 会产出通知（见 notificationForEvent），故此映射只被静默
@@ -265,7 +287,10 @@ export function clearNotifyPending(sessionId, category, state = new Map()) {
 const NTFY_TAGS = {
   permission_request: ['warning'],
   question: ['question'],
+  elicitation: ['key'],
   result: ['white_check_mark'],
+  result_error: ['warning'],
+  result_interrupted: ['stop_button'],
   task_notification: ['robot'],
   background_running: ['hourglass_flowing_sand'],
   // CLI hooks 桥：Stop=完成；Notification=需要你（不得误用 result 的 checkmark + priority 3，J3）
@@ -280,6 +305,7 @@ export function ntfyMetaFor(type, data = {}, publicUrl = '') {
   const priority = (
     type === 'permission_request'
     || type === 'question'
+    || type === 'elicitation'
     || type === 'cli_hook_notification'
     || type === 'device_request' // 用户不处理，那台新设备就一直用不了——同属"需即时响应"
   ) ? 5 : 3;
@@ -323,10 +349,15 @@ export function ntfyRequestInit({ url, topic, token }, title, body, meta = {}) {
 // 也没比 'network error' 多说什么，而正则漏一个变体就是凭证外泄，不对称。
 // 优先级 statusCode > code > 纯文本 message：前两者短、稳定、无敏感信息，且正是定位问题要看的那一维
 // （HTTP 401=VAPID 配错，HTTP 502/ETIMEDOUT=网络不通）。
+// ntfy 走 fetch（验收 O51）：AbortSignal.timeout 抛的 DOMException 带的是数字 code（23），不是错误码——归成
+// ETIMEDOUT；断连、DNS 失败只抛「fetch failed」，真正的 ECONNRESET / ENOTFOUND 在 err.cause.code 里。
+// 只认字符串 code，数字 code 跳过。
 export function describeDeliveryError(err) {
   if (!err || typeof err !== 'object') return 'unknown';
   if (typeof err.statusCode === 'number') return `HTTP ${err.statusCode}`;
-  if (err.code) return String(err.code);
+  if (err.name === 'TimeoutError') return 'ETIMEDOUT';
+  if (typeof err.code === 'string' && err.code) return err.code;
+  if (typeof err.cause?.code === 'string' && err.cause.code) return err.cause.code;
   const msg = String(err.message ?? '').trim();
   if (!msg) return 'unknown';
   if (/https?:\/\//.test(msg)) return 'network error';

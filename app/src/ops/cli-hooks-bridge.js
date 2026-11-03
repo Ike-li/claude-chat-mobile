@@ -313,14 +313,21 @@ export function hooksInstalledStateMatches(settings, manifest) {
 }
 
 // 三态安装状态；任何读失败一律按 'unknown' 上报，绝不让它影响调用方主流程。
+// unreadable 说清读不了的是哪个文件（'manifest' 本产品的安装清单 / 'settings' ~/.claude/settings.json）：
+// 两个文件原来在同一个 try 里读，面板只能笼统点名 settings.json，清单坏了也把人引去查 settings（验收 AC-16-12）。
 export function readHooksInstallState({ home = homedir() } = {}) {
+  const paths = hooksPathsForHome(home);
+  let manifest;
   try {
-    const paths = hooksPathsForHome(home);
-    const manifest = readHooksManifest(paths.manifest);
-    if (!manifest) return 'not-installed';
-    return hooksInstalledStateMatches(readClaudeSettings(paths.settings), manifest) ? 'installed' : 'drifted';
+    manifest = readHooksManifest(paths.manifest);
   } catch {
-    return 'unknown';
+    return { state: 'unknown', unreadable: 'manifest' };
+  }
+  if (!manifest) return { state: 'not-installed', unreadable: null };
+  try {
+    return { state: hooksInstalledStateMatches(readClaudeSettings(paths.settings), manifest) ? 'installed' : 'drifted', unreadable: null };
+  } catch {
+    return { state: 'unknown', unreadable: 'settings' };
   }
 }
 
@@ -339,6 +346,8 @@ export function decideHookEventActions(events, {
   viewingSessionId = null,
   viewingCwd = null,
   workDirs = [],
+  // 授权判据（组装根注入 authorize）：子目录与随仓库授权的 worktree 也算。缺省退回只认工作区本身。
+  isAuthorizedCwd = null,
   hasForegroundClient = false,
   now = Date.now(),
   throttleState = new Map(),
@@ -358,7 +367,8 @@ export function decideHookEventActions(events, {
     // verify 事件不受工作区白名单约束：安装回环验证可能在任意目录执行
     if (isVerifyEvent(event)) { acks.push(event.sessionId); continue; }
     const cwd = resolve(event.cwd);
-    if (!allowed.has(cwd)) { ignored += 1; continue; }
+    const authorized = typeof isAuthorizedCwd === 'function' ? Boolean(isAuthorizedCwd(event.cwd)) : allowed.has(cwd);
+    if (!authorized) { ignored += 1; continue; }
     invalidate.add(event.cwd);
     // 「正看着这个会话」= 视图落在这个 session/cwd 上，不是随便哪个 approved 客户端在前台就算——
     // 下面 Stop 的抑制判据与 catchUp 复用同一个收窄条件，此前 Stop 只喂了 hasForegroundClient，

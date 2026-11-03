@@ -13,11 +13,12 @@ import { formatRttMs, formatUptime } from './format.js';
 // 交互日志(控制台)某条目是否该在当前查看实例下显示。修「切工作区残留上个区日志」：clientLogBuffer 是
 // 全局缓冲、无实例隔离，loadConsoleLogs 过去把它无差别合并进每个实例的控制台 → 上个工作区的
 // web-send/recv/stream 漏到新工作区。client_conn 是 socket 连接级事件、无工作区归属 → 恒显；
+// client_perf（启动/打开会话耗时）同样恒显：「复制全部」只带走可见条目，耗时要一次全部导出才能对照；
 // 其余按 entry.instanceId 精确匹配当前实例（含两端皆 null 的空首页；undefined 视同 null，旧条目不误判）。
 // 服务端日志(logs:get)本就按 sessionId 隔离、不经此函数。
 export function logEntryVisibleForInstance(entry, instanceId) {
   if (!entry) return false;
-  if (entry.type === 'client_conn') return true;
+  if (entry.type === 'client_conn' || entry.type === 'client_perf') return true;
   return (entry.instanceId ?? null) === (instanceId ?? null);
 }
 
@@ -109,6 +110,30 @@ export function formatPushStatusRow({ hint = 'ready', permission = 'default', su
     hint: t('开启后，需要你审批、有提问、任务完成时手机会收到通知') };
 }
 
+// 「发一条测试推送」的回执（验收 AC-16-06 / O1）。两条通道各说各的：Web Push 是这台设备自己的订阅；ntfy 是服务端
+// 配的另一条通道（手机装 ntfy App 收），没配时 res.ntfy 为 'disabled'，回执里不提它。此前只看 Web Push：ntfy 明明
+// 投递成功，回执只说「还没订阅」；权限已被拒绝时，还让人去点状态行上此刻根本没有的「开启」（那一态上面
+// formatPushStatusRow 给的 action 是 null）。
+// tone：任一条失败即 danger；至少一条真的发出去即 ok；一条都没发出去即 warn。
+// hint 是 pushEnvHint 的结果：环境不满足的三态与 denied 一样，状态行上没有「开启」按钮（O108），要先判。
+// iOS Safari 标签页里 Notification 未定义、permission 回落 'default'，只看 permission 会落进最后那句。
+export function describePushTestResult(res, { permission = 'default', hint = 'ready' } = {}) {
+  if (!res?.ok) return { text: t('测试推送失败，请检查网络'), tone: 'danger' };
+  const parts = [];
+  if (res.failed > 0) parts.push(`${t('测试推送发送失败')} ${res.failed} ${t('条（订阅可能已过期，重新开启一次）')}`);
+  else if (res.subscribed) parts.push(`${t('已发出测试推送')} ${res.sent} ${t('条——若手机没响，检查系统通知权限')}`);
+  else if (hint === 'need-https') parts.push(t('网页推送到不了这台设备：浏览器只在 HTTPS 下允许订阅，用隧道域名（https）打开本站'));
+  else if (hint === 'ios-add-home') parts.push(t('网页推送到不了这台设备：iOS 要先「添加到主屏幕」，再从主屏图标打开本站'));
+  else if (hint === 'unsupported') parts.push(t('网页推送到不了这台设备：当前浏览器不支持 Web Push'));
+  else if (permission === 'denied') parts.push(t('这个浏览器已拒绝通知，网页推送到不了这台设备——到浏览器或系统的站点设置里改回「允许」'));
+  else parts.push(t('这台设备还没订阅推送——先点上方的「开启」'));
+  if (res.ntfy === 'sent') parts.push(t('ntfy 已发出一条'));
+  else if (res.ntfy === 'failed') parts.push(t('ntfy 发送失败'));
+  const anyFailed = res.failed > 0 || res.ntfy === 'failed';
+  const anySent = (res.subscribed && res.sent > 0) || res.ntfy === 'sent';
+  return { text: parts.join('；'), tone: anyFailed ? 'danger' : anySent ? 'ok' : 'warn' };
+}
+
 // 完成提示（提示音 / 震动 / 前台系统通知）本地偏好——默认全开，仅显式存 '0' 为关。
 // storage 键与 localStorage 对齐；纯函数便于单测，不直接碰 window。
 export const ALERT_PREF_KEYS = Object.freeze({
@@ -198,7 +223,9 @@ export function formatStatuslineBridgeRow(statuslineBridge) {
       value: t('状态读取失败'),
       tone: 'warn',
       action: null,
-      hint: t('读不出 ~/.claude/settings.json 的安装记录；在电脑上跑 npm run statusline:status 查看'),
+      hint: statuslineBridge.unreadable === 'manifest'
+        ? t('读不出安装清单 ~/.claude/ccm/statusline-v1/install-manifest.json；在电脑上跑 npm run statusline:status 查看')
+        : t('读不出 ~/.claude/settings.json 的安装记录；在电脑上跑 npm run statusline:status 查看'),
     };
   }
   if (state === 'installed') {
@@ -206,6 +233,17 @@ export function formatStatuslineBridgeRow(statuslineBridge) {
   }
   if (state === 'drifted') {
     return { label, value: t('配置已被改动'), tone: 'warn', action: null };
+  }
+  // 用户自己没配 statusLine：这个桥是「接管并透传你原来的输出」，没有原命令可接，安装脚本会拒。
+  // 不给一个点了才报错的按钮，先说清要做什么（验收 O62）。只认显式 false：旧 server 不带这个字段时照旧给按钮。
+  if (statuslineBridge.configured === false) {
+    return {
+      label,
+      value: t('未启用'),
+      tone: 'muted',
+      action: null,
+      hint: t('要先在电脑上给 Claude Code 配好状态栏（~/.claude/settings.json 里的 statusLine），这里才能接管它'),
+    };
   }
   return {
     label,
@@ -232,7 +270,10 @@ export function formatHooksBridgeRow(hooksBridge) {
       value: t('状态读取失败'),
       tone: 'warn',
       action: null,
-      hint: t('读不出 ~/.claude/settings.json 的安装记录，可能是文件损坏或权限变更；在电脑上跑 npm run hooks:status 查看'),
+      // 读不了的是哪个文件，服务端说清了就点名哪个（验收 AC-16-12）；旧 server 不带 unreadable → 原来那句
+      hint: hooksBridge.unreadable === 'manifest'
+        ? t('读不出安装清单 ~/.claude/ccm/hooks-v1/install-manifest.json，可能是文件损坏或权限变更；在电脑上跑 npm run hooks:status 查看')
+        : t('读不出 ~/.claude/settings.json 的安装记录，可能是文件损坏或权限变更；在电脑上跑 npm run hooks:status 查看'),
     };
   }
   if (state === 'installed') {
@@ -354,9 +395,20 @@ export function describeRateLimitSource(source) {
 // 「连不上」与「对方答了话但拒绝了」是两类根因，下一步动作毫无交集（前者查网络/代理，
 // 后者查 VAPID/token 配置），故只翻译前者。整串精确匹配而非子串：describeDeliveryError 的输出
 // 要么是裸 errno、要么是 'HTTP <code>'、要么是清洗过的短语，不会是长句，宽松匹配只会误伤。
-const DELIVERY_NET_UNREACHABLE = /^(ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|network error)$/i;
+// UND_ERR_*：ntfy 走 Node 自带的 fetch（undici），对端收下请求不回响应就关连接时报 UND_ERR_SOCKET（验收 O109）。
+const DELIVERY_NET_UNREACHABLE = /^(ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|UND_ERR_SOCKET|UND_ERR_CONNECT_TIMEOUT|network error)$/i;
 
+// 抽屉「服务」小节只要文字；判色见 formatServiceNoticeRows。
 export function formatServiceNotices({ service, now } = {}) {
+  return formatServiceNoticeRows({ service, now }).map(r => r.text);
+}
+
+// 告警行 + 判色（服务状态面板）。danger = 错过审批 / 安全事件，warning = 要留意但不是被攻击。
+// 限速锁定按来源判（验收 O23）：此前三档来源都是红色 ⛔，而措辞早已分了「多半是你自己的旧 token」
+// 与「在暴力尝试你的入口」——把自己手滑讲成红色安全告警，真出事那天它已经被当成噪音了。
+// 与安全日志 formatAuditEntry 同一判据：只有公网来源是 danger；说不清来源（旧 server 不带 source）
+// 与反代后的 127.0.0.1（无法确认是否本机）措辞本就按「可能有人」说，判色同样保守。
+export function formatServiceNoticeRows({ service, now } = {}) {
   const notices = [];
   const countSuffix = c => (Number.isFinite(c) && c > 0 ? `${t('（累计')} ${c} ${t('次）')}` : '');
   const lockout = service && service.rateLimitLockout;
@@ -380,7 +432,8 @@ export function formatServiceNotices({ service, now } = {}) {
       : src.scope === 'lan' ? `${t('——来自局域网')} ${src.addr}`
         : src.scope === 'public' ? `${t('——公网')} ${src.addr} ${t('在暴力尝试你的入口')}`
           : t('——可能有人在暴力尝试你的入口');
-    notices.push(`${t('⛔ 登录限速锁定于')} ${formatAgo(now - lockout.at)}${countSuffix(lockout.count)}${tail}`);
+    const selfInflicted = (src.scope === 'local' && !service?.proxyFronted) || src.scope === 'lan';
+    notices.push({ id: RATE_LIMIT_LOCKOUT_NOTICE_ID, at: lockout.at, text: `${t('⛔ 登录限速锁定于')} ${formatAgo(now - lockout.at)}${countSuffix(lockout.count)}${tail}`, tone: selfInflicted ? 'warning' : 'danger' });
   }
   const df = service && service.deliveryFailure;
   if (df && typeof df.at === 'number') {
@@ -395,13 +448,44 @@ export function formatServiceNotices({ service, now } = {}) {
     const reasonText = reason && DELIVERY_NET_UNREACHABLE.test(reason)
       ? `${df.channel === 'ntfy' ? t('连不上 ntfy 服务') : t('连不上推送服务')}（${reason}）`
       : reason;
-    notices.push(`${t('🔔 推送最近失败于')} ${formatAgo(now - df.at)}（${channelLabel}${cnt}）${reasonText ? `：${reasonText}` : ''}`);
+    notices.push({ id: DELIVERY_FAILURE_NOTICE_ID, at: df.at, text: `${t('🔔 推送最近失败于')} ${formatAgo(now - df.at)}（${channelLabel}${cnt}）${reasonText ? `：${reasonText}` : ''}`, tone: 'danger' });
   }
   const ce = service && service.clientError;
   if (ce && typeof ce.at === 'number') {
-    notices.push(`${t('🐞 前端错误发生于')} ${formatAgo(now - ce.at)}${countSuffix(ce.count)}${t('，详见日志面板')}`);
+    notices.push({ id: CLIENT_ERROR_NOTICE_ID, at: ce.at, text: `${t('🐞 前端错误发生于')} ${formatAgo(now - ce.at)}${countSuffix(ce.count)}${t('，详见日志面板')}`, tone: 'warning' });
+  }
+  // 清单为空也能启动之后（SCOPE-03），「配置了却全找不到」只剩这一行能说出原因。找不到的目录不进抽屉，
+  // 抽屉里的「断开」够不着它们，所以恢复路径指向配置里的工作区列表；目录回来后点「重新检查」，不必重启（#301）。
+  // 每一类都带稳定 id，抽屉行内有「忽略」，指纹见 serviceNoticeFingerprint：这一类按路径集合认，上面三类按发生时刻认。
+  const missing = service && service.missingFolders;
+  if (Number.isFinite(missing) && missing > 0) {
+    notices.push({
+      id: MISSING_FOLDERS_NOTICE_ID,
+      paths: Array.isArray(service.missingFolderPaths) ? service.missingFolderPaths.filter(p => typeof p === 'string') : [],
+      text: t('📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理文件夹」里删掉').replace('{n}', String(missing)),
+      tone: 'warning',
+    });
   }
   return notices;
+}
+
+export const MISSING_FOLDERS_NOTICE_ID = 'missing-folders';
+export const RATE_LIMIT_LOCKOUT_NOTICE_ID = 'rate-limit-lockout';
+export const DELIVERY_FAILURE_NOTICE_ID = 'delivery-failure';
+export const CLIENT_ERROR_NOTICE_ID = 'client-error';
+
+// 「忽略」的指纹：告警 id + 路径集合（排序后）+ 发生时刻（有的话），不含文案——切换语言不能让忽略失效，个数相同但换了一个路径
+// （A 回来了、B 丢了）必须当成新告警重新出现；限速锁定、推送失败、前端错误没有路径，按时刻认，再发生一次就重新出现。
+// 不带时刻的行不追加这一项，已存下的找不到文件夹的指纹保持原样。
+export function serviceNoticeFingerprint(row) {
+  const parts = [row?.id ?? null, [...(row?.paths || [])].sort()];
+  if (typeof row?.at === 'number') parts.push(row.at);
+  return JSON.stringify(parts);
+}
+
+// 去掉已忽略的告警。dismissed = { [id]: 指纹 }（本机存的）；指纹对不上（集合变了）照常显示，没有 id 的永远显示。
+export function undismissedServiceNotices(rows, dismissed) {
+  return (rows || []).filter(r => !r.id || !dismissed || dismissed[r.id] !== serviceNoticeFingerprint(r));
 }
 
 // 诊断时间线（镜像/轮次/停止）文案模板：每条事件译成判定过的一句话 + severity，不裸吐 detail
@@ -481,6 +565,11 @@ export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
 // 抽屉告警只说「发生了什么」；这一段回答「是谁、几次、从哪来」。
 // 判定只用在 severity 着色，不做合并。未知 action 兜底渲染，不静默吞。
 const AUDIT_SCOPE_LABEL = { local: tk('本机'), lan: tk('局域网'), public: tk('公网') };
+const AUDIT_FOLDER_TEXT = {
+  folder_created: tk('新建文件夹'),
+  folder_connected: tk('连接文件夹'),
+  folder_disconnected: tk('断开文件夹'),
+};
 const AUDIT_NEUTRAL_TEXT = {
   retention_cleanup: tk('审批记录留存清理'),
   approval_restart_expired: tk('重启使待审批请求失效'),
@@ -492,13 +581,14 @@ const AUDIT_DELETE_REJECT_REASON = {
   opening: tk('会话正在打开中'),
   quiet_period: tk('可能正被终端使用'),
 };
-export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
+export function formatAuditEntry({ ts, action, target, outcome, meta, repeat } = {}) {
   const d = meta && typeof meta === 'object' ? meta : {};
   const tgt = target == null ? '' : String(target);
   const via = d.via ? ` · ${d.via}` : '';
   // 设备 ID 是指纹 hash，全量显示既占宽又没人逐字读；前 8 位足够在几台设备间区分。
   const shortId = tgt.slice(0, 8);
   let text, severity = 'neutral';
+  let outcomeInText = false; // 这一条的文案已经写明成败（如「新建 worktree 失败」）：末尾不再追加 outcome
 
   if (action === 'auth_rate_limited') {
     const src = describeRateLimitSource(tgt);
@@ -529,9 +619,23 @@ export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
   } else if (action === 'session_delete_l2') {
     const why = AUDIT_DELETE_REJECT_REASON[d.reason];
     text = `${t('永久删除会话')} ${tgt}${why ? ` · ${t(why)}` : ''}`;
+  } else if (action === 'session_rename') {
+    text = `${t('重命名会话')} ${tgt}`;
   } else if (action === 'file_write') {
     // 路径尾段即可：手机屏放不下绝对路径，而「改了哪个文件」才是这条记录的信息量所在。
     text = `${t('写入文件')} ${tgt.split('/').pop() || tgt}`;
+  } else if (action === 'folder_created' || action === 'folder_connected' || action === 'folder_disconnected') {
+    // 手机上新建 / 连接 / 断开文件夹（socket-folders.js）。此前落到兜底分支，安全日志里原样露出事件码（验收 O78）
+    text = `${t(AUDIT_FOLDER_TEXT[action])} · ${tgt.split('/').pop() || tgt}`;
+  } else if (action === 'worktree_create') {
+    // 新会话页「在新 worktree 里开」的懒创建。失败时 target 是所属仓库、meta.code 是原因码
+    text = outcome === 'failed'
+      ? `${t('新建 worktree 失败')} · ${tgt.split('/').pop() || tgt}${d.code ? ` · ${d.code}` : ''}`
+      : `${t('新建 worktree')} · ${d.branch || tgt.split('/').pop() || tgt}`;
+    if (outcome === 'failed') severity = 'warning';
+    outcomeInText = true;
+  } else if (action === 'scratch_removed') {
+    text = `${t('清理无文件夹目录')} · ${tgt.split('/').pop() || tgt}`;
   } else if (AUDIT_NEUTRAL_TEXT[action]) {
     text = t(AUDIT_NEUTRAL_TEXT[action]);
   } else {
@@ -542,7 +646,8 @@ export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
   // success/allowed 追加等于每行拖一个信息量为零的尾巴；denied/locked 已经写在动词里了
   // （「被拒」「拒绝设备」「限速锁定」）。剩下的 partial_failure / error 才是必须显式说出来的。
   const OUTCOME_ALREADY_IN_TEXT = new Set(['success', 'allowed', 'denied', 'locked', undefined, null, '']);
-  if (!OUTCOME_ALREADY_IN_TEXT.has(outcome)) text += `（${outcome}）`;
+  if (!outcomeInText && !OUTCOME_ALREADY_IN_TEXT.has(outcome)) text += `（${outcome}）`;
+  if (repeat > 1) text += ` ×${repeat}`; // 服务端 60 秒内合并的完全相同记录（audit.js）
   return { ts, type: 'audit', text, severity };
 }
 

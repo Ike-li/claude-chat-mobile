@@ -21,6 +21,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { setupFailureCode } from '../../app/src/ops/cli-statusline-bridge.js';
+
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const SETUP = join(ROOT, 'scripts', 'statusline-bridge-setup.js');
 
@@ -49,6 +51,21 @@ function runSetup(home, action, extraEnv = {}) {
     env: { ...process.env, HOME: home, USERPROFILE: home, ...extraEnv },
   });
 }
+
+// 验收 O8 顺带：新装 claude 还没写过 settings.json 时，status 此前抛 ENOENT、exit 1，doctor 据此报 ⚠「无法只读检查
+// 安装状态」。文件不存在是合法起点，确定是没装（ops 层 readStatuslineInstallState 早就这样判），且只读、什么都不建。
+test('status：settings.json 还不存在 → not-installed，不报错也不创建任何文件', () => {
+  const home = makeHome();
+  try {
+    const result = runSetup(home, 'status');
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { state: 'not-installed', currentCommand: null, manifestExists: false });
+    assert.equal(existsSync(settingsPath(home)), false);
+    assert.equal(existsSync(join(home, '.claude')), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 test('status：未安装时只读报告，不创建 manifest 或改写 settings', () => {
   const home = makeHome();
@@ -333,3 +350,67 @@ test('install：dangling settings/manifest symlink 同样 fail-closed，不被�
     }
   }
 });
+
+// 验收 O35（AC-23-06）：单独卸载桥之后，~/.claude/ccm/statusline-v1 下的快照留着，只有整体 npm run uninstall 会清。
+// 现在桥自己卸载就清掉自己的命名空间；~/.claude/ccm 空了一并移除，有别的东西就留着。
+test('uninstall：清掉自己的 ~/.claude/ccm/statusline-v1（含快照），ccm 空了一并移除', () => {
+  const home = makeHome();
+  try {
+    writeSettings(home, { type: 'command', command: 'bash /tmp/original-statusline.sh', refreshInterval: 60 });
+    assert.equal(runSetup(home, 'install').status, 0);
+    const snapshots = join(home, '.claude', 'ccm', 'statusline-v1', 'snapshots');
+    mkdirSync(snapshots, { recursive: true });
+    writeFileSync(join(snapshots, 'session-a.json'), '{}');
+
+    const res = runSetup(home, 'uninstall');
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(existsSync(join(home, '.claude', 'ccm', 'statusline-v1')), false, 'statusline-v1 应被清掉');
+    assert.equal(existsSync(join(home, '.claude', 'ccm')), false, 'ccm 只剩空目录时应一并移除');
+    assert.equal(existsSync(settingsPath(home)), true);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('uninstall：~/.claude/ccm 下还有别的桥时只清自己那份', () => {
+  const home = makeHome();
+  try {
+    writeSettings(home, { type: 'command', command: 'bash /tmp/original-statusline.sh', refreshInterval: 60 });
+    assert.equal(runSetup(home, 'install').status, 0);
+    const sibling = join(home, '.claude', 'ccm', 'hooks-v1', 'acks');
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(join(sibling, 'verify-1.json'), '{}');
+
+    assert.equal(runSetup(home, 'uninstall').status, 0);
+    assert.equal(existsSync(join(home, '.claude', 'ccm', 'statusline-v1')), false);
+    assert.equal(existsSync(join(sibling, 'verify-1.json')), true, '另一座桥的东西不得被碰');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// 验收 O105 / O125：用户还没配 statusLine 时 install 拒装是对的，但两种形态措辞不一：settings.json 不存在时只吐
+// 原始的「ENOENT: no such file or directory, open …」；面板上则是一行英文原文。失败要带一个稳定的原因码
+// （stdout 的 JSON，供 server 透传、前端按码出文案），stderr 给敲命令的人一句看得懂的话。
+for (const [label, prepare] of [
+  ['settings.json 还不存在', () => {}],
+  ['settings.json 里没有 statusLine', home => writeSettings(home, undefined)],
+]) {
+  test(`install：${label} → 拒装，给出原因码与可读说明，不建任何文件`, () => {
+    const home = makeHome();
+    try {
+      prepare(home);
+      const before = existsSync(settingsPath(home)) ? readFileSync(settingsPath(home), 'utf8') : null;
+      const result = runSetup(home, 'install');
+      assert.equal(result.status, 1);
+      assert.deepEqual(JSON.parse(result.stdout), { error: 'statusline_not_configured' });
+      assert.equal(setupFailureCode(result.stdout), 'statusline_not_configured', 'server 那一侧的解析认不出安装器真实的输出');
+      assert.doesNotMatch(result.stderr, /ENOENT|no such file/, '把 fs 的原始报错甩给用户');
+      assert.match(result.stderr, /statusLine/);
+      assert.equal(existsSync(manifestPath(home)), false);
+      assert.equal(existsSync(settingsPath(home)) ? readFileSync(settingsPath(home), 'utf8') : null, before);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+}

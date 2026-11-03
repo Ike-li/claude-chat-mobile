@@ -6,7 +6,8 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-session。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, formatSubagentLastToolLine, formatSpawnDescription, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath } from '../../app/public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldShowScrollToBottom, resolveScrollToBottomNewCount, formatScrollToBottomLabel, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, isSoftKeyboardPrimaryDevice, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, formatSubagentLastToolLine, formatSpawnDescription, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath, shouldHandshakeOnBoot } from '../../app/public/js/logic.js';
+import { setLang } from '../../app/public/js/i18n.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -263,10 +264,10 @@ test.describe('resolveHeaderAttentionChip：顶栏文字 chip 按优先级只说
     assert.equal(resolveHeaderAttentionChip({ badgeReason: 'attention', needsYouCount: 0 }).text, '需要你');
   });
 
-  test('本机健康但其他工作区需要你/出错 → 「其他工作区 · 状态」，色调随状态', () => {
+  test('本机健康但其他工作区需要你/出错 → 「其他文件夹 · 状态」，色调随状态', () => {
     const perm = resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'permission' });
-    assert.deepEqual(perm, { visible: true, tone: 'warning', reason: 'other-workspace', text: '其他工作区 · 需要你' });
-    assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'error' }).text, '其他工作区 · 出错');
+    assert.deepEqual(perm, { visible: true, tone: 'warning', reason: 'other-workspace', text: '其他文件夹 · 需要你' });
+    assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'error' }).text, '其他文件夹 · 出错');
     assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'error' }).tone, 'danger');
   });
 
@@ -632,6 +633,50 @@ test.describe('shouldAckUnreadOnScroll：未读胶囊「用户手动滚到底部
   });
 });
 
+// 「回到最新」悬浮钮（#376）：与未读胶囊分层。显示 = stick 的反面（距底 ≥ threshold）。
+test.describe('shouldShowScrollToBottom：上翻露出入口 / 贴底隐藏', () => {
+  const base = { scrollHeight: 1000, clientHeight: 400 }; // 可滚 600
+
+  test('贴底（dist=0）与距底 119 → 不显示', () => {
+    assert.equal(shouldShowScrollToBottom({ ...base, scrollTop: 600 }), false);
+    assert.equal(shouldShowScrollToBottom({ ...base, scrollTop: 481 }), false); // dist 119
+  });
+
+  test('距底恰好 120 与更大 → 显示', () => {
+    assert.equal(shouldShowScrollToBottom({ ...base, scrollTop: 480 }), true); // dist 120
+    assert.equal(shouldShowScrollToBottom({ ...base, scrollTop: 0 }), true);
+  });
+
+  test('缺字段 / NaN → 不显示（失败方向是藏）', () => {
+    assert.equal(shouldShowScrollToBottom({}), false);
+    assert.equal(shouldShowScrollToBottom({ scrollHeight: NaN, scrollTop: 0, clientHeight: 100 }), false);
+  });
+
+  test('自定义 threshold：距底 50 在 40 时显示、在 60 时不显示', () => {
+    const geo = { scrollHeight: 500, scrollTop: 150, clientHeight: 300 }; // dist 50
+    assert.equal(shouldShowScrollToBottom({ ...geo, threshold: 40 }), true);
+    assert.equal(shouldShowScrollToBottom({ ...geo, threshold: 60 }), false);
+  });
+});
+
+test.describe('resolveScrollToBottomNewCount / formatScrollToBottomLabel', () => {
+  test('新增数 = max(0, current - baseline)；脏输入回 0', () => {
+    assert.equal(resolveScrollToBottomNewCount(10, 13), 3);
+    assert.equal(resolveScrollToBottomNewCount(10, 10), 0);
+    assert.equal(resolveScrollToBottomNewCount(10, 8), 0); // 历史重载变短
+    assert.equal(resolveScrollToBottomNewCount(null, 5), 0);
+    assert.equal(resolveScrollToBottomNewCount(3, NaN), 0);
+  });
+
+  test('无新增 →「回到最新」；有新增 →「N 条新内容」；>99 封顶', () => {
+    assert.equal(formatScrollToBottomLabel(0).text, '回到最新');
+    assert.equal(formatScrollToBottomLabel(0).hasNew, false);
+    assert.equal(formatScrollToBottomLabel(3).text, '3 条新内容');
+    assert.equal(formatScrollToBottomLabel(3).hasNew, true);
+    assert.equal(formatScrollToBottomLabel(120).text, '99+ 条新内容');
+  });
+});
+
 test.describe('sessionDomCachePlan：同会话 DOM 缓存跨 instance 复用（历史不可变）', () => {
   test('无缓存 / 空节点 → 不恢复', () => {
     assert.deepEqual(sessionDomCachePlan({ cached: null, currentInstanceId: 'i1' }), {
@@ -711,6 +756,11 @@ test.describe('logEntryVisibleForInstance：交互日志按实例分流（切工
     assert.equal(logEntryVisibleForInstance({ type: 'client_conn', instanceId: null }, null), true);
   });
 
+  test('client_perf 耗时行同样恒显——「复制全部」只带走可见条目，在哪个视图打开抽屉都要导出全部耗时', () => {
+    assert.equal(logEntryVisibleForInstance({ type: 'client_perf', instanceId: 'A' }, 'B'), true);
+    assert.equal(logEntryVisibleForInstance({ type: 'client_perf', instanceId: 'A' }, null), true);
+  });
+
   test('空首页两端 instanceId 皆 null → 可见；一端 null 一端有值 → 隐藏', () => {
     assert.equal(logEntryVisibleForInstance({ type: 'client_send', instanceId: null }, null), true);
     assert.equal(logEntryVisibleForInstance({ type: 'client_send', instanceId: null }, 'A'), false);
@@ -781,10 +831,22 @@ test.describe('defaultModelTileLabel: 默认磁贴文案', () => {
   });
 });
 
-// ── shouldSendOnEnter：移动端回车发送截断修复（2026-07-13 排查报告 §8.1）──
-// 桌面物理键盘有 Shift+Enter 这个「换行逃生舱」，触屏软键盘没有——同样一律拿「非 Shift 回车」当
-// 发送信号，会把触屏用户想换行分段的操作误判成发送，截断成两条消息。触屏设备下回车不再发送，
-// 只走 textarea 默认换行，发送收窄为仅走发送按钮。
+// ── isSoftKeyboardPrimaryDevice / shouldSendOnEnter（#386 + 2026-07-13 §8.1）──
+// 软键盘主设备（手机/平板，主指针 coarse）回车=换行；物理键盘主设备（含触屏笔记本）Enter=发送。
+// 判据只用 pointer: coarse，不用 maxTouchPoints——触屏笔记本 maxTouchPoints>0 但主指针 fine。
+test.describe('isSoftKeyboardPrimaryDevice（#386 软键盘主设备判据）', () => {
+  test('pointerCoarse=true → true（手机/平板主指针触摸）', () => {
+    assert.equal(isSoftKeyboardPrimaryDevice({ pointerCoarse: true }), true);
+  });
+  test('pointerCoarse=false → false（桌面 / 触屏笔记本主指针 fine）', () => {
+    assert.equal(isSoftKeyboardPrimaryDevice({ pointerCoarse: false }), false);
+  });
+  test('空入参 → false（默认按物理键盘主设备，Enter 发送）', () => {
+    assert.equal(isSoftKeyboardPrimaryDevice({}), false);
+    assert.equal(isSoftKeyboardPrimaryDevice(), false);
+  });
+});
+
 test.describe('shouldSendOnEnter（回车是否触发发送——移动端回车语义修复）', () => {
   test('非触摸设备 + 无 Shift → true（桌面 Enter 发送，维持现状）', () => {
     assert.equal(shouldSendOnEnter({ shiftKey: false, isTouchDevice: false }), true);
@@ -801,6 +863,16 @@ test.describe('shouldSendOnEnter（回车是否触发发送——移动端回车
   test('空入参安全 → true（不崩，且延续修复前的桌面默认行为）', () => {
     assert.equal(shouldSendOnEnter({}), true);
     assert.equal(shouldSendOnEnter(), true);
+  });
+  test('#386 触屏笔记本：coarse=false → Enter 发送（即使设备有触摸点）', () => {
+    const isTouchDevice = isSoftKeyboardPrimaryDevice({ pointerCoarse: false });
+    assert.equal(isTouchDevice, false);
+    assert.equal(shouldSendOnEnter({ shiftKey: false, isTouchDevice }), true);
+  });
+  test('#386 手机软键盘：coarse=true → Enter 换行不发送', () => {
+    const isTouchDevice = isSoftKeyboardPrimaryDevice({ pointerCoarse: true });
+    assert.equal(isTouchDevice, true);
+    assert.equal(shouldSendOnEnter({ shiftKey: false, isTouchDevice }), false);
   });
 });
 
@@ -1035,6 +1107,17 @@ test.describe('isToolSummaryTruncated（工具卡展开全文门）', () => {
     assert.equal(isToolSummaryTruncated('hello full output'), false);
     assert.equal(isToolSummaryTruncated(null), false);
   });
+  // #250 review：后缀是服务端写进摘要的原文，不随界面语言变。英文界面下拿 t() 翻译后的「…(truncated)」去比，
+  // 历史里截断过的工具卡就永远不给「展开全文」。
+  test('英文界面下照样认出服务端写的中文后缀', () => {
+    setLang('en');
+    try {
+      assert.equal(isToolSummaryTruncated('hello …（已截断）'), true);
+      assert.equal(isToolSummaryTruncated('hello full output'), false);
+    } finally {
+      setLang('zh');
+    }
+  });
 });
 
 test.describe('taskStopUiState（后台任务停止按钮）', () => {
@@ -1209,5 +1292,24 @@ test.describe('authFailurePath：unauthorized 时弹 token 门还是走 Access �
   test('对照（防修过头）：CF Access 配着 + 真公网域名 → 仍是 access-relogin', () => {
     const lanOrLocal = isLanOrLocalHostname('chat.example.com');
     assert.equal(authFailurePath({ lanOrLocal, cfAccessFlag: '1' }), 'access-relogin');
+  });
+});
+
+// 验收 O20：令牌页每次打开都发一次不带令牌的握手，服务端记一次鉴权失败，8 次就锁 15 分钟——新用户找令牌时
+// 反复打开 App 就被锁，之后带正确令牌也 429。走令牌门的路径上没有令牌，握手必然失败，不该发。
+// 判据与 unauthorized 之后走哪扇门（authFailurePath）同一份：只有 Access 那条路不需要令牌。
+test.describe('shouldHandshakeOnBoot：开页时要不要发起握手', () => {
+  test('没有令牌、会走令牌门（本机/局域网/没开 Access）→ 不握手，直接出令牌门', () => {
+    assert.equal(shouldHandshakeOnBoot({ token: '', lanOrLocal: true, cfAccessFlag: '0' }), false);
+    assert.equal(shouldHandshakeOnBoot({ token: '', lanOrLocal: false, cfAccessFlag: '0' }), false);
+    assert.equal(shouldHandshakeOnBoot({ token: '', lanOrLocal: true, cfAccessFlag: '1' }), false, '局域网直连不经 Access，照样要令牌');
+    assert.equal(shouldHandshakeOnBoot({ token: null, lanOrLocal: false, cfAccessFlag: undefined }), false);
+  });
+  test('公网 + Access 已启用 → 照常握手（凭边缘注入的 JWT，不需要令牌）', () => {
+    assert.equal(shouldHandshakeOnBoot({ token: '', lanOrLocal: false, cfAccessFlag: '1' }), true);
+  });
+  test('有令牌 → 照常握手', () => {
+    assert.equal(shouldHandshakeOnBoot({ token: 'abc', lanOrLocal: true, cfAccessFlag: '0' }), true);
+    assert.equal(shouldHandshakeOnBoot({ token: 'abc', lanOrLocal: false, cfAccessFlag: '1' }), true);
   });
 });

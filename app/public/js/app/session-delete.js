@@ -20,20 +20,25 @@ export function createSessionDeleteController(context, {
   showDrawerNotice = () => {},
   appConfirm = async () => false,
   onDeleted = () => {},
+  isNoFolderCwd = () => false,
 } = {}) {
-  async function openDeleteSession(sessionId, cwd, title) {
+  // sectionKey：这一行所在的抽屉小节（worktree / scratch 会话的 cwd 是成员目录，不是小节的键）
+  async function openDeleteSession(sessionId, cwd, title, sectionKey = cwd) {
     const label = title || sessionId;
+    // 「无文件夹」会话：服务端删会话时一并删它的临时目录（官方同；它是这个目录里最后一个会话时才删）。
+    // 那个目录里可能有模型写的文件，必须在确认前说出来。
+    const scratchNote = isNoFolderCwd(cwd) ? `\n${t('这是「无文件夹」会话：临时目录和里面的文件会一并删除（目录里还有别的会话时保留）。')}` : '';
     if (!(await appConfirm({
       title: t('🗑 删除会话？'),
-      body: `${t('会话「')}${label}${t('」在主机上的记录将被真正抹除。')}\n${t('此操作不可恢复。')}`,
+      body: `${t('会话「')}${label}${t('」在主机上的记录将被真正抹除。')}${scratchNote}\n${t('此操作不可恢复。')}`,
       okText: t('彻底删除'),
       tone: 'danger',
     }))) return;
     socket.emit('session:deletePermanent', { sessionId, cwd }, res => {
       if (res?.ok) {
         showDrawerNotice(''); // 这一行当场消失，上一次失败留下的错因就该一起作废
-        addBar(`${t('已彻底删除：')}${label}`, 'text-ink-faint');
-        onDeleted({ sessionId, cwd });
+        addBar(`${t('已彻底删除：')}${label}${res.scratchRemoved ? t('（临时目录已一并删除）') : ''}`, 'text-ink-faint');
+        onDeleted({ sessionId, cwd, sectionKey });
       } else {
         showDrawerNotice(res?.error || t('彻底删除失败'));
       }

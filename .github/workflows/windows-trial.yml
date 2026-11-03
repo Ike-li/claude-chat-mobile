@@ -1,0 +1,45 @@
+name: windows-trial
+
+# 原生 Windows 是实验路径（docs/getting-started.md 推荐 WSL2），这个 workflow 只用来摸清差距：
+# 在 windows-latest 上跑 test:unit 与 test:invariants，看哪些用例红。
+# ★ 不进分支保护的 required checks——红了不挡任何 PR。
+#
+# 触发：
+#   - workflow_dispatch / schedule：GitHub 只认【默认分支 master】上的 workflow 文件，所以合进 dev 后
+#     要等下一次发版到 master 才生效。schedule 时显式检出 dev（master 只在发版时动，测它没有意义）。
+#   - pull_request + paths：只在改这个文件本身时跑一次，让改动在 PR 里就能看到结果；
+#     其他 PR 不触发，不给日常 PR 加一个恒红的检查。
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * 1' # 每周一 02:00 UTC
+  pull_request:
+    paths:
+      - .github/workflows/windows-trial.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-unit:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+      # 只用 24：npm 在 Windows 上经 cmd.exe 执行脚本，不展开 tests/unit/*.test.mjs 这类 glob，
+      # 靠的是 node --test 自己解析 glob（Node 21 起才有）。20 在这里大概率连用例都找不到，测不出有用信息。
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:unit
+      # unit 红了也要看 invariants 的结果：这个 job 的产出是完整的差距清单，不是第一处失败。
+      - run: npm run test:invariants
+        if: ${{ !cancelled() }}

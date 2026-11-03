@@ -102,6 +102,49 @@ test('看门狗：begin 换轮时重挂，旧轮的兜底不得放行新轮队�
   assert.deepEqual(flushed.map(e => e.payload.messages[0]), [9]);
 });
 
+// 历史分两次传（先最近一段，再补更早的）：第二次的回执也有自己的 15s 超时。看门狗只从 begin 算的话，
+// 第一次回来得慢，兜底就会赶在第二次回执之前放行——追平先画进还空着的视图，整窗再插到它下面。
+test('看门狗：rearm 从现在起重新计时；别的轮、已关闸的 handle 无效', () => {
+  let now = 0;
+  let nextId = 1;
+  const due = new Map();
+  const timers = {
+    setTimeout: (fn, ms) => { due.set(nextId, { fn, at: now + ms }); return nextId++; },
+    clearTimeout: id => due.delete(id),
+  };
+  const advance = ms => {
+    now += ms;
+    for (const [id, t] of [...due]) if (t.at <= now) { due.delete(id); t.fn(); }
+  };
+  const gate = createHistoryLoadGate({ timers, timeoutMs: 20_000 });
+  const flushed = [];
+  gate.onTimeout(events => flushed.push(...events.map(e => e.payload.messages[0])));
+
+  const first = gate.begin('inst_1');
+  gate.hold(ev('inst_1', 1));
+  advance(12_000);
+  gate.rearm(first);
+  advance(12_000);
+  assert.deepEqual(flushed, [], '重挂之后，begin 起算的 20s 不该再放行');
+  assert.equal(gate.hold(ev('inst_1', 2)), true, '闸门还开着');
+  advance(8_000);
+  assert.deepEqual(flushed, [1, 2], '从重挂那一刻再过 20s 照样兜底');
+
+  gate.begin('inst_2');
+  gate.hold(ev('inst_2', 3));
+  advance(15_000);
+  gate.rearm(first);
+  advance(5_000);
+  assert.deepEqual(flushed, [1, 2, 3], '上一轮的 handle 重挂不动这一轮的兜底');
+
+  const third = gate.begin('inst_3');
+  gate.release(third);
+  gate.rearm(third);
+  advance(60_000);
+  assert.equal(gate.hold(ev('inst_3', 4)), false, '已 release 的那轮重挂不会把闸门重新打开');
+  assert.deepEqual(flushed, [1, 2, 3]);
+});
+
 test('开闸期间扣住同实例事件，release 按原顺序放行', () => {
   const gate = createHistoryLoadGate();
   gate.begin('inst_1');
@@ -173,4 +216,27 @@ test('迟到 ACK 的 release 也不得抢走另一轮的队列', () => {
 
   assert.deepEqual(gate.release(handleA), [], 'A 那轮早已被顶替，只能拿到空');
   assert.deepEqual(gate.release(handleB).map(e => e.payload.messages[0]), [1], 'B 的队列完好');
+});
+
+// —— 代次：同一实例又发起了一次全量加载，上一轮的渲染链要整段作废（#354 review）——
+// 手动「重新加载」时实例没变，renderHistoryBubbles 的实例守卫拦不住上一轮：它会把自己那一份 frag 也插进来，
+// 和新一轮叠成两份。只认「之后又 begin 过」：release / abort / 看门狗到点都不算顶替——
+// 否则慢机上分块渲染超过看门狗的 20s，正常的那一轮会被自己的兜底掐断。
+test('superseded：只有之后又 begin 过才算被顶替', () => {
+  const timers = fakeTimers();
+  const gate = createHistoryLoadGate({ timers });
+  const first = gate.begin('inst_1');
+  assert.equal(gate.superseded(first), false, '刚开的这一轮不算被顶替');
+
+  timers.fire();
+  assert.equal(gate.superseded(first), false, '看门狗到点放行不算被顶替');
+  gate.release(first);
+  gate.abort(first);
+  assert.equal(gate.superseded(first), false, 'release / abort 之后也不算');
+
+  const second = gate.begin('inst_1');
+  assert.equal(gate.superseded(first), true, '同实例再 begin 一次，上一轮就被顶替了');
+  assert.equal(gate.superseded(second), false);
+  gate.release(second);
+  assert.equal(gate.superseded(second), false, '最新一轮正常收尾后仍不算被顶替');
 });

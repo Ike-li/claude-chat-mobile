@@ -42,6 +42,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O111：保存前的底栏对被环境变量压着的项仍说「保存后需重启服务才生效」——可这类项写进文件也不生效、
+  // 重启后仍是环境变量的值，逐项回执要保存后才出现。保存前就要说清。
+  test('P0-31k 改的是被环境变量压着的项：保存前底栏就说清写了也不生效，不再只说「重启后生效」', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__env-overridden?keys=PORT');
+    await openGeneralPage(page, 'behavior');
+    await page.locator('#btnEnvConfig').click();
+
+    const hint = page.locator('#envConfigHint');
+    await page.locator('#envConfigBody input[data-key="PORT"]').fill('8080');
+    await expect(hint).toContainText('PORT');
+    await expect(hint).toContainText('环境变量');
+    await expect(hint, '只改了被压着的项，却叫人去重启').not.toContainText('重启服务才生效');
+    // 前端只知道「被压着」不知道是哪个变量（WORKDIRS 可能是被 WORK_DIRS 压着）：不能叫人 unset 配置键名（#321 review）
+    await expect(hint).not.toContainText('unset');
+
+    // 再改一项正常的：两句都要在
+    await page.locator('#envConfigBody input[data-key="CLAUDE_BIN"]').fill('/opt/claude');
+    await expect(hint).toContainText('重启服务才生效');
+    await expect(hint).toContainText('PORT');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-31b 保存按钮：无改动时禁用，改一项后启用', async ({ page }) => {
     await gotoMock(page);
     await openGeneralPage(page, 'behavior');
@@ -147,6 +170,64 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
     await expect(page.locator('#envConfigRestart')).toHaveCount(0);
     await expectNoBrowserErrors(page);
   });
+
+  // O87：开发者模式的「重启服务」按钮。拉不起来时不给点（点了服务端也只会拒绝）；被拒时消息流里不先说
+  // 「正在重启」；真重启了，新进程连上来（startedAt 变了）就撤掉那一行，不再一直挂着。
+  test('P0-31l 开发者模式：拉不起来时「重启服务」不可点并说明原因', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__dev-mode?canRestart=0');
+    await openGeneralPage(page, 'behavior');
+    const btn = page.locator('#btnRestartServer');
+    await expect(btn).toBeVisible();
+    await expect(btn).toBeDisabled();
+    await expect(btn).toContainText('不是常驻托管');
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-31m 开发者模式：重启被服务端拒绝时不留「正在重启」', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__dev-mode?canRestart=1&deny=1');
+    await openGeneralPage(page, 'behavior');
+    await page.locator('#btnRestartServer').click();
+    await page.locator('#confirmOk').click();
+    await expect(page.locator('#messages')).toContainText('重启被拒');
+    await expect(page.locator('#messages')).not.toContainText('正在重启服务');
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-31n 开发者模式：重启后新进程连上来，撤掉「正在重启服务」', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__dev-mode?canRestart=1');
+    await openGeneralPage(page, 'behavior');
+    await page.locator('#btnRestartServer').click();
+    await page.locator('#confirmOk').click();
+    await expect(page.locator('#messages')).toContainText('正在重启服务');
+    await expect(page.locator('#messages')).not.toContainText('正在重启服务', { timeout: 10_000 });
+    await expect(page.locator('#messages')).not.toContainText('重启被拒');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 首页 / 新会话页上点重启：addBar 会先清掉空态表面再插那一行；撤掉那一行后要把空态表面还回来，
+  // 否则 viewing 仍是 null、广播不进 bindView，主区一片空白，只能手动切走或刷新。
+  for (const [label, enter, surface] of [
+    ['首页', '#btnHome', '[data-testid="home-dashboard"]'],
+    ['新会话页', '#btnNew', '[data-testid="compose-surface"]'],
+  ] as const) {
+    test(`P0-31o 开发者模式：在${label}重启，撤掉那一行后空态表面回来`, async ({ page }) => {
+      await gotoMock(page);
+      await page.locator(enter).click();
+      await expect(page.locator(surface)).toBeVisible();
+      await page.request.post('/__dev-mode?canRestart=1');
+      await openGeneralPage(page, 'behavior');
+      await page.locator('#btnRestartServer').click();
+      await page.locator('#confirmOk').click();
+      await expect(page.locator('#messages')).toContainText('正在重启服务');
+      await expect(page.locator(surface)).toHaveCount(0);
+      await expect(page.locator('#messages')).not.toContainText('正在重启服务', { timeout: 10_000 });
+      await expect(page.locator(surface)).toHaveCount(1);
+      await expectNoBrowserErrors(page);
+    });
+  }
 
   test('P0-31f 保存成功后出现「立即重启」入口（mock 广播 canRestart:true）', async ({ page }) => {
     await gotoMock(page);

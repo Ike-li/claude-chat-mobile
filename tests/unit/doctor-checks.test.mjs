@@ -9,6 +9,8 @@ import { resolveBindPlan } from '../../app/src/shared/bind-host.js';
 import {
   LOG_ROTATE_THRESHOLD_BYTES,
   workdirBreadthDiagnostic,
+  workdirPresenceDiagnostic,
+  connectedFoldersDiagnostic,
   UPLOADS_FOOTPRINT_WARN_BYTES,
   classifyAuthToken,
   authTokenDiagnostic,
@@ -167,7 +169,8 @@ test('statuslineConfigDiagnostic：实际读取 off 状态，不再是恒定装�
 test('statuslineBridgeDiagnostic：区分已安装、未安装与用户改写后的 drift', () => {
   assert.equal(statuslineBridgeDiagnostic({ installState: 'installed' }).status, 'ok');
   assert.match(statuslineBridgeDiagnostic({ installState: 'installed' }).detail, /CLI.*同步/);
-  assert.equal(statuslineBridgeDiagnostic({ installState: 'not-installed' }).status, 'warn');
+  // 验收 O8：桥是显式 opt-in 的，「没装」是默认状态，不是要处理的问题——给提示（info），不给警告
+  assert.equal(statuslineBridgeDiagnostic({ installState: 'not-installed' }).status, 'info');
   assert.match(statuslineBridgeDiagnostic({ installState: 'not-installed' }).detail, /statusline:install/);
   assert.equal(statuslineBridgeDiagnostic({ installState: 'drifted' }).status, 'warn');
   assert.match(statuslineBridgeDiagnostic({ installState: 'drifted' }).detail, /改写|漂移/);
@@ -469,7 +472,7 @@ test('hooksBridgeDiagnostic：off / 已安装 / 漂移 / 未安装 四态', () =
   assert.equal(drifted.status, 'warn');
   assert.match(drifted.detail, /勿强行覆盖/);
   const missing = hooksBridgeDiagnostic({ installState: 'not-installed' });
-  assert.equal(missing.status, 'warn');
+  assert.equal(missing.status, 'info', '没装是 opt-in 的默认状态，不算警告（验收 O8）');
   assert.match(missing.detail, /hooks:install/);
 });
 
@@ -1502,6 +1505,43 @@ test.describe('tailscaleDiagnostic（TAILSCALE / D23：检测 + 指路，不管�
   });
 });
 
+// 两个 doctor 共用的「有没有文件夹」判定（2026-10-15）。清单为空是正常状态：新装、或在手机上全部断开之后
+// server 照常启动、只剩「无文件夹」（SCOPE-03）——此前 CLI 体检把它报成 fail「server 会拒绝启动」。
+// 配置了却找不到时解析结果同样是空的，不分开就会把它说成「还没连」，和服务告警自相矛盾。
+test.describe('workdirPresenceDiagnostic：零文件夹是正常状态，找不到的才 warn', () => {
+  test('一个都没连 → ok，并说清以后在哪选', () => {
+    const zh = workdirPresenceDiagnostic({ count: 0, missing: 0, lang: 'zh' });
+    assert.equal(zh.status, 'ok');
+    assert.match(zh.detail, /无文件夹/);
+    const en = workdirPresenceDiagnostic({ count: 0, lang: 'en' });
+    assert.equal(en.status, 'ok');
+    assert.match(en.detail, /No folder/);
+    assert.doesNotMatch(en.detail, /[一-鿿]/);
+  });
+
+  test('有可用的、没有找不到的 → ok，报个数', () => {
+    const d = workdirPresenceDiagnostic({ count: 2, missing: 0, lang: 'zh' });
+    assert.equal(d.status, 'ok');
+    assert.match(d.detail, /2/);
+  });
+
+  test('配置了却找不到 → warn，说的是「找不到」而不是「还没连」', () => {
+    for (const count of [0, 3]) {
+      const d = workdirPresenceDiagnostic({ count, missing: 2, lang: 'zh' });
+      assert.equal(d.status, 'warn', `count=${count}`);
+      assert.match(d.detail, /2 个.*找不到/);
+      assert.doesNotMatch(d.detail, /还没有连接/);
+    }
+    assert.doesNotMatch(workdirPresenceDiagnostic({ count: 0, missing: 1, lang: 'en' }).detail, /[一-鿿]/);
+  });
+
+  test('missing 缺席或脏值（旧调用方）→ 按 0 处理', () => {
+    for (const missing of [undefined, null, Number.NaN, -1, '2']) {
+      assert.equal(workdirPresenceDiagnostic({ count: 0, missing, lang: 'zh' }).status, 'ok', String(missing));
+    }
+  });
+});
+
 // 两个 doctor 共用的过宽根判定。判据就是写入侧那一个（env-schema.js 的 overlyBroadWorkdir），这里不再
 // 自己写一份——两道闸不同源就等于没有闸（M2 那段注释的原话）。
 test.describe('workdirBreadthDiagnostic：工作区过宽根（只报不拦）', () => {
@@ -1526,5 +1566,52 @@ test.describe('workdirBreadthDiagnostic：工作区过宽根（只报不拦）',
 
   test('英文档没有中文残留', () => {
     assert.doesNotMatch(workdirBreadthDiagnostic({ dirs: [home], home, lang: 'en' }).detail, /[一-鿿]/);
+  });
+});
+
+// 「已连接的文件夹」布局提示（2026-09-25）。只报不拦：两类都不挡启动，但用户看不出原因——
+// 显式列着的 worktree 自成一节、会话不并回仓库；scratch 根在 git 仓库里时「无文件夹」会话以为自己在那个仓库。
+test.describe('connectedFoldersDiagnostic：已连接文件夹的布局提示（只报不拦）', () => {
+  const fine = { root: '/h/Library/scratch-workspaces', repoRoot: null, writable: true };
+
+  test('都正常：一条 ok', () => {
+    const r = connectedFoldersDiagnostic({ redundantWorktrees: [], scratch: fine, lang: 'zh' });
+    assert.deepEqual(r.map(x => x.status), ['ok']);
+  });
+
+  test('显式列着、其实不必列的 worktree：逐条点名它与所属仓库，说清删了之后会怎样', () => {
+    const r = connectedFoldersDiagnostic({
+      redundantWorktrees: [{ path: '/c/app-feat', repo: '/c/app' }, { path: '/c/app-fix', repo: '/c/app' }],
+      scratch: fine, lang: 'zh',
+    });
+    assert.deepEqual(r.map(x => x.status), ['warn', 'warn']);
+    assert.ok(r[0].detail.includes('/c/app-feat') && r[0].detail.includes('/c/app'), r[0].detail);
+    assert.match(r[0].detail, /并回/, '只说「可以删」不说后果，用户不知道该不该删');
+    assert.ok(r[1].detail.includes('/c/app-fix'));
+  });
+
+  test('标签与措辞用实际来源键名：清单来自 WORK_DIRS 环境变量时，叫人去改 WORKDIRS 就是让他找一个自己配置里没有的键', () => {
+    const [d] = connectedFoldersDiagnostic({ redundantWorktrees: [{ path: '/c/app-feat', repo: '/c/app' }], scratch: fine, source: 'WORK_DIRS', lang: 'zh' });
+    assert.equal(d.name, 'WORK_DIRS');
+    assert.match(d.detail, /从 WORK_DIRS 删掉/);
+  });
+
+  test('scratch 根在 git 仓库里、不可写：各一条 warn，点名那个仓库', () => {
+    const r = connectedFoldersDiagnostic({
+      redundantWorktrees: [], scratch: { root: '/h/Library/scratch-workspaces', repoRoot: '/h', writable: false }, lang: 'zh',
+    });
+    assert.deepEqual(r.map(x => x.status), ['warn', 'warn']);
+    assert.ok(r.some(x => x.detail.includes('/h') && /CLAUDE\.md/.test(x.detail)), JSON.stringify(r));
+    assert.ok(r.some(x => /不可写/.test(x.detail)), JSON.stringify(r));
+  });
+
+  test('英文档没有中文残留', () => {
+    const r = connectedFoldersDiagnostic({
+      redundantWorktrees: [{ path: '/c/app-feat', repo: '/c/app' }],
+      scratch: { root: '/h/s', repoRoot: '/h', writable: false }, lang: 'en',
+    });
+    for (const x of [...r, ...connectedFoldersDiagnostic({ redundantWorktrees: [], scratch: fine, lang: 'en' })]) {
+      assert.doesNotMatch(`${x.name} ${x.detail}`, /[一-鿿]/);
+    }
   });
 });

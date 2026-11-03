@@ -113,7 +113,9 @@ export function statuslineBridgeDiagnostic({ webOff = false, bridgeOff = false, 
   if (installState === 'drifted') {
     return { status: 'warn', name: 'CLI_STATUSLINE_BRIDGE', detail: bi(lang, '安装记录与当前 Claude statusLine.command 已漂移/被改写；先运行 npm run statusline:status 检查，勿强行覆盖。', 'The install manifest and the current Claude statusLine.command have drifted; run npm run statusline:status before overwriting anything.') };
   }
-  return { status: 'warn', name: 'CLI_STATUSLINE_BRIDGE', detail: bi(lang, '未安装；Web 驾驶的 SDK 状态栏可用，但 CLI 镜像 statusline 不同步。运行 npm run statusline:install 显式启用。', 'Not installed. The SDK status line works when the web drives, but mirrored CLI sessions will not sync. Run npm run statusline:install to enable it.') };
+  // 没装给 info 不给 warn（验收 O8）：两座桥都是显式 opt-in（装机向导非交互缺省 off），「没装」是多数人的
+  // 默认状态。显式选了 --hooks=off 的人每次 doctor 都看到两条 ⚠，就会学会忽略这一列——包括真该看的漂移。
+  return { status: 'info', name: 'CLI_STATUSLINE_BRIDGE', detail: bi(lang, '未安装；Web 驾驶的 SDK 状态栏可用，但 CLI 镜像 statusline 不同步。运行 npm run statusline:install 显式启用。', 'Not installed. The SDK status line works when the web drives, but mirrored CLI sessions will not sync. Run npm run statusline:install to enable it.') };
 }
 
 // 界面语言：CLI doctor 按 locale 传入，web UI 由客户端语言传入（doctor:run 的 payload）。
@@ -134,7 +136,8 @@ export function hooksBridgeDiagnostic({ bridgeOff = false, installState = 'not-i
   if (installState === 'drifted') {
     return { status: 'warn', name: 'CLI_HOOKS_BRIDGE', detail: bi(lang, '安装记录与 settings.json 的 hooks 条目已漂移；先运行 npm run hooks:status 检查，勿强行覆盖。', 'The install manifest and the hooks entries in settings.json have drifted; run npm run hooks:status before overwriting anything.') };
   }
-  return { status: 'warn', name: 'CLI_HOOKS_BRIDGE', detail: bi(lang, '未安装；终端直跑的会话仅靠 2.5s 轮询、无推送。运行 npm run hooks:install 显式启用。', 'Not installed. Sessions you run in your own terminal rely on 2.5s polling with no push. Run npm run hooks:install to enable it.') };
+  // 没装给 info 不给 warn，理由同 statuslineBridgeDiagnostic。
+  return { status: 'info', name: 'CLI_HOOKS_BRIDGE', detail: bi(lang, '未安装；终端直跑的会话仅靠 2.5s 轮询、无推送。运行 npm run hooks:install 显式启用。', 'Not installed. Sessions you run in your own terminal rely on 2.5s polling with no push. Run npm run hooks:install to enable it.') };
 }
 
 // 命令名右边界：空白、冒号、行尾。冒号是关键——Claude Code 的规范通配语法是 `Bash(rm:*)`，
@@ -893,6 +896,67 @@ export function workdirBreadthDiagnostic({ dirs = [], home, lang = 'zh' } = {}) 
       `${broad.length} 个工作区过宽（家目录本身，或 /、/Users、/home 这类根）：范围内的文件对远程入口全部可读，FILE_EDIT 缺省开着时还可直写。请改成具体的项目目录。`,
       `${broad.length} workspace(s) are overly broad (the home directory itself, or a root such as /, /Users or /home): everything in scope is readable by the remote entrypoint, and writable while FILE_EDIT is on (the default). Narrow them to specific project directories.`),
   };
+}
+
+// 有没有文件夹（2026-10-15）。清单为空是正常状态：新装、或在手机上全部断开之后 server 照常启动、只剩「无文件夹」
+// （SCOPE-03）；配置了却找不到才 warn。count 是可用的个数，missing 是配置了却找不到的个数——两种情况下解析结果
+// 都是空的，不分开就会把后者说成「还没连」，和服务告警（同一个 missingFolders）自相矛盾。CLI D3 与 web 体检共用。
+export function workdirPresenceDiagnostic({ count = 0, missing = 0, lang = 'zh' } = {}) {
+  const lost = Number.isFinite(missing) && missing > 0 ? missing : 0;
+  if (!count && !lost) {
+    return { status: 'ok', name: 'WORK_DIRS', detail: bi(lang,
+      '还没有连接任何文件夹：在手机上新建会话时选一个，或直接用「无文件夹」。',
+      'No folders connected yet: pick one when you start a session on your phone, or just use "No folder".') };
+  }
+  const head = bi(lang, `${count} 个工作目录`, `${count} workspace(s)`);
+  if (!lost) return { status: 'ok', name: 'WORK_DIRS', detail: head };
+  return { status: 'warn', name: 'WORK_DIRS', detail: head + bi(lang,
+    `；${lost} 个配置了却找不到（被删、改名或外置盘没挂上）——恢复后重启服务，或从配置的工作区列表里删掉。`,
+    `; ${lost} configured folder(s) can't be found (deleted, renamed, or the drive isn't mounted) — restart the service once they're back, or remove them from the workspace list.`) };
+}
+
+// 「已连接的文件夹」布局提示（2026-09-25）。纯判定：读盘的部分由 doctor-runtime 的 probeConnectedFolders 算好。
+//   redundantWorktrees [{ path, repo }]：WORKDIRS 里显式列着、但已落在别的连接范围里（如父目录整个连着）的 worktree。
+//     列着它就自成一节，会话不并回仓库。只连了仓库时不算：仓库外的 worktree 不随仓库授权，必须显式列入（2026-10-10）。
+//   scratch { root, repoRoot, writable }：「无文件夹」会话的 scratch 根。落在 git 仓库里时 CLI 会向上加载那个仓库的
+//     CLAUDE.md 与 .claude/settings；不可写时第一条消息建不出目录。
+//   source：清单的实际来源键名（WORKDIRS / WORK_DIRS_FILE / WORK_DIRS），标签与「从哪删」都用它，同 D3。
+// 已连接文件夹互相嵌套不报：官方同样支持（手机上也能添加已被覆盖的子文件夹），报了就是跟产品自己的界面唱反调。
+export function connectedFoldersDiagnostic({ redundantWorktrees = [], scratch = null, source = 'WORKDIRS', lang = 'zh' } = {}) {
+  const out = [];
+  for (const { path, repo } of redundantWorktrees || []) {
+    out.push({
+      status: 'warn', name: source,
+      detail: bi(lang,
+        `${path} 是 ${repo} 的 git worktree，已经在已连接的文件夹里，这一条不必单独列出。列着它就自成一节；从 ${source} 删掉之后，它的会话会并回 ${repo} 那一节。`,
+        `${path} is a git worktree of ${repo} and is already inside a connected folder, so it doesn't need its own entry. Listed, it gets its own section; remove it from ${source} and its sessions fold back into ${repo}.`),
+    });
+  }
+  const scratchName = bi(lang, '无文件夹', 'No folder');
+  if (scratch?.repoRoot) {
+    out.push({
+      status: 'warn', name: scratchName,
+      detail: bi(lang,
+        `无文件夹会话的目录 ${scratch.root} 落在 git 仓库 ${scratch.repoRoot} 里：会话会加载那个仓库的 CLAUDE.md 与 .claude/settings，git status 报的也是那个仓库。`,
+        `The no-folder session directory ${scratch.root} is inside the git repository ${scratch.repoRoot}: sessions will load that repository's CLAUDE.md and .claude/settings, and git status will report that repository.`),
+    });
+  }
+  if (scratch && !scratch.writable) {
+    out.push({
+      status: 'warn', name: scratchName,
+      detail: bi(lang,
+        `无文件夹会话的目录 ${scratch.root} 不可写：选「无文件夹」发第一条消息时会建不出目录。`,
+        `The no-folder session directory ${scratch.root} is not writable: the first message in a "No folder" session will fail to create it.`),
+    });
+  }
+  if (!out.length) {
+    out.push({
+      status: 'ok', name: bi(lang, '已连接的文件夹', 'Connected folders'),
+      detail: bi(lang, '没有多余的 worktree 条目；无文件夹会话的目录可写、不在 git 仓库里。',
+        'No redundant worktree entries; the no-folder session directory is writable and outside any git repository.'),
+    });
+  }
+  return out;
 }
 
 export function fileEditExposureDiagnostic({ fileEditOff = false, cfConfigured = false, publicUrl = '', accessProfile = '', lang = 'zh' } = {}) {

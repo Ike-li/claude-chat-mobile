@@ -8,6 +8,7 @@
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
 import { t, tk } from '../i18n.js';
+import { displaySessionTitle } from './session-search.js';
 
 // 流内 live 活动行兜底文案（不写 disk/history）。busy 主形态是 formatCliSpinnerLine 的 CLI 式
 // spinner 行——对齐 CLI 不报具体工具（工具卡自会显示命令）。
@@ -76,6 +77,8 @@ export const STATUS_ICONS = {
   // answered / aborted 是中性终态：不是工具失败，也不该占用绿色去邀功——刻意让它们退出红/绿的注意力预算
   answered: { tone: 'text-ink-soft', label: tk('已回答'), path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
   aborted: { tone: 'text-ink-soft', label: tk('已中止'), path: '<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="currentColor"/>' },
+  // 提问没人答（「不回答」或过期，#455）：本轮照常继续，同样是中性终态
+  unanswered: { tone: 'text-ink-soft', label: tk('未作答'), path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
 };
 // 供调用点在换色前清掉上一个状态的色（不能只 add，否则两个色类叠着靠 CSS 顺序决胜负）
 export const STATUS_ICON_TONES = [...new Set(Object.values(STATUS_ICONS).map(s => s.tone))];
@@ -172,6 +175,32 @@ export function resolveDrawerStatusChip({ liveState, terminalState, terminalSour
   return { status, label };
 }
 
+// 会话行的终端态（O86）。注册表（~/.claude/sessions/<PID>.json）有自报就用它——那是终端进程自己说的。
+// 没有自报（老版本 CLI 不写、或注册表读不动）时，服务端照样能从磁盘观测到外部落定新消息、给当前查看的
+// 会话上只读镜像锁；那一行也该看得出被终端占着，而不是和普通「已打开」一样。镜像锁是全局单值、只属于
+// 当前查看的会话（mirror-engine），所以最多补一行。疑似中断（stale）不补：那时多半没人在驾驶。
+// 本会话自主循环（ScheduleWakeup/CronCreate）写出的锁（autonomous）也不补：没有终端在驾驶，来源由 composer 单独说明。
+// mirror 由调用方给有效锁（已接管的不算）：{ sessionId, stale, waiting, autonomous } 或 null。
+//
+// 快照优先、不让镜像锁压过它（#289 方案 F）。来源始终取行快照；若让锁压过快照的状态，有三处会说错——
+// 镜像侧的 waiting 只认 cli 注册表，桌面端（2.1.299 实测已自报 status）等审批时会被说成运行中、丢掉「需要你」；
+// 锁判成 stale 时会把快照里的 busy / waiting chip 抹掉；锁释放有 ~12.5s 迟滞，每个回合结束后多挂一截「运行中」。
+// 快照过时的问题从源头补：镜像锁真正转变时（mirrorRowLockChanged），applyMirror 立刻 revalidate 那一行
+// 所在目录，一个往返内换成权威态。
+export function resolveRowTerminalState({ registryState = null, sessionId = null, mirror = null } = {}) {
+  if (registryState) return registryState;
+  if (!sessionId || !mirror?.sessionId || mirror.sessionId !== sessionId || mirror.stale || mirror.autonomous) return null;
+  return mirror.waiting ? 'waiting' : 'busy';
+}
+
+// 镜像锁（mirrorRowLock 的形状，或 null）是否真正转变：出现/消失，或行能读到的字段翻转。
+// 字段不变的重复广播（倒计时之类）不算——否则每次广播都会多打一轮 session:list。
+export function mirrorRowLockChanged(prev = null, next = null) {
+  if (!prev || !next) return Boolean(prev) !== Boolean(next);
+  return prev.sessionId !== next.sessionId || Boolean(prev.stale) !== Boolean(next.stale)
+    || Boolean(prev.waiting) !== Boolean(next.waiting) || Boolean(prev.autonomous) !== Boolean(next.autonomous);
+}
+
 // 会话行副文本：时间 / 已打开 / id。CLI 空闲占用提到最前，避免 truncate 吃掉来源；
 // CLI busy 不再写「终端」——主 chip 已是「终端运行中」。
 export function formatSessionRowSubtitle({
@@ -198,6 +227,23 @@ export function formatSessionRowSubtitle({
   return parts.join(' · ');
 }
 
+// 会话行「⋯」菜单的项（一行只有这一个入口，对齐桌面端 SessionDropdownMenu 的顺序：标已读/未读在最上，删除垫底）。
+// 删除对已打开的会话灰掉而不是藏起来：服务端会拒删正被驱动的会话，藏起来用户不知道怎样才能删。
+// 无 id 的新会话还没落盘，无从标记也无从删除，只剩关闭。
+export function sessionRowMenuItems({ hasId = false, live = false, unread = false } = {}) {
+  const items = [];
+  if (hasId) items.push({ action: 'toggle-read', label: unread ? t('标为已读') : t('标为未读') });
+  // 打开着也能改：活会话的 CLI 退出时会把旧名写回来，服务端在它退出后补写（#458）
+  if (hasId) items.push({ action: 'rename', label: t('重命名') });
+  if (live) items.push({ action: 'close', label: t('关闭会话') });
+  if (hasId) {
+    items.push(live
+      ? { action: 'delete', label: t('删除会话'), danger: true, disabled: true, hint: t('先关闭会话才能删除') }
+      : { action: 'delete', label: t('删除会话'), danger: true });
+  }
+  return items;
+}
+
 // 文件 / 改动面板的目标目录（2026-09-11）。
 //
 // 【为什么不能直接用工作区 cwd】托管 worktree 的会话打开后，工作区轴仍归父仓（产品判据：
@@ -208,7 +254,8 @@ export function formatSessionRowSubtitle({
 // 【为什么优先 panelCwd 而不是直接读 cwd】worktree 目录被删掉之后（2026-09-13 真机形态），
 // 实例的 cwd 仍指向那条已不存在的路径，而且**必须保持原样**——transcript 就落在按它算出的
 // project 目录里，改掉 cwd 就是「历史消息加载失败」。所以服务端另发一个 panelCwd 承担
-// 展示/文件/git 轴：路径还在时它恒等于 cwd，悬空时回落父仓。前端只管认它。
+// 展示/文件/git 轴：路径还在时它恒等于记录位置（外部进程搬家后 SDK cwd 会暂时留在旧目录），
+// 悬空时回落父仓。前端只管认它。
 // 旧 server 不下发这个字段 → 回落 cwd，与引入它之前逐字同形。
 //
 // 无当前实例（空首页、实例刚关）→ 回落工作区 cwd，与引入本函数之前逐字同形。
@@ -219,6 +266,7 @@ export function resolvePanelCwd({ instances, viewingInstanceId, workspaceCwd } =
 }
 
 // transcript 轴：「按 cwd 去磁盘找这个会话的东西」时该用哪个目录（loadHistory 拿它算 project 目录）。
+// 外部进程把会话搬到别的 worktree 后，服务端先恢复记录位置（transcriptCwd），发送前再在新位置续接 SDK。
 //
 // 【为什么不能和 resolvePanelCwd 合成一个】worktree 目录被删掉那一档两者必然分叉，而合并之后
 // 无论偏向哪一侧都是静默出错、且两种错法毫无相似之处：
@@ -229,7 +277,7 @@ export function resolvePanelCwd({ instances, viewingInstanceId, workspaceCwd } =
 export function resolveSessionCwd({ instances, viewingInstanceId, workspaceCwd } = {}) {
   const list = Array.isArray(instances) ? instances : [];
   const inst = list.find(i => i && i.instanceId === viewingInstanceId);
-  return inst?.cwd || workspaceCwd || null;
+  return inst?.transcriptCwd || inst?.cwd || workspaceCwd || null;
 }
 
 // worktree 目录被删掉之后，文件/改动面板会静悄悄地改看父仓（见 resolvePanelCwd）。
@@ -241,7 +289,7 @@ export function resolveWorktreeGoneNotice({ instances, viewingInstanceId } = {})
   const list = Array.isArray(instances) ? instances : [];
   const inst = list.find(i => i && i.instanceId === viewingInstanceId);
   if (!inst?.worktreeGone) return null;
-  return { worktree: projectDisplayName(inst.cwd), parent: projectDisplayName(inst.panelCwd) };
+  return { worktree: projectDisplayName(inst.transcriptCwd || inst.cwd), parent: projectDisplayName(inst.panelCwd) };
 }
 
 // 一个实例 cwd 归哪个工作区。托管 worktree 的 cwd 是 `<父仓>/.claude/worktrees/<name>`，
@@ -263,6 +311,64 @@ export function owningWorkspace(cwd, dirs) {
   return best;
 }
 
+// 一个活实例归抽屉的哪一节。服务端给了 projectKey 且它是一节，就用它——仓库外的平级 worktree 按 cwd
+// 前缀归不到任何一节，只有服务端（从仓库侧双向回验）认得出它属于哪个仓库。否则按 cwd 取最长前缀
+// （旧服务端 / E2E mock 的旧载荷不带 projectKey；那一节还没下发时同理）。
+export function sectionOfInstance(inst, sectionKeys) {
+  const keys = Array.isArray(sectionKeys) ? sectionKeys : [];
+  if (typeof inst?.projectKey === 'string' && keys.includes(inst.projectKey)) return inst.projectKey;
+  return owningWorkspace(inst?.cwd, keys);
+}
+
+// SESSION-02：抽屉里活着的实例必须有一行。下面三个函数合起来把每个活实例分到恰好一个去处，
+// sectionKeys 是抽屉当前所有小节的键。
+//
+// 一个小节的活实例：有 sessionId 的进 liveMap（给列表行贴运行态），没有的进 freshTabs（新会话 tab）。
+// freshTabs 不再要求 cwd 就是小节本身——懒开到托管 worktree、还没拿到 sessionId 的实例 cwd 是
+// `<工作区>/.claude/worktrees/<n>`，只收 cwd === 小节的话它哪一节都不画。
+export function liveRowsForSection(instances, sectionKey, sectionKeys) {
+  const liveMap = new Map();
+  const freshTabs = [];
+  for (const inst of Array.isArray(instances) ? instances : []) {
+    if (!inst?.instanceId) continue;
+    if ((sectionOfInstance(inst, sectionKeys) || inst.cwd) !== sectionKey) continue;
+    if (inst.sessionId) liveMap.set(inst.sessionId, inst);
+    else freshTabs.push(inst);
+  }
+  return { liveMap, freshTabs };
+}
+
+// liveMap 里、列表没返回的那些：被分页挤出本页，或 transcript 被 EnterWorktree 迁到了别的 project 目录。
+// 只给行贴运行态的话，它们在抽屉里整行消失——正在跑，却既看不见也关不掉。
+export function orphanLiveRows(liveMap, listedIds) {
+  const listed = listedIds instanceof Set ? listedIds : new Set(listedIds || []);
+  const out = [];
+  for (const [sid, inst] of liveMap) if (!listed.has(sid)) out.push(inst);
+  return out;
+}
+
+// 补画的行（orphanLiveRows 的元数据）与列表这一页合成一列，按时间排。被分页挤出的已开会话比本页都旧，
+// 于是接在页尾；收起列表时整批顶到最前，读起来像排序坏了（2026-10-31 真机，同 O81 的 pinned）。
+// 没有时间的（transcript 找不到）放最前：无处可排，放最前才看得见它开着。sessions 自身的顺序不动。
+export function mergeOrphanRowsByTime(sessions, orphans) {
+  const dated = [];
+  const out = [];
+  for (const s of orphans) (Number.isFinite(s?.lastUsedAt) ? dated : out).push(s);
+  dated.sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+  let i = 0;
+  for (const s of sessions) {
+    while (i < dated.length && dated[i].lastUsedAt > (s.lastUsedAt ?? 0)) out.push(dated[i++]);
+    out.push(s);
+  }
+  return out.concat(dated.slice(i));
+}
+
+// cwd 不在任何小节之下的活实例（例如刚进了仓库外的平级 worktree）：由抽屉单独成一节。
+export function unownedLiveInstances(instances, sectionKeys) {
+  return (Array.isArray(instances) ? instances : [])
+    .filter(inst => inst?.instanceId && !sectionOfInstance(inst, sectionKeys));
+}
+
 // per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
 // aborted（P1-4 已中止独立状态）介于 done 与 busy 之间：比顺利完成更值得回头看一眼（为什么被中止），但
 // 已是终态，不该盖过仍在运行的其它会话。
@@ -271,7 +377,7 @@ export function aggregateStates(instances, dirs) {
   const out = {};
   for (const d of (dirs || [])) out[d] = 'idle';
   for (const x of instances || []) {
-    const key = owningWorkspace(x.cwd, Object.keys(out)) || x.cwd;
+    const key = sectionOfInstance(x, Object.keys(out)) || x.cwd;
     if (!(key in out)) out[key] = 'idle';
     if ((rank[x.state] ?? 0) > (rank[out[key]] ?? 0)) out[key] = x.state;
   }
@@ -391,7 +497,7 @@ export function formatComposeDefaultsSummary({ modelLabel, modeLabel, effortLabe
   const parts = [modelLabel, modeLabel, effortLabel]
     .map(s => (typeof s === 'string' ? s.trim() : ''))
     .filter(Boolean);
-  return parts.length ? parts.join(' · ') : t('使用工作区默认配置');
+  return parts.length ? parts.join(' · ') : t('使用此文件夹的默认配置');
 }
 
 // 顶部工作区 pill（点开文件浏览 / git 改动）可见性。
@@ -406,7 +512,11 @@ export function formatComposeDefaultsSummary({ modelLabel, modeLabel, effortLabe
 //     页内那个 compose-project-pill 也补不上：它的 onclick 是打开会话列表抽屉，不通向文件。
 //   · 空首页：工作区尚未选定（页面就是让你选的），pill 无处可指，仍隐藏。
 // cwd 为空时一律隐藏——宁可没入口，也不给一个指向 null 的入口。
-export function shouldShowTopContextPill({ viewingInstanceId, sessionId, composeReady = false, cwd = null } = {}) {
+// cwd 是 scratch 根时同理（2026-10-16）：那是「无文件夹」新会话页的启动键，目录要等首条消息才建，而服务端
+// 范围门只放行根下的 scratch 目录、不放行根本身（根下是所有无文件夹会话），点开必报「不在已连接的文件夹里」。
+// 会话开起来以后 cwd 是它自己的 scratch 目录，照常显示。
+export function shouldShowTopContextPill({ viewingInstanceId, sessionId, composeReady = false, cwd = null, scratchRoot = null } = {}) {
+  if (scratchRoot && cwd === scratchRoot) return false;
   if (!shouldShowStartScreen({ viewingInstanceId, sessionId })) return true;
   return Boolean(composeReady && cwd);
 }
@@ -470,12 +580,12 @@ export function shouldShowComposer({ viewingInstanceId, sessionId, composeReady 
   return false;
 }
 
-// 空首页「最近活跃」：把各显式 workdir 的 session 列表摊平，按 lastUsedAt 降序取 topN。
+// 空首页「最近活跃」：把各项目的 session 列表摊平，按 lastUsedAt 降序取 topN。
 // 每条附 cwd + workspaceName，前端可一键 session:switch，不必先开侧栏目录树。
 // dirLists: Array<{ cwd, sessions, workspaceName? }>
-//   - workspaceName 非空字符串时优先于 projectDisplayName(cwd)
+//   - workspaceName 非空字符串时优先于 projectDisplayName(cwd)（子项目的「父名 › 相对路径」、「无文件夹」靠它）
 // 无 id 的行跳过；缺 lastUsedAt 的排最后（仍可点开）；非法 limit 回落默认 8。
-// git worktree 路径若要用，须写入 workdirs.json 成为独立 workdir，不再有自动分组通道。
+// worktree 会话由服务端并进所属仓库的列表（listProjectMemberDirs），这里不再分组。
 export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}) {
   const cap = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 8;
   const rows = [];
@@ -489,11 +599,12 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
       if (!s || typeof s.id !== 'string' || !s.id) continue;
       rows.push({
         id: s.id,
-        title: s.title || t('无标题会话'),
+        title: displaySessionTitle(s.title, t('无标题会话')),
         lastUsedAt: s.lastUsedAt ?? null,
         // 托管 worktree 的会话自带真实 cwd；无条件写工作区那个会把它覆盖掉，点开时按父仓去找
         // transcript，落到「会话不存在」页。workspaceName 不跟着变——归属展示本来就要显示父仓。
         cwd: s.cwd || cwd,
+        workspaceCwd: cwd, // 所属项目的键（这一行来自哪一节的列表）：首页胶囊按它一个项目一个
         workspaceName,
         worktree: s.worktree ?? null,
         entrypoint: s.entrypoint ?? null,
@@ -509,6 +620,20 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
   return rows.slice(0, cap);
 }
 
+// 首页的项目胶囊：一个项目一个，取它最近的那一条（recent 已按时间降序）。按行自己的 cwd 去重不行——
+// worktree、scratch 目录里的会话各有各的目录，同一个项目会冒出好几个同名胶囊。
+export function recentWorkspaceChips(recent) {
+  const seen = new Set();
+  const chips = [];
+  for (const r of Array.isArray(recent) ? recent : []) {
+    const key = r.workspaceCwd ?? r.cwd;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chips.push(r);
+  }
+  return chips;
+}
+
 // 首页「最近活跃」这次合并有没有缺角。listMain 逐 workdir 发 session:list，单目录 4s 超时兜底
 // done([])——超时目录与「该目录真的没有会话」在合并结果里完全同形，那个工作区连同它的未读会话
 // 一起从首页静默消失，界面零痕迹。与目录头角标 null/0 同源的病：把「没拿到」呈现成「确定没有」。
@@ -520,6 +645,16 @@ export function summarizeRecentsLoad(dirLists) {
     if (entry.timedOut) failedDirs.push(entry.cwd);
   }
   return { complete: failedDirs.length === 0, failedCount: failedDirs.length, failedDirs };
+}
+
+// 首页最近会话先到先画（2026-10-31 性能计划 2d）：dirLists 里还没回的工作区带 pending:true。
+// 回答这一刻画什么：recent=null 是先别动——一行都还没有就画，会先宣布「还没有最近会话」再冒出行来；
+// settled=true 才轮到对整张表下的结论（空提示、缺角提示、启动就绪）。
+export function recentsSnapshot(dirLists, { limit = 8 } = {}) {
+  const lists = Array.isArray(dirLists) ? dirLists : [];
+  const settled = lists.every(entry => !entry?.pending);
+  const recent = mergeRecentSessionsAcrossWorkspaces(lists.filter(entry => !entry?.pending), { limit });
+  return { recent: settled || recent.length ? recent : null, settled };
 }
 
 // 乐观 busy（send() 的 setBusy(true)）会被「服务端换实例 → 广播 instances → setInstances →
@@ -625,7 +760,7 @@ export function resolveHeaderAttentionChip({ badgeReason = 'ok', needsYouCount =
   const tone = OTHER_WORKSPACE_CHIP_TONE[otherWorkspaceStatus];
   if (tone) {
     const label = DRAWER_STATUS_LABELS[otherWorkspaceStatus];
-    return { visible: true, tone, reason: 'other-workspace', text: `${t('其他工作区')} · ${t(label)}` };
+    return { visible: true, tone, reason: 'other-workspace', text: `${t('其他文件夹')} · ${t(label)}` };
   }
   return { visible: false, tone: null, reason: 'ok', text: '' };
 }
@@ -636,7 +771,7 @@ export function resolveHeaderAttentionChip({ badgeReason = 'ok', needsYouCount =
 //   list       = 都定位不到（缺 sessionId 或无 instanceId）→ 打开会话列表让用户手选
 export function resolveDeepLinkTarget(target, instances = []) {
   if (!target || !target.instanceId) return { action: 'list' };
-  // instanceId 是【进程内计数器】（instance-manager 的 `inst_${++counter}`，server 重启即从 inst_1 重新发号），
+  // instanceId 曾是【进程内计数器】（server 重启即从 inst_1 重新发号；2026-10-16 起每次启动带随机段，MSG-02），
   // 所以「同号」不等于「同一个会话」。重启后点一条留在通知栏的旧通知，很可能落进另一个项目的会话——
   // 用户以为自己在 A、实际在 B，在 B 里发消息/授权都是错投，比点不开严重得多。通知 data 里本来就带了
   // sessionId，这里一并校验：对不上就不当 live，回落到下面按 sessionId 懒 resume 的 switch 分支。
@@ -668,7 +803,7 @@ export function resolveSheetDragEnd({
 // session:list 响应回来后，判断内容是否真的变了再决定要不要重渲染该目录的会话行列表——避免"缓存已
 // 秒开正确内容→响应回来后又无条件整段重渲"的多余闪烁/重排。hasPrevEntry=false（此前无缓存，正显示
 // 骨架屏）时恒需要渲染：骨架屏必须被替换，哪怕真实数据恰好是空列表。粒度：id+title(前 40 字)+
-// lastUsedAt 足以代表用户会感知到的变化，不做深度字段比对；hasMore 单独比较（决定"显示全部"按钮的
+// lastUsedAt 足以代表用户会感知到的变化，不做深度字段比对；hasMore 单独比较（决定"显示更多"按钮的
 // 出现/消失，不影响每一行的签名本身）。
 export function shouldRerenderSessionList({
   hasPrevEntry = false,
@@ -676,23 +811,28 @@ export function shouldRerenderSessionList({
   prevHasMore = false,
   prevTotal = null,
   prevPinned,
+  prevOpen,
   nextSessions,
   nextHasMore = false,
   nextTotal = null,
   nextPinned,
+  nextOpen,
 } = {}) {
   if (!hasPrevEntry) return true;
   if (!!prevHasMore !== !!nextHasMore) return true;
   // total 变化会影响「还有 N 个更早的会话」提示，即使行签名不变也要重渲。
   if ((prevTotal ?? null) !== (nextTotal ?? null)) return true;
   // terminal 进签名：CLI 进程 busy/alive 状态或副文本变化必须重渲，否则抽屉会陈旧。
+  // terminalSource 同理：状态不变、驾驶方从终端换成桌面端时，chip 与副文本的措辞也得跟着换。
   const signature = list => (Array.isArray(list) ? list : [])
-    .map(s => `${s?.id || ''}:${(s?.title || '').slice(0, 40)}:${s?.lastUsedAt || ''}:${s?.terminal || ''}`)
+    .map(s => `${s?.id || ''}:${(s?.title || '').slice(0, 40)}:${s?.lastUsedAt || ''}:${s?.terminal || ''}:${s?.terminalSource || ''}`)
     .join('|');
   // pinned（手动标「稍后再看」、被 limit 挤出本页而单独补回的那组）必须单独进判据：它的成员来自
   // read-state 而不是这一页，主列表签名一个字都不变时它照样会增删——用户在另一台设备上标一条、
   // 或在本机把某条标回已读，只有这里能察觉。漏掉就等于那一组永远停在首次渲染的内容上。
   if (signature(prevPinned) !== signature(nextPinned)) return true;
+  // open（开着、被分页挤出本页的会话的元数据）同理：成员跟着「开了哪些会话」走，与这一页无关（验收 O46）
+  if (signature(prevOpen) !== signature(nextOpen)) return true;
   return signature(prevSessions) !== signature(nextSessions);
 }
 
@@ -705,8 +845,11 @@ export function buildDirInstanceSignatures(instances = [], dirs = []) {
   for (const d of (dirs || [])) byDir.set(d, []);
   for (const inst of (instances || [])) {
     if (!inst?.instanceId) continue;
-    if (!byDir.has(inst.cwd)) byDir.set(inst.cwd, []);
-    byDir.get(inst.cwd).push(`${inst.instanceId}:${inst.sessionId || ''}:${(inst.title || '').slice(0, 20)}`);
+    // 按它归属的那一节记签名，局部重建才落在对的节上；哪一节都不归的仍按 cwd 记（它的变化会让
+    // rebuildDirSections 找不到节点、退化成整段重建——「不在已连接的文件夹里」那一节靠的正是这条）。
+    const key = sectionOfInstance(inst, dirs) || inst.cwd;
+    if (!byDir.has(key)) byDir.set(key, []);
+    byDir.get(key).push(`${inst.instanceId}:${inst.sessionId || ''}:${(inst.title || '').slice(0, 20)}`);
   }
   const out = {};
   for (const [d, frags] of byDir) out[d] = frags.join(',');
@@ -714,7 +857,7 @@ export function buildDirInstanceSignatures(instances = [], dirs = []) {
 }
 
 // 比较前后两份"按目录分键的签名"，返回签名变化的 cwd 列表（升序排序，确定性）——调用方只需重建这些
-// 目录的 DOM 子树，其余目录原样不动（不撤离滚动位置/侧滑态/"显示全部"展开态等本地态）。目录集合本身
+// 目录的 DOM 子树，其余目录原样不动（不撤离滚动位置/侧滑态/"显示更多"展开态等本地态）。目录集合本身
 // 变化（新增/删除工作区）、viewingInstanceId 变化两类"结构性"场景不经这个函数——调用方应直接全量
 // 重建，不必对这两种低频场景做精细化 diff。
 export function diffDirSignatures(prev = {}, next = {}) {
@@ -724,4 +867,12 @@ export function diffDirSignatures(prev = {}, next = {}) {
     if ((prev || {})[k] !== (next || {})[k]) changed.push(k);
   }
   return changed.sort();
+}
+
+// 面板"结构性"指纹：目录集合（忽略顺序）+ viewingInstanceId + 当前查看 cwd 之一变了才算——这三者才
+// 决定 dirRow 高亮与 UX-007 的"当前工作区强制展开"。纯换序（拖动排序广播回来的新顺序，集合不变）
+// 不该算在内：换序只需要调整展示顺序，调用方若把它当结构性变化去触发全量重建，会把强制展开误套在
+// 跟这次换序无关的目录上（2026-10-26：挪别的文件夹顺序，却把当前正在看的工作区连带强制展开了）。
+export function dirPanelStructuralKey({ dirs = [], viewingInstanceId = null, currentCwd = null } = {}) {
+  return `${[...(dirs || [])].sort().join('|')}|${viewingInstanceId || ''}|${currentCwd || ''}`;
 }

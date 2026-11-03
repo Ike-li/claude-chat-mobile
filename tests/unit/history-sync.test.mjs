@@ -7,10 +7,10 @@
 // 这份从原 history.test.mjs 拆出，同源的还有 -files、-list、-messages。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, utimesSync } from 'node:fs';
+import { writeFileSync, mkdirSync, utimesSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, externalHistoryExtent, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, externalHistoryExtent, historyTailKey, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, appendedForeignWrite, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -81,6 +81,48 @@ test('classifyTranscriptTail: assistant 只落了 thinking（text/tool_use 未�
     { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: '思考中' }] }, timestamp: '2026-07-12T10:00:02.000Z' },
   ]);
   assert.equal((await classifyTranscriptTail('tthink', cwd, { baseDir: BASE })).verdict, 'pending');
+});
+
+// 验收 O96（AC-12-03）：第三方网关把一个空 thinking 写在正文后面（同一条消息拆成 text 条目 + 空 thinking 条目），
+// 链尾成了「只有 thinking」→ 按流式中间态判 pending，镜像锁永远不放，手机输入框一直只读。
+// 空 thinking 不承载任何内容，跳过它往前看：前面是正文就收尾。真流式中间态不受影响——thinking 有内容照样
+// pending；空 thinking 前面是 user / tool_result 的，跳过之后照样 pending（见下一条）。
+test('classifyTranscriptTail: 正文之后跟一条空 thinking（网关形态）→ settled，不再永久锁', async () => {
+  const cwd = '/test/tail-empty-thinking-after-text';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'temptythink', [
+    { type: 'user', message: { role: 'user', content: '提问' }, timestamp: '2026-10-17T10:00:00.000Z' },
+    { type: 'assistant', message: { id: 'msg_gw', role: 'assistant', content: [{ type: 'text', text: '答完了' }] }, timestamp: '2026-10-17T10:00:05.000Z' },
+    { type: 'assistant', message: { id: 'msg_gw', role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: '' }] }, timestamp: '2026-10-17T10:00:05.100Z' },
+  ]);
+  const r = await classifyTranscriptTail('temptythink', cwd, { baseDir: BASE });
+  assert.equal(r.verdict, 'settled');
+  assert.equal(r.lastChainTs, Date.parse('2026-10-17T10:00:05.000Z'), '时间戳取真正收尾的那条正文');
+});
+
+test('classifyTranscriptTail: 空 thinking 前面还没有正文（流式刚开始）→ 仍 pending', async () => {
+  const cwd = '/test/tail-empty-thinking-midstream';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'temptymid', [
+    { type: 'user', message: { role: 'user', content: '提问' }, timestamp: '2026-10-17T10:00:00.000Z' },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: '' }] }, timestamp: '2026-10-17T10:00:02.000Z' },
+  ]);
+  assert.equal((await classifyTranscriptTail('temptymid', cwd, { baseDir: BASE })).verdict, 'pending');
+  writeJSONL(dir, 'temptytool', [
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] } },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: '   ' }] }, timestamp: '2026-10-17T10:00:04.000Z' },
+  ]);
+  assert.equal((await classifyTranscriptTail('temptytool', cwd, { baseDir: BASE })).verdict, 'pending',
+    '工具结果之后的空 thinking 仍是轮次进行中');
+  // 正文之后跟一条【有内容】的 thinking：交错思考，接下来要发 tool_use——真流式中间态，不能收尾。
+  // 这条把「只跳过空 thinking」和「跳过一切 thinking」分开：后者会在这里误判 settled、提前解锁。
+  writeJSONL(dir, 'tinterleaved', [
+    { type: 'user', message: { role: 'user', content: '提问' } },
+    { type: 'assistant', message: { id: 'msg_i', role: 'assistant', content: [{ type: 'text', text: '我先查一下' }] } },
+    { type: 'assistant', message: { id: 'msg_i', role: 'assistant', content: [{ type: 'thinking', thinking: '该读哪个文件' }] }, timestamp: '2026-10-17T10:00:06.000Z' },
+  ]);
+  assert.equal((await classifyTranscriptTail('tinterleaved', cwd, { baseDir: BASE })).verdict, 'pending');
 });
 
 test('classifyTranscriptTail: 子 agent（isSidechain）开着 tool_use → pending（防主链 settled 后过早解锁）', async () => {
@@ -538,6 +580,44 @@ test.describe('rebaselineAbsorbedExternal（BE-009）', () => {
       sameSession: true, curLen: 130, baseline: 100, localBusy: false, wasOwnTurn: false,
     }), true);
   });
+  // 2026-10-25 实证会话 342a2654：Monitor 事件触发的自动汇报轮不一定计入在途轮，state 一直是 idle，
+  // localBusy / wasOwnTurn 都罩不住。它写盘期间新设备获批触发重定基线，己方写的被判成终端写入、标脏；
+  // 后台任务一直在，之后每次发送都回「需先吸收终端写入，但后台任务仍在运行」。entrypoint 是磁盘自报，
+  // 不依赖时序：上次的尾条还在、之后全是 sdk-ts，就是己方写的。
+  test('同会话重连 + 上次尾条之后的增长全是 sdk-ts 自报 → false（己方写盘，不是终端写入）', () => {
+    const before = OWN_TS(0, 3);
+    const messages = OWN_TS(0, 6);
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: messages.length, baseline: before.length,
+      prevTailKey: historyTailKey(before), curTailKey: historyTailKey(messages), messages,
+    }), false, '己方 SDK 写的增量被当成终端写入，会白白标脏；有后台任务时发送会一直被拒');
+  });
+  test('上次尾条之后夹着一条 entrypoint=cli → true（混合增量整段按外部走，防修过头）', () => {
+    const before = OWN_TS(0, 3);
+    const messages = [...OWN_TS(0, 4), { role: 'user', content: '终端插进来问的', timestamp: 't4', entrypoint: 'cli' }, ...OWN_TS(5, 1)];
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: messages.length, baseline: before.length,
+      prevTailKey: historyTailKey(before), curTailKey: historyTailKey(messages), messages,
+    }), true, '终端写入混在己方写盘里也必须标脏，否则下条手机消息从旧位置分叉');
+  });
+  test('上次尾条已不在（rewind 换了链）+ 之后全是 sdk-ts → true（找不到锚点就不豁免）', () => {
+    const before = OWN_TS(0, 3);
+    const messages = [...OWN_TS(0, 2), ...OWN_TS(10, 4)]; // t2 被撤销，换成另一条链
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: messages.length, baseline: before.length,
+      prevTailKey: historyTailKey(before), curTailKey: historyTailKey(messages), messages,
+    }), true, '已推送的那段被换掉了，SDK 子进程还停在旧叶子上，不标脏就会从废弃链分叉');
+  });
+  // 满窗时己方写盘不让长度变，只换尾指纹（catchUpStep 满窗分支的同一形态），同一判据一并吸收
+  test('满窗 + 同长 + 尾指纹变，但上次尾条之后全是 sdk-ts → false', () => {
+    const cap = 5;
+    const before = OWN_TS(0, cap);
+    const messages = OWN_TS(2, cap); // m0/m1 被挤出窗口，尾接上己方写的 m5/m6
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: cap, baseline: cap,
+      prevTailKey: historyTailKey(before), curTailKey: historyTailKey(messages), messages,
+    }), false, '满窗会话里己方写盘也会被当成终端写入');
+  });
 });
 
 // ── 原始同步 bug 复现（web 额度耗尽 → CLI 外部 resume+compact 写入 → web 重开看不到 CLI 新输出）────────
@@ -712,6 +792,40 @@ test.describe('externalGrowthWhilePaused：等审批期间的终端写入必须�
   test('缺参不抛', () => {
     assert.doesNotThrow(() => externalGrowthWhilePaused());
     assert.equal(externalGrowthWhilePaused(), false);
+  });
+});
+
+// O122：挂起集合变过（有审批结算）时，那段增长里有没有不是己方写的条目。
+test.describe('appendedForeignWrite：审批结算那一拍新写的那段里有没有别人的写入', () => {
+  const cwd = '/test/appended-foreign';
+  const dir = join(BASE, getProjectDir(cwd));
+  const head = { type: 'user', entrypoint: 'sdk-ts', message: { role: 'user', content: '起头' }, timestamp: '2026-10-22T10:00:00.000Z' };
+  const headBytes = Buffer.byteLength(JSON.stringify(head) + '\n');
+  const sizeOf = id => statSync(join(dir, `${id}.jsonl`)).size;
+
+  test('新写的只有 sdk-ts 与不带 entrypoint 的记录 → foreign=false', async () => {
+    writeJSONL(dir, 'af-own', [head,
+      { type: 'user', entrypoint: 'sdk-ts', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'x' }] } },
+      { type: 'last-prompt' }]);
+    assert.deepEqual(await appendedForeignWrite('af-own', cwd, headBytes, { baseDir: BASE }), { foreign: false, size: sizeOf('af-own') });
+  });
+  test('新写的里有 cli 条目 → foreign=true；起点之前的 cli 条目不算', async () => {
+    writeJSONL(dir, 'af-cli', [head, { type: 'user', entrypoint: 'cli', message: { role: 'user', content: '终端' } }]);
+    assert.equal((await appendedForeignWrite('af-cli', cwd, headBytes, { baseDir: BASE })).foreign, true);
+    writeJSONL(dir, 'af-old-cli', [{ ...head, entrypoint: 'cli' }, { type: 'last-prompt' }]);
+    assert.equal((await appendedForeignWrite('af-old-cli', cwd, headBytes, { baseDir: BASE })).foreign, false);
+  });
+  // Codex review：扫描与基线必须是同一份快照。size 另外 stat 的话，终端恰好在两次读之间追加，
+  // 扫描没看见、size 却已越过它，那段就被吸收进新基线。这里钉「返回的 size 就是扫到的那个位置」。
+  test('返回的 size 就是这次扫到的位置（同一次打开的 fstat）', async () => {
+    writeJSONL(dir, 'af-size', [head, { type: 'last-prompt' }]);
+    const r = await appendedForeignWrite('af-size', cwd, headBytes, { baseDir: BASE });
+    assert.equal(r.size, sizeOf('af-size'));
+  });
+  test('没有新写入 → foreign=false；文件读不出 → 保守 foreign=true、size 未知（-1）', async () => {
+    writeJSONL(dir, 'af-none', [head]);
+    assert.deepEqual(await appendedForeignWrite('af-none', cwd, headBytes, { baseDir: BASE }), { foreign: false, size: headBytes });
+    assert.deepEqual(await appendedForeignWrite('af-missing', cwd, 0, { baseDir: BASE }), { foreign: true, size: -1 });
   });
 });
 

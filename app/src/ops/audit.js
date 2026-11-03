@@ -75,13 +75,29 @@ export function flushSaveSync() {
 // ts 可选覆盖：对齐 ops/ 域内其它模块（如 cli-hooks-bridge.js 的 capturedAt/ackedAt）已有的
 // 「可选时钟覆盖参数、默认 Date.now()」惯例，供测试精确构造时间边界（同步调用背靠背时 ts 可能
 // 相同，_seq 递增仍保证 id 唯一）。生产调用点不传，行为不变。
+//
+// 合并（2026-11-01）：与窗口内某条完全相同（actor、action、target、outcome、meta 逐字段相等）时不另起一条，
+// 只在那条上记 repeat（总次数）与 lastTs。一个周期性触发的拒绝（抽屉每 12 秒轮询一个已删掉的文件夹）
+// 曾以每小时 300 条的速度把上限里真正稀有的记录轮转掉。窗口从首条算起而不是滑动：持续的刷屏每分钟仍落一条
+// 新记录，排在最新处，看得出它还在发生。
+const MERGE_WINDOW_MS = 60_000;
+const sameEvent = (r) => JSON.stringify([r.actor, r.action, r.target, r.outcome, r.meta]);
+
 export function recordAudit({ actor, action, target, outcome, meta, ts = Date.now() } = {}) {
-  const id = `audit_${ts}_${++_seq}`;
-  const record = {
-    id, ts,
+  const fields = {
     actor: actor ? { deviceId: actor.deviceId ?? null, via: actor.via ?? null } : { deviceId: null, via: null },
     action, target: target ?? null, outcome: outcome ?? null, meta: meta ?? null
   };
+  const key = sameEvent(fields);
+  for (let i = state.records.length - 1; i >= 0 && state.records[i].ts > ts - MERGE_WINDOW_MS; i--) {
+    const prev = state.records[i];
+    if (sameEvent(prev) !== key) continue;
+    prev.repeat = (prev.repeat ?? 1) + 1;
+    prev.lastTs = ts;
+    save();
+    return prev;
+  }
+  const record = { id: `audit_${ts}_${++_seq}`, ts, ...fields };
   state.records.push(record);
   if (state.records.length > CAP) state.records = state.records.slice(-CAP); // 轮转最旧
   save();

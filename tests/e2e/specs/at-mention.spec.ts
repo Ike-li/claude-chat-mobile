@@ -18,7 +18,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(chips.first()).toContainText('src/app.js');
 
     await chips.first().click();
-    await expect(input).toHaveValue('看下 src/app.js ');
+    await expect(input).toHaveValue('看下 @src/app.js '); // 验收 O67：保留 @，与终端一致
     await expect(page.locator('[data-testid="at-mention-chips"]')).toBeHidden();
 
     await expectNoBrowserErrors(page);

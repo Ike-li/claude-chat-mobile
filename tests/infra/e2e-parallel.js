@@ -45,11 +45,11 @@
 //
 // 用法: npm run test:e2e:parallel        （CCM_E2E_SHARDS=N 显式指定分片数）
 //   CCM_E2E_SHARD_INDEX=i                 只跑第 i 片（1-based），供 CI 横向分片使用
-//   node tests/infra/e2e-parallel.js --merge-durations <dir>   合并片段并校验覆盖完整
+//   node tests/infra/e2e-parallel.js --merge-durations <dir>   合并片段并校验覆盖完整，顺带报地板（见 reportFloor）
 //   exit 0 = 全部分片通过, exit 1 = 至少一个分片失败或异常退出。
 
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
 
@@ -140,7 +140,38 @@ function mergeDurations(dir) {
   const clean = Object.fromEntries(expected.map(spec => [spec, merged[spec]]));
   writeFileSync(join(dir, MERGED_NAME), `${JSON.stringify(clean, null, 2)}\n`);
   console.log(`[test-e2e-parallel] ${fragments} 份片段合并为 ${expected.length} 个 spec 的时长表，覆盖完整。`);
+  reportFloor(clean, fragments);
   return 0;
+}
+
+// 地板提醒：同一个 spec 不跨分片，最大那个文件比「总时长 ÷ 分片数」还长时，e2e 的墙钟就由它
+// 决定，再加分片也省不了，只能按主题拆它。用例是很多 PR 一点点加出来的，没有哪个作者会在
+// 越线那一刻回头重读规范，所以由这里在 CI 上点名。只出 warning、不红：同一个 spec 在不同
+// runner 上会浮动 15-20%，拿来判红必然误报；判据是相对的，也就没有会过时的秒数阈值。
+// 分片数取收到的片段个数（每片交一份），不在这里另存一份分片数。
+// 没成地板时也把数字写进 run 摘要页：快到线的时候不用翻日志就看得见。
+function reportFloor(durations, shardCount) {
+  const ranked = Object.entries(durations).sort((a, b) => b[1] - a[1]);
+  const [top, topSeconds] = ranked[0];
+  const total = ranked.reduce((sum, [, v]) => sum + v, 0);
+  const ideal = total / shardCount;
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+      '### E2E 分片时长',
+      '',
+      `总时长 ${total.toFixed(0)}s · ${shardCount} 片 · 平均每片 ${ideal.toFixed(0)}s。`
+        + '最大的单个文件超过平均每片时，墙钟由它决定（docs/testing.md §4）。',
+      '',
+      '| 最大的 spec | 时长 |',
+      '|---|---|',
+      ...ranked.slice(0, 3).map(([spec, s]) => `| \`${spec}\` | ${s.toFixed(0)}s |`),
+      '',
+    ].join('\n'));
+  }
+  if (topSeconds > ideal) {
+    console.log(`::warning title=E2E 地板::${top} 单文件 ${topSeconds.toFixed(0)}s，超过 ${shardCount} 片的`
+      + `平均每片 ${ideal.toFixed(0)}s：e2e 墙钟现在由它决定，加分片没用，按主题拆开它（docs/testing.md §4）。`);
+  }
 }
 
 if (process.argv[2] === '--merge-durations') {

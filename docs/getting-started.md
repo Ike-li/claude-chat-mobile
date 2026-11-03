@@ -49,7 +49,7 @@ claude auth status
 
     它由 CLI 按工作区目录从文件读取，不依赖启动 server 的进程环境，**macOS 桌面控制台拉起的常驻服务同样生效**。手建的 `settings.local.json` 要自己加进 `.gitignore`（CLI 只在自己首次写入时才会把它加进全局 git excludes）；`env` 块在目录被 CLI 信任后生效，终端里进过一次该目录即可。
   - **启动 shell 的 `export`**：先在**将要启动 server 的 shell** 里导出 `ANTHROPIC_*`，再 `npm start`。只有这条路才要求 headless 终端入口——macOS 桌面控制台拉起的常驻服务是干净的 GUI 血统环境，里面没有你终端里 export 的变量。两条路同时存在时，网关键以 settings 文件为准（本项目 2026-07-30 实测）。
-- 不要把 `ANTHROPIC_*` 写进本项目的配置文件（`ccm.config.json` / `.env`）：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。剥除不是静默的——启动日志会逐个打印 `[config] 已忽略配置文件里的 ANTHROPIC_…`，`doctor` 的「网关环境一致性」一项也会提示。
+- 不要把 `ANTHROPIC_*` 写进本项目的配置文件（`ccm.config.json` / `.env`）：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。剥除不是静默的——启动日志会逐个打印 `[config] 已忽略配置文件里的 ANTHROPIC_…`，`doctor` 的「ANTHROPIC_* 环境」一项也会提示。
 - worktree 会话注意：CLI 在 worktree 里读的是**主 checkout** 根目录那份 `settings.local.json`（官方文档明写），本项目会把主 checkout 独有的网关键中和掉、不让它误伤 worktree。worktree 要走网关，在 worktree 自己的 `.claude/settings.local.json` 里配，或干脆配在 `~/.claude/settings.json`。
 - `doctor` 的 MODEL_SETTINGS 一项会逐工作区读这些文件，核对 `model` 与 `ANTHROPIC_DEFAULT_*_MODEL` 档位映射是否打架。
 - 顺带说明：官方的 Remote Control 遥控在网关 / API key / 关遥测配置下整条不可用（要求 claude.ai 订阅并直连官方 API）；本项目对模型通路零假设，上述配置下全功能可用——这正是它存在的主要理由之一，见 [README「为什么需要它」](../README.md#和官方-remote-control-差在哪)。
@@ -93,7 +93,7 @@ npm run setup
 向导会：
 
 1. 生成随机 `AUTH_TOKEN` 并写入 `ccm.config.json`，文件权限设为 `0600`。
-2. 询问「手机端要打开哪个项目目录」。必须填绝对路径（或 `~/` 路径）；空回车和家目录本身都会被拒绝。首个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，**第一项就是手机端默认打开的那个**。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
+2. 询问「手机端要打开哪个项目目录」。填绝对路径（或 `~/` 路径），家目录本身会被拒绝；**直接回车跳过**——一个文件夹都不连也能用，以后在手机上新建会话时再选，或直接用「无文件夹」。填了第一个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，**第一项就是手机端默认打开的那个**。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
 3. 询问「你打算怎么从手机访问」（仅局域网 / Cloudflare / 加密隧道 VPN / 反向代理与托管隧道 / 公网直连）。回车可跳过；选了会写入 `ACCESS_PROFILE`，`doctor` 与手机端安全体检按它做针对性检查，向导结尾也会打印对应方案的文档指引。
 4. 询问是否启用手机端文件编辑器直写（唯一绕过 Agent 工具审批链的写入通道）。回车维持默认开；答 `n` 写入 `FILE_EDIT=off`。
 5. macOS 上会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
@@ -177,7 +177,7 @@ node scripts/setup.js \
   --hooks=off
 ```
 
-- `--work-dir` 必填，不会静默回落到 `$HOME`。
+- `--work-dir` 可选：不给就一个文件夹都不连（手机上新建会话时再选）；给了就必须是绝对路径、不能是家目录本身。任何情况下都不会回落到 `$HOME`；显式给空值（`--work-dir=`，多半是变量没展开）会被拒绝。
 - `--hooks` 只接受 `on` 或 `off`；`on` 会修改用户级 Claude hooks 配置。
 - `--desktop` 只接受 `on` 或 `off`，缺省 `off`；`on` 会跑 `swiftc`。非 macOS 上显式给
   `--desktop=on` 会被拒绝并说明原因，而不是静默忽略。
@@ -203,10 +203,14 @@ node scripts/setup.js \
 
 `WORKDIRS` **支持热加载**，改完即生效、无需重启。哪些项能热加载由 schema 的 `reload` 标记决定，
 `node scripts/config.js schema` 会在条目上标出（写这句时只有 `WORKDIRS`，以 schema 输出为准）。
-仓库外的 git worktree（`../repo-<分支>` 这类）必须作为独立绝对路径显式加入。**唯一例外是「托管 worktree」**：
-落在 `<已放行工作区>/.claude/worktrees/<单段目录名>` 下的那些（`EnterWorktree`、`--worktree`、agent isolation
-的默认落点）由 `resolveManagedWorktree` 派生放行，无需写进 `WORKDIRS`，其会话也会并进父仓的会话列表；
-深度固定 1、realpath 后比前缀、目录不存在即拒。跳出这个形态的仍然一律要显式加入。
+
+`WORKDIRS` 就是「已连接的文件夹」，与 Claude 桌面端给手机开的那份文件夹清单同一语义：
+
+- **子文件夹直接可用**：连上 `~/code` 之后，`~/code/app` 里开会话不必再单独列出；抽屉里有会话的子文件夹各成一节。连接互相嵌套时归最深的那个。
+- **git worktree 跟随所属仓库**：仓库里的 worktree（如 `.claude/worktrees/` 下的托管 worktree）直接可用，会话并进仓库的会话列表。仓库外的平级 worktree（`../repo-<分支>`）不跟随——和官方桌面端一样，它就是一个普通文件夹，要用就单独连接（手机上「＋ 选择文件夹」即可），它自成一节；父目录整个连着时它本来就在范围里，照样归仓库。归属从仓库一侧双向回验（worktree 的 `.git` 指针与仓库侧的回链必须互相对上），全程不执行 git。
+- **不能连接的**：家目录本身、磁盘根（配置文件里也写不进去）。`~/.claude` 与本应用的数据目录手机上加不了；连了它们的上级目录（比如装着本应用的 `~/code`）时，它们也不会顺带变成会话目录——除非你在配置文件里把它们显式写进 `WORKDIRS`。仓库 `.claude/worktrees/` 下的 worktree 不能单独添加，添加它所属的仓库即可。
+- **手机上可以直接选、也可以断开**：新会话页点文件夹胶囊，或抽屉顶部「＋ 选择文件夹」——只浏览家目录里的目录名，不能加的会置灰并写明原因。「在这里开始会话」会先把它连上再开（已经连着的不重复加），就地新建的文件夹也直接连上、在里面开。抽屉里已连接的文件夹右侧「⋯」可以断开：只是不再显示、不能在里面新开，文件和会话记录都不动，开着的会话照常跑完。添加和断开都写回配置文件里的 `WORKDIRS` 并立即生效。两种情况手机上改不了：文件夹列表来自环境变量（下面那两个旧键）；没有 `ccm.config.json`（只用旧版 `.env`）——先在电脑上运行 `npm run config:migrate` 生成（保留原有 token，见[从旧版 `.env` 升级](#从旧版-env-升级)）。
+- **无文件夹**：新会话也可以不放进任何文件夹，跑在应用自建的一次性目录里（macOS 在 `~/Library/Application Support/claude-chat-mobile/scratch-workspaces`，Linux 在 `${XDG_DATA_HOME:-~/.local/share}/claude-chat-mobile/scratch-workspaces`）。第一条消息发出时才建，删除会话时一并删除（目录里还有别的会话时保留）。
 
 旧版的 `WORK_DIRS`（逗号分隔）与 `WORK_DIRS_FILE=workdirs.json`（外部文件）仍然可用。
 优先级：shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > 配置文件内联 `WORKDIRS`。
@@ -334,7 +338,7 @@ node scripts/device.js approve <ID>
 node scripts/device.js deny <ID>
 ```
 
-跳过设备审批只有两种情况：已经通过 Cloudflare Access JWT 的连接，或**真·本机直连**——peer 是 loopback **且** Host 也是 `localhost` / `127.0.0.1` / `::1`（空 Host 不算）。
+跳过设备审批只有两种情况：已经通过 Cloudflare Access JWT 的连接，或**真·本机直连**——peer 是 loopback **且** Host 也是 `localhost` 或 `127.0.0.1`（空 Host 不算；用 `http://[::1]:端口` 打开的页面不跳过，要审批一次）。
 经 cloudflared / nginx / SSH 反代进来的请求 peer 同样是 `127.0.0.1`，但 Host 是公网域名，**仍需审批**；普通局域网和临时随机隧道也不跳过。判据见 `app/src/auth/rate-limiter.js` 的 `shouldBypassDeviceApproval`。
 
 ## 8. 完成首次验收
@@ -366,6 +370,17 @@ node scripts/device.js deny <ID>
 | iPhone / iPad（Safari 16.4+ 且已「添加到主屏幕」） | Apple `web.push.apple.com` | 直接可用，不经 Google |
 | 任意设备 + ntfy | 你自建或指定的 ntfy 服务 | 不经 Google |
 
+### 开启 Web Push
+
+Web Push 默认关闭：要配齐 VAPID 公钥、私钥和联系方式三项才启用，缺一项 server 就不提供订阅（`doctor` 的 PUSH_VAPID 一项显示「未配置」）。在项目目录下生成一次密钥并写进配置：
+
+```bash
+node -e "console.log(require('web-push').generateVAPIDKeys())"   # 打印 publicKey / privateKey
+node scripts/config.js set VAPID_PUBLIC_KEY=<publicKey> VAPID_PRIVATE_KEY=<privateKey> VAPID_SUBJECT=mailto:you@example.com
+```
+
+`VAPID_SUBJECT` 必须以 `mailto:` 或 `https:` 开头。重启 server 后，在手机的设置 → 通知页点「开启」订阅。密钥生成后就别再换：换了之后已订阅的设备都要重新订阅。
+
 ### Chromium 系在中国大陆网络下的三个依赖点
 
 Web Push 链路上有三处要连 Google，**分别发生在不同设备上**，而失败症状全都是「收不到推送」：
@@ -396,7 +411,7 @@ npm run statusline:install
 - `status` 只读，不改 `~/.claude`。
 - `install` 是显式 opt-in，会包装已有的 Claude CLI statusline 命令；未配置 statusline 时安装器会拒绝。
 - 安装后重开终端里的 Claude CLI，并重启常驻 server。
-- 卸载用 `npm run statusline:uninstall`，安装器会按 manifest 恢复原命令并拒绝覆盖发生漂移的配置。
+- 卸载用 `npm run statusline:uninstall`，安装器会按 manifest 恢复原命令并拒绝覆盖发生漂移的配置；`~/.claude/ccm/statusline-v1`（含快照）一并清掉，`~/.claude/ccm` 空了也会移除。
 
 ## 可选：CLI hooks bridge
 
@@ -414,6 +429,7 @@ npm run hooks:uninstall
 - 安装后必须新开终端里的 Claude CLI 会话，旧进程不会重新加载 hooks。
 - server 不在线时 hook 只落盘并静默退出，不阻断 CLI。
 - 配置里设 `CLI_HOOKS_BRIDGE: false` 可让 server 暂停消费，不必卸载全局配置。
+- `uninstall` 按 manifest 移除自己的 hook 条目，并清掉 `~/.claude/ccm/hooks-v1`（投递箱与回执）；`~/.claude/ccm` 空了也会移除。装、卸都不必重启 server。
 
 手机端也可在“设置 → 🖥 宿主机 → 终端会话推送”中显式安装或卸载（与该页里的「📊 服务状态」按钮平级——
 桥的装卸控件**不在**服务状态面板内部）。
@@ -514,13 +530,13 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 1. 检查 node --version ≥ 20，which claude 能找到命令，并用 claude auth status 确认已登录。
    任一不满足就停下来告诉我，不要自行安装或登录 claude。
 2. 运行 npm ci --omit=dev。
-3. 先跟我确认工作区的绝对路径，以及是否安装 CLI hooks bridge。
-   不要把整个家目录当工作区；hooks=on 会修改 ~/.claude/settings.json。
+3. 先跟我确认要不要先连一个项目文件夹（要的话确认它的绝对路径；不连也行，以后在手机上选），
+   以及是否安装 CLI hooks bridge。不要把整个家目录当工作区；hooks=on 会修改 ~/.claude/settings.json。
 4. 你的 shell 没有 TTY，不要运行交互向导。先 unset AUTH_TOKEN WORK_DIR WORK_DIRS PORT CCM_DATA_DIR
-   WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL，
+   WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL，
    以免当前会话里已有的值压过刚写入的配置。然后：
    node scripts/setup.js --yes --work-dir=<确认后的绝对路径> --hooks=<on 或 off>
-   如果配置文件已存在就停下来，不要自行加 --force。
+   （不连文件夹就去掉 --work-dir 这一项。）如果配置文件已存在就停下来，不要自行加 --force。
 5. 运行 node scripts/doctor.js；只在输出明确要求且安全时使用 --fix。
 6. 确认 3000 没被桌面端或另一个 npm start 占用后，用 `npm start` 启动（headless）。
    用鉴权后的 /health JSON 验证，不要只看进程是否存在。
@@ -559,6 +575,7 @@ npm run setup -- --help
 | `npm run config:check` | 校验现有配置 |
 | `npm run config:migrate` | 旧版 `.env` → `ccm.config.json` |
 | `node scripts/doctor.js` | 启动自检。`--fix` 把配置文件权限收紧到 0600，`--env=<文件>` 诊断指定的那一份 |
+| `node scripts/perf-report.js` | 汇总手机上报到 server 日志的性能记录（启动、打开会话、切回前台、掉帧、点击响应），按设备 / 网络 / 缓存等维度列 n·p50·p90·max；`--since 7d` 只看最近。只读 |
 
 ### 设备与连接
 
@@ -658,15 +675,59 @@ npm run statusline:install
 npm run hooks:install
 ```
 
+### 从 v1.13.0 升级：已连接的文件夹
+
+v1.13.0 及更早的版本里，`WORKDIRS` 是一份精确白名单：会话目录必须恰好是其中一项（外加它下面
+`.claude/worktrees/` 里的托管 worktree）。新版把它换成了「已连接的文件夹」，语义见
+[第 3 步](#3-生成本地配置)末尾那段。**数据不用迁移，原有的 `WORKDIRS` 照常生效**；变的是同一份清单
+放行得更多，以及几处从「悄悄纠正」改成了「直接拒绝」。
+
+**范围变宽了，升级前先过一遍清单。** 子文件夹现在直接可用，连接互相嵌套时归最深的那一项。清单里连着
+`~/code` 这种大父目录的，升级后整棵子树都能开会话，子树里以前在终端开过的会话也会出现在抽屉里，有会话的
+子文件夹各占一节。只想开放其中几个项目，就把父目录换成那几个。`~/.claude` 与本应用的数据目录仍是禁区，
+连着它们的上级也不会被顺带放行。
+
+**hooks 桥推得更多。** 装了 CLI hooks bridge 的，子文件夹里终端会话的「需要你」和回合完成现在也会推到
+手机上；旧版只推清单里那几个目录本身。
+
+**手机上添加文件夹，要求清单写在 `ccm.config.json` 的 `WORKDIRS` 里**，否则点了只会提示改不了。下面两件事
+都只在启动时生效，做完再重启 server：
+
+- 还在用 `.env`（包括 `WORK_DIRS_FILE` 指向的 `workdirs.json`）的，跑 `npm run config:migrate`，它会把
+  列表内联进去并保留原有的 `AUTH_TOKEN`（见[从旧版 `.env` 升级](#从旧版-env-升级)）。`ccm.config.json`
+  里自己写着 `WORK_DIRS_FILE` 的，直接编辑文件：把那份列表填进 `WORKDIRS`，删掉 `WORK_DIRS_FILE`。
+- shell 里 export 了 `WORK_DIRS` 或 `WORK_DIRS_FILE` 的，把它们去掉。环境变量压过配置文件，留着它们，
+  手机上就只能看、不能加。
+
+**平级 worktree 照旧要显式连接。** 仓库外的 `../repo-<分支>` 和旧版一样不随仓库放行：清单里列着的升级后
+照常可用、自成一节，没列的也不会自己冒出来。只有一种情况会多一条提示：某个 worktree 条目已经落在别的连接
+范围里（比如父目录整个连着），它仍然单独成一节，`node scripts/doctor.js` 会指出这条可以删，删掉之后它的
+会话并回仓库那一节。
+
+**越界请求改成直接拒绝。** 旧版遇到不在清单里的目录，会悄悄换成当前正在看的那个目录；新版直接拒绝。
+最容易碰到的是离线队列：排队等发的消息要在某个文件夹里开会话，而那个文件夹在它发出去之前被移出了清单，
+现在会提示「这个目录不在已连接的文件夹里，已停止重试」，不会再投进别的文件夹，需要的话手动重发。
+
+**升级前没发出去的离线消息不会自动重发。** 它们记着旧版的会话句柄，升级重启后认不出，一律判「目标会话已关闭」，
+不投进任何会话。刷新过的页面会把原文写在提示里，复制出来重发即可；升级时一直开着、没刷新的旧页面只在那条消息的
+气泡上提示，页面一跳到别的会话就看不到了。所以升级前先让手机把离线消息发完，或者升级后刷新一次手机上的页面。
+
+**会话中途走出范围，手机不跟。** 手机上开的会话运行中进入已连接的文件夹以外的目录（最常见的是
+`EnterWorktree` 进了一个没连接的平级 worktree），手机这边停在原处，会话里会出现一条提示。这时切走就找不回
+这个会话了；要接着用，先把那个文件夹连上。
+
+**最后刷新一次手机页面。** 重启 server 后，手机上已经开着的页面跑的还是旧前端，刷新一次才有文件夹选择器
+（新会话页的文件夹胶囊、抽屉顶部的「＋ 选择文件夹」）。从主屏幕图标打开的，彻底关掉再重新打开。
+
 ### 怎么知道有没有新版本
 
 产品不主动检查上游版本。自己看：
 
 ```bash
-git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+git ls-remote --tags --refs --sort=-v:refname https://github.com/Ike-li/claude-chat-mobile.git | head -1
 ```
 
-这条不要求本地是 git 仓库（它直接问远端），归档装的也能跑。本地版本：
+这条不要求本地是 git 仓库（它直接问远端），归档装的也能跑。`--sort=-v:refname` 不能省：远端按字典序列 tag，不排序取最后一行拿到的是 `v1.9.1`，而 `v1.10.0` 之后的版本都排在它前面。本地版本：
 
 ```bash
 node -p "require('./package.json').version"
@@ -695,12 +756,12 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 |---|---|
 | server 起不来，日志说没有 `AUTH_TOKEN` | 令牌是启动前提，不再降级绑本机。跑 `npm run setup` 生成一个后重启 |
 | 启动日志只列了本机地址，没有手机地址 | `BIND_MODE=loopback` 只绑 `127.0.0.1`，那些局域网地址上没人在听。要手机直连改回默认或 `lan` |
-| agent 运行 setup 后什么都没写 | 非 TTY 环境用了交互模式；现在会直接拒绝。改用 `--yes --work-dir=... --hooks=...` |
+| agent 运行 setup 后什么都没写 | 非 TTY 环境用了交互模式；现在会直接拒绝。改用 `--yes --hooks=...`（要连文件夹再加 `--work-dir=...`） |
 | doctor / server 读的不是刚生成的配置 | 当前 shell 里已有 `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` 等会压过配置文件；先 `unset` 这些变量再跑 |
 | `EADDRINUSE :3000` | 桌面端或另一个 npm start 占着端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
 | 手机已进主壳，发消息却出现「Not logged in · Please run /login」 | 这是 **Claude CLI 未登录**，不是 CCM 令牌/设备门坏了。到主机终端跑 `claude auth status`；未登录则在 `claude` 里 `/login`，完成后再从手机重试。**用第三方网关则不会出现这条**——它不走 Anthropic 登录，配置没生效时报的是网关自己的错，见下面「第三方网关配置不生效」。前置条件见上文 §1 |
-| 输错一次 token 后，紧接着用正确 token 也被拒（HTTP 401） | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。**这一档回的是 401 `unauthorized`、不带 `Retry-After`**（措辞刻意不说「尝试过多」——你只错了一次）。**等几秒再试**，正确 token 会自动恢复；不停重试反而一直落在锁里。只有连续 8 次失败触发的 15 分钟长锁才回 `{"status":"rate_limited"}` / HTTP 429 |
+| 输错一次 token 后，紧接着用正确 token 也被拒（HTTP 429 `cooldown`） | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。锁里的请求不校验令牌，**回 429 `{"status":"cooldown"}` 并带 `Retry-After`**，和「令牌不对」（401）分得开，也不说「尝试过多」——你只错了一次。网页端会显示「N 秒后自动重试」并到点自己重连；脚本**等 `Retry-After` 秒后再试**即可，不停重试反而一直落在锁里。只有连续 8 次失败触发的 15 分钟长锁才回 `{"status":"rate_limited"}` |
 | 自己没输错，却被限速挡住 | 限速按来源分桶，同桶内的失败会累加。**IPv6 客户端按 /64 归桶**，所以同网段另一台设备连错也会连累你；反代终止在 loopback 时所有公网客户端更是共用一个桶（见[部署指南](deployment.md#换掉入口后ccm-侧的四处连带变化)）。等过锁定窗口，或重启 server 立即清零 |
 | 第三方网关配置不生效 | `ANTHROPIC_*` 要放在 CLI 自己的通道里：工作区 `.claude/settings.local.json` 或 `~/.claude/settings.json` 的 `env` 块，或启动 server 的 shell；写进 `ccm.config.json` 会被剥除。桌面控制台入口只认前一种 |
 | CLI 会话状态或通知缺失 | 分别检查 statusline bridge 与 hooks bridge；两者用途不同 |

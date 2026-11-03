@@ -5,7 +5,7 @@
 // 内容一变就漂（上线时四个词已有两个和面板里的组标题对不上）。改成活数据后，摘要由本函数从当前
 // 状态算出，不可能漂——但也因此，"算错"会直接变成"面板上写着假话"，故这里逐行钉住。
 //
-// 覆盖：六行的 id 与顺序、通知行随订阅态变文案、设备行的计数与待批红点、主机行的运行时长/版本/两个桥、
+// 覆盖：七行的 id 与顺序、通知行随订阅态变文案、设备行的计数与待批红点、主机行的运行时长/版本/两个桥、
 //       三条静态行不受状态影响，以及★每一项都指得到页面里一个真实元素。
 // 不覆盖：DOM 渲染与页面切换（归 tests/e2e/specs/settings-scope-split.spec.ts）。
 import test from 'node:test';
@@ -20,7 +20,7 @@ test.beforeEach(() => setLang('zh'));
 const INDEX_HTML = readFileSync(
   fileURLToPath(new URL('../../app/public/index.html', import.meta.url)), 'utf8');
 
-// 六行全部喂满：条件项（两个桥、待批台数）缺状态时会从摘要里消失，而消失的项测不到锚点。
+// 七行全部喂满：条件项（两个桥、待批台数）缺状态时会从摘要里消失，而消失的项测不到锚点。
 const FULL_STATE = Object.freeze({
   push: { subscribed: true, preview: false },
   alerts: { sound: true, vibrate: true },
@@ -35,13 +35,13 @@ const FULL_STATE = Object.freeze({
   now: 1_700_000_000_000,
 });
 
-// ---- 骨架：六行、顺序固定 ----
+// ---- 骨架：七行、顺序固定 ----
 
-test('返回六行，id 与顺序固定（L1 目录的骨架契约）', () => {
+test('返回七行，id 与顺序固定（L1 目录的骨架契约）', () => {
   const rows = summarizeGeneralNav();
-  assert.equal(rows.length, 6);
+  assert.equal(rows.length, 7);
   assert.deepEqual(rows.map(r => r.id), [
-    'notify', 'devices', 'host', 'behavior', 'diag', 'help',
+    'notify', 'devices', 'host', 'behavior', 'diag', 'help', 'about',
   ]);
   // 导出的常量与实际返回保持一致——接线层按 id 找 L2 页，两处分叉会让某一页永远打不开
   assert.deepEqual(GENERAL_NAV_IDS, rows.map(r => r.id));
@@ -253,11 +253,19 @@ test('主机行：桥被 env 停用时读成关', () => {
 
 // ---- 静态三行：不受状态影响 ----
 
-test('behavior 行随语言偏好变，其余静态行不受任何状态影响', () => {
+test('behavior 行随语言与主题偏好变，其余静态行不受任何状态影响', () => {
   const zh = summarizeGeneralNav({ lang: 'zh' })[3];
   const en = summarizeGeneralNav({ lang: 'en' })[3];
   assert.match(zh.summary, /中文/);
   assert.match(en.summary, /English/);
+
+  const light = summarizeGeneralNav({ theme: 'light' })[3];
+  const dark = summarizeGeneralNav({ theme: 'dark' })[3];
+  const system = summarizeGeneralNav({ theme: 'system' })[3];
+  assert.match(light.summary, /浅色/);
+  assert.match(dark.summary, /深色/);
+  assert.match(system.summary, /跟随系统/);
+  assert.ok(light.items.some(i => i.el === 'prefThemeGroup'));
 
   // diag / help 两行在任何状态下都该一字不差——它们是纯目录项
   const busy = summarizeGeneralNav({
@@ -269,13 +277,34 @@ test('behavior 行随语言偏好变，其余静态行不受任何状态影响',
   assert.equal(busy[5].summary, idle[5].summary);
 });
 
+// ---- 关于（#303）----
+
+test('关于行：报出 server 版本（与「宿主机」行同一份 versions），再列许可证、第三方组件、检查更新', () => {
+  const row = summarizeGeneralNav({ service: { versions: { server: '1.13.0' } } })[6];
+  assert.equal(row.id, 'about');
+  assert.match(row.summary, /^v1\.13\.0 · /);
+  assert.match(row.summary, /许可证/);
+  assert.match(row.summary, /第三方组件/);
+  assert.match(row.summary, /检查更新/);
+  assert.equal(row.dot, false, '有没有新版要点进去查，L1 不预判、不亮红点');
+});
+
+test('关于行：版本还没回来或是缺省字面量 unknown 时，不写版本号', () => {
+  for (const service of [undefined, { versions: { server: 'unknown' } }]) {
+    const row = summarizeGeneralNav({ service })[6];
+    assert.doesNotMatch(row.summary, /unknown|\bv\s/);
+    assert.match(row.summary, /^许可证/);
+  }
+});
+
 // ---- MCP 服务器（「宿主机」页）----
 //
 // 数据早就随 init 事件到了浏览器（agent.js 的 emit('init', {mcpServers})，SDK 契约是
 // `{name, status}[]`），只是从来没渲染过。这一层把它译成「几个、哪个坏了」。
 //
-// ★ 失败方向：status 的取值集合 SDK 未声明。不认识的值必须**当成有问题**，不能当成正常——
-//   把一个连不上的服务器显示成绿的，比显示成未知更糟：用户会去别处找原因。
+// ★ 失败方向：不认识的 status 必须**当成有问题**，不能当成正常——把一个连不上的服务器显示成绿的，
+//   比显示成未知更糟：用户会去别处找原因。init 字段只声明了 `status: string`；mcpServerStatus() 的类型
+//   声明了 connected / failed / needs-auth / pending / disabled（#457），其中 pending、disabled 是正常态，不算故障。
 
 test('MCP：没有服务器时返回 null，整段不该出现（不给空计数占位）', () => {
   assert.equal(formatMcpServers([]), null);
@@ -291,7 +320,7 @@ test('MCP：全部连上时报总数，每项标记为正常', () => {
   assert.equal(view.total, 2);
   assert.equal(view.failed, 0);
   assert.deepEqual(view.items.map(i => i.name), ['filesystem', 'github']);
-  assert.ok(view.items.every(i => i.ok));
+  assert.ok(view.items.every(i => i.tone === 'ok'));
 });
 
 test('MCP：有连接失败的，failed 计数与该项的 ok 都要反映出来', () => {
@@ -301,7 +330,7 @@ test('MCP：有连接失败的，failed 计数与该项的 ok 都要反映出来
   ]);
   assert.equal(view.total, 2);
   assert.equal(view.failed, 1);
-  assert.equal(view.items.find(i => i.name === 'postgres').ok, false);
+  assert.equal(view.items.find(i => i.name === 'postgres').tone, 'bad');
   // 原始 status 要留给用户看——「failed」和「needs-auth」是两种完全不同的处置
   assert.equal(view.items.find(i => i.name === 'postgres').status, 'failed');
 });
@@ -315,7 +344,38 @@ test('MCP：不认识的 status 一律不当作正常（未知值不得被渲染
     { name: 'c', status: '' },
   ]);
   assert.equal(view.failed, 3);
-  assert.ok(view.items.every(i => i.ok === false));
+  assert.ok(view.items.every(i => i.tone === 'bad'));
+});
+
+// #457：刚启动时 MCP 多半还在连（pending），用户自己停用的是 disabled——两者都不是故障，不能亮红点
+test('MCP：连接中 / 已停用是灰档，不计入故障；各自带上给人看的说法', () => {
+  const view = formatMcpServers([
+    { name: 'linear', status: 'pending' },
+    { name: 'notion', status: 'disabled' },
+    { name: 'postgres', status: 'failed' },
+  ]);
+  assert.equal(view.failed, 1);
+  assert.deepEqual(view.items.map(i => [i.name, i.tone, i.label]), [
+    ['linear', 'muted', '连接中'],
+    ['notion', 'muted', '已停用'],
+    ['postgres', 'bad', '连接失败'],
+  ]);
+});
+
+// 处置跟着状态走：失败的才给「重连」；已停用的开关是「启用」；要授权的只提示去电脑上授权（OAuth 走浏览器）
+test('MCP：每项带出可做的处置与失败原因', () => {
+  const view = formatMcpServers([
+    { name: 'github', status: 'connected' },
+    { name: 'postgres', status: 'failed', error: 'spawn ENOENT' },
+    { name: 'notion', status: 'disabled' },
+    { name: 'slack', status: 'needs-auth' },
+  ]);
+  const by = Object.fromEntries(view.items.map(i => [i.name, i]));
+  assert.deepEqual([by.github.reconnect, by.postgres.reconnect, by.notion.reconnect, by.slack.reconnect], [false, true, false, false]);
+  assert.deepEqual([by.github.enabled, by.postgres.enabled, by.notion.enabled, by.slack.enabled], [true, true, false, true]);
+  assert.equal(by.postgres.error, 'spawn ENOENT');
+  assert.equal(by.slack.needsAuth, true);
+  assert.equal(by.github.needsAuth, false);
 });
 
 test('MCP：条目缺 name 时跳过而不是渲染成空行', () => {

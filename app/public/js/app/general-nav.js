@@ -1,4 +1,4 @@
-// app/general-nav.js —— 通用设置面板的两级导航（L1 目录 ↔ 6 个 L2 页）。
+// app/general-nav.js —— 通用设置面板的两级导航（L1 目录 ↔ 7 个 L2 页）。
 //
 // 【为什么要两级】
 // 平铺到九组之后，面板必须靠一排 sticky 分段 chip 才能导航——那是「一个容器装不下了」的症状，
@@ -64,6 +64,8 @@ export function createGeneralNav({
     // 切层后滚回顶部：L2 页可能被滚到过底部，返回时若不复位，L1 会停在一片空白上。
     const body = $('generalSheetBody');
     if (body) body.scrollTop = 0;
+    // 回 L1 也算离开上一页：让 onEnterPage 做「离开页」清理（收码、清推送回执等）
+    onEnterPage(null);
   }
 
   /**
@@ -91,7 +93,7 @@ export function createGeneralNav({
     return true;
   }
 
-  /** 重画 L1 六行。摘要是活数据，任何状态变化后都可以再调一次。 */
+  /** 重画 L1 七行。摘要是活数据，任何状态变化后都可以再调一次。 */
   function render() {
     const host = $('generalNavRows');
     if (!host) return;

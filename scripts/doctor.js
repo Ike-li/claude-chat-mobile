@@ -39,6 +39,7 @@ import { resolveWorkdirSource as loadWorkdirSource, resolveEnvPrimaryWorkdir } f
 import { CONFIG_FILE_NAME, readConfigFileRaw, readConfigFileValues } from '../app/src/ops/config-file.js';
 import { loadRuntimeEnvironment } from '../app/src/ops/config.js';
 import { resolveBindPlan } from '../app/src/shared/bind-host.js';
+import { scratchRoot } from '../app/src/shared/scratch-root.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency, isDistributionInstall } from './doc-consistency.js';
 import {
   authTokenDiagnostic,
@@ -63,9 +64,11 @@ import {
   uploadsFootprintDiagnostic,
   tailscaleDiagnostic,
   workdirBreadthDiagnostic,
+  workdirPresenceDiagnostic,
+  connectedFoldersDiagnostic,
 } from '../app/src/ops/doctor-checks.js';
 import { ALL_CONFIG_KEYS } from '../app/src/ops/config-file.js';
-import { CONFIG_FILE_NAMES, probeClaudeBin, probeTailscale, probeListeningProcesses } from '../app/src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude / tailscale 探测
+import { CONFIG_FILE_NAMES, probeClaudeBin, probeTailscale, probeListeningProcesses, probeConnectedFolders } from '../app/src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude / tailscale 探测
 import { collectSyntaxFiles } from './collect-source-files.js';
 import { detectLang } from './setup.js';
 import { DEFAULT_PORT } from '../app/src/ops/env-schema.js';
@@ -85,9 +88,11 @@ const bi = (zh, en) => (LANG === 'en' ? en : zh);
 function ok(name, detail) { results.push({ name, status: 'ok', detail }); }
 function warn(name, detail) { results.push({ name, status: 'warn', detail }); }
 function fail(name, detail) { results.push({ name, status: 'fail', detail }); }
+// 提示：不是问题，只是告诉你还有这个选项（如没装的可选桥）。不计入警告。
+function info(name, detail) { results.push({ name, status: 'info', detail }); }
 
 // 彩色输出
-const colors = { ok: '\x1b[32m✓\x1b[0m', warn: '\x1b[33m⚠\x1b[0m', fail: '\x1b[31m✗\x1b[0m' };
+const colors = { ok: '\x1b[32m✓\x1b[0m', info: '\x1b[36mℹ\x1b[0m', warn: '\x1b[33m⚠\x1b[0m', fail: '\x1b[31m✗\x1b[0m' };
 
 function print() {
   console.log(bi('\n=== 配置诊断 ===\n', '\n=== Configuration diagnostics ===\n'));
@@ -97,7 +102,9 @@ function print() {
   }
   const failed = results.filter(r => r.status === 'fail').length;
   const warned = results.filter(r => r.status === 'warn').length;
-  console.log(bi(`=== 结果: ${results.length - failed - warned} 通过, ${warned} 警告, ${failed} 失败 ===\n`, `=== Result: ${results.length - failed - warned} passed, ${warned} warning(s), ${failed} failed ===\n`));
+  const noted = results.filter(r => r.status === 'info').length;
+  const passed = results.length - failed - warned - noted;
+  console.log(bi(`=== 结果: ${passed} 通过, ${noted} 提示, ${warned} 警告, ${failed} 失败 ===\n`, `=== Result: ${passed} passed, ${noted} note(s), ${warned} warning(s), ${failed} failed ===\n`));
   process.exit(failed > 0 ? 1 : 0);
 }
 
@@ -145,9 +152,9 @@ function checkWorkDir() {
   if (!result && from === 'WORK_DIRS_FILE') warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath})`);
   for (const w of srcWarnings || []) warn('WORK_DIR', w);
   if (result) {
-    // SCOPE-03：一个可用工作区都没有 = server 会拒绝启动，doctor 必须先把它报成 fail 而不是
-    // 沉默 —— 这条正是 doctor 存在的意义（启动前就说清为什么起不来）。
-    if (!result.entries.length) fail(from, '没有配置任何工作区：server 会拒绝启动');
+    // SCOPE-03：一个工作区都没配是正常状态（2026-10-15 起 server 照常启动、只剩「无文件夹」；此前这里报 fail
+    // 「server 会拒绝启动」）。配置了却找不到的由下面 checkOneDir 逐条 warn，路径在本机终端里可以点名。
+    if (!result.entries.length) ok(from, workdirPresenceDiagnostic({ count: 0, lang: LANG }).detail);
     // 标签用**实际来源键名**（from：WORKDIRS / WORK_DIRS_FILE / WORK_DIRS），不再硬编码成旧的
     // WORK_DIRS：新用户配的是 ccm.config.json 的 WORKDIRS，报成 WORK_DIRS 会让他去找一个
     // 自己配置里根本不存在的键（2026-08-19 新装实测）。
@@ -159,6 +166,9 @@ function checkWorkDir() {
         `过宽：${dir}（家目录本身，或 /、/Users、/home 这类根）——范围内的文件对远程入口全部可读，FILE_EDIT 缺省开着时还可直写。请改成具体的项目目录`,
         `Overly broad: ${dir} (the home directory itself, or a root such as /, /Users or /home) — everything in scope is readable by the remote entrypoint, and writable while FILE_EDIT is on (the default). Narrow it to a specific project directory`));
     }
+    // 「已连接的文件夹」布局：多余的 worktree 条目、无文件夹目录落在 git 仓库里或不可写（只报不拦）。
+    const layout = probeConnectedFolders({ dirs: result.entries.map(e => e.path), scratchRoot: scratchRoot() });
+    for (const d of connectedFoldersDiagnostic({ ...layout, source: from, lang: LANG })) ({ ok, warn, fail })[d.status](d.name, d.detail);
   }
 }
 
@@ -364,7 +374,7 @@ function checkStatuslineBridge() {
     return;
   }
   const result = statuslineBridgeDiagnostic({ webOff, bridgeOff, installState, lang: LANG });
-  (result.status === 'ok' ? ok : warn)(result.name, result.detail);
+  ({ ok, info, warn })[result.status](result.name, result.detail);
 }
 
 // D12: CLI hooks 桥安装态。与 D6 同款：execFileSync 调只读 status 子命令，只消费 state。
@@ -394,7 +404,7 @@ function checkHooksBridge() {
     return;
   }
   const result = hooksBridgeDiagnostic({ bridgeOff, installState, lang: LANG });
-  (result.status === 'ok' ? ok : warn)(result.name, result.detail);
+  ({ ok, info, warn })[result.status](result.name, result.detail);
 }
 
 // D7: 网关环境一致性（配置文件里若有 ANTHROPIC_* 提示已被剥除）

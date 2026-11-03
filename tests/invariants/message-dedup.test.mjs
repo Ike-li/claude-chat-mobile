@@ -176,17 +176,18 @@ test.describe('MSG-01 & SRV-001: 生产代码关键顺序与并发懒开单飞�
   test('SRV-001: FRESH 路径（resumeId 空）并发懒开会话必须使用 fresh:cwd 单飞键去重', () => {
     const src = readFileSync(new URL('../../app/src/server/app.js', import.meta.url), 'utf8');
 
-    // 检查 dedupedResume 的键生成逻辑包含 resumeId || `fresh:${cwd}`
+    // 检查 dedupedResume 的键生成逻辑：空 resumeId 走 fresh:${cwd} 独立键；新会话页（O107）带 composeId 时
+    // 按页面再分一层 fresh:${cwd}:${composeId}——同一页并发仍单飞，两个新会话页是两个会话
     assert.match(
       src,
-      /const\s+key\s*=\s*resumeId\s*\|\|\s*`fresh:\$\{cwd\}`/,
-      'SRV-001: dedupedResume 必须对空 resumeId 采用 fresh:${cwd} 独立键',
+      /const\s+key\s*=\s*resumeId\s*\|\|\s*\(composeId\s*\?\s*`fresh:\$\{cwd\}:\$\{composeId\}`\s*:\s*`fresh:\$\{cwd\}`\)/,
+      'SRV-001: dedupedResume 必须对空 resumeId 采用 fresh:${cwd} 独立键（新会话页按 composeId 再分）',
     );
 
-    // 检查 user:message 中的懒开分支调用 dedupedResume(cwd, saved?.id ?? null)
+    // 检查 user:message 中的懒开分支调用 dedupedResume(cwd, saved?.id ?? null, …)
     assert.match(
       src,
-      /dedupedResume\(cwd,\s*saved\?\.id\s*\?\?\s*null\)/,
+      /dedupedResume\(cwd,\s*saved\?\.id\s*\?\?\s*null[,)]/,
       'SRV-001: user:message 懒开会话必须通过 dedupedResume 统一收敛 FRESH 与 RESUME',
     );
   });

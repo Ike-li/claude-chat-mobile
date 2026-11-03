@@ -3,6 +3,7 @@
 // 两个导出分工：createGitChangesPanel = 「改动」tab 的数据与渲染；createWorkspacePanel = 外壳
 // （#workspaceModal 的开合 + 文件/改动 tab 切换），后者同时驱动 file-browser.js 那半边。
 import { t, tk } from '../i18n.js';
+import { gitErrorText } from '../logic/format.js';
 import { showPanelMessage } from './panel-message.js';
 
 // title 用 tk() 标记中文原文、到渲染时才 t()：模块顶层常量在 import 阶段就求值，那时 app.js 还没跑到
@@ -61,7 +62,9 @@ export function createGitChangesPanel(context, {
     const loading = createElement('<div class="text-ink-faint text-[11px] px-1 py-1"></div>');
     loading.textContent = t('加载中…');
     preview.appendChild(loading);
+    const token = loadToken;
     context.socket.emit('browse:read', { cwd, relPath, offset: 0 }, response => {
+      if (token !== loadToken) return;
       preview.replaceChildren();
       if (!response?.ok) {
         const m = createElement('<div class="text-danger text-[11px]"></div>');
@@ -89,11 +92,13 @@ export function createGitChangesPanel(context, {
     const loading = createElement('<div class="text-ink-faint text-[11px] px-1 py-1"></div>');
     loading.textContent = t('加载中…');
     preview.appendChild(loading);
+    const token = loadToken;
     context.socket.emit('git:diff', { cwd, path: relPath, side }, response => {
+      if (token !== loadToken) return;
       preview.replaceChildren();
       if (!response?.ok) {
         const m = createElement(`<div class="text-[11px] ${response?.code === 'scope' || response?.code === 'bad_path' ? 'text-danger' : 'text-ink-faint'}"></div>`);
-        m.textContent = response?.error || t('diff 不可用');
+        m.textContent = gitErrorText(response, t('diff 不可用'));
         preview.appendChild(m);
         return;
       }
@@ -121,6 +126,10 @@ export function createGitChangesPanel(context, {
   function appendRow(entry, side) {
     const row = createElement('<div class="border-b border-line-soft" data-testid="git-change-row"></div>');
     const btn = createElement('<button type="button" class="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-sunk/30 active:opacity-70"></button>');
+    btn.setAttribute('aria-expanded', 'false');
+    const chevron = createElement('<span class="text-[10px] text-ink-faint shrink-0" aria-hidden="true"></span>');
+    chevron.textContent = '▸';
+    btn.appendChild(chevron);
     const xy = createElement('<span class="shrink-0 w-7 text-[10px] font-mono text-ink-faint tabular-nums"></span>');
     xy.textContent = side ? (entry.xy || '') : '??';
     btn.appendChild(xy);
@@ -133,6 +142,9 @@ export function createGitChangesPanel(context, {
     btn.onclick = () => {
       haptic('tap');
       preview.classList.toggle('hidden');
+      const open = !preview.classList.contains('hidden');
+      btn.setAttribute('aria-expanded', String(open));
+      chevron.textContent = open ? '▾' : '▸';
       if (loaded) return;
       loaded = true;
       if (!side) loadUntrackedPreview(preview, entry.path);
@@ -180,7 +192,7 @@ export function createGitChangesPanel(context, {
       if (token !== loadToken) return;
       if (!response?.ok) {
         const cls = response?.code === 'not_git' ? 'text-ink-faint' : 'text-danger';
-        showMessage(response?.error || t('无法加载 git 状态'), cls);
+        showMessage(gitErrorText(response, t('无法加载 git 状态')), cls);
         setBranch(response?.code === 'not_git' ? t('非 git 仓库') : '');
         return;
       }

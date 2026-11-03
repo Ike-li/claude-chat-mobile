@@ -156,6 +156,9 @@ export function smokeEnv({ root, port }, baseEnv = process.env) {
     CCM_SMOKE_URL: `http://127.0.0.1:${port}`,
     // 同集成测 _spawn-server：禁桌面日志窗，防 smoke 起服堆 Terminal.app
     LOG_TERMINAL: 'off',
+    // 两个桥的投递箱在真 HOME 下、读完即删，开着就和同机生产 server 抢事件；冒烟场景都不靠桥
+    CLI_HOOKS_BRIDGE: 'off',
+    CLI_STATUSLINE_BRIDGE: 'off',
   };
 }
 

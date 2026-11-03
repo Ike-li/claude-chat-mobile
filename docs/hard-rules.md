@@ -22,8 +22,8 @@
 | 单用户 = 主机所有者 | 无多用户/租户隔离；鉴权通过 ≈ 本机启动 claude 的权限 | [README 安全边界](../README.md#安全边界) |
 | 不是远程桌面 / 共享 TTY / 多租户托管 | 不附着终端 stdin/stdout | [architecture.md](architecture.md) |
 | 尽量不重复造轮子 | 功能先看 Claude Code CLI / Agent SDK | `CLAUDE.md` |
-| **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口。维护者本机的 Docker playground（`docker-compose.playground.yml`）是测试基础设施，与 `test:docker` 并列，**不是**产品入口，用户装机路径不走它 | 2026-08-15 维护者确认；2026-08-17 维护者确认 desktop 单独入口；[deployment.md](deployment.md) |
-| **可选功能由用户开关，不猜** | 桌面控制台、两个 bridge、`LOG_TERMINAL`、推送……默认全关，装机向导逐项问。非交互模式下两类失败模式分开处理：**会动全局的**（`--hooks` 写 `~/.claude`、`--desktop` 跑 swiftc）缺省即 `off`；**静默回落会扩大攻击面的**（`--work-dir` 回落 `$HOME` = 整个家目录挂给远程入口）直接拒绝。取值非法（`--hooks=maybe`）一律拒绝，不猜意图 | `scripts/setup.js` `resolveSetupPlan`；`tests/unit/setup.test.mjs` |
+| **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口。维护者本机的 Docker playground（`tests/infra/docker-compose.playground.yml`）是测试基础设施，与 `test:docker` 并列，**不是**产品入口，用户装机路径不走它 | 2026-08-15 维护者确认；2026-08-17 维护者确认 desktop 单独入口；[deployment.md](deployment.md) |
+| **可选功能由用户开关，不猜** | statusline bridge、`LOG_TERMINAL`、推送……默认关，要用户自己在配置里开；会动全局的两项由装机向导问：桌面控制台默认否，CLI hooks bridge 交互默认是（终端会话唯有它能推到手机，但写 `~/.claude` 所以必须问）。非交互模式下两类失败模式分开处理：**会动全局的**（`--hooks` 写 `~/.claude`、`--desktop` 跑 swiftc）缺省即 `off`；**静默回落会扩大攻击面的**一律不回落：`--work-dir` 不给就一个文件夹都不连（只剩「无文件夹」），绝不补成 `$HOME`（= 整个家目录挂给远程入口），显式给空值直接拒绝。取值非法（`--hooks=maybe`）一律拒绝，不猜意图 | `scripts/setup.js` `resolveSetupPlan`；`tests/unit/setup.test.mjs` |
 | **对模型通路零假设** | 不关心 claude CLI 接的是哪个上游——官方订阅 / API key / Bedrock / Vertex / 第三方网关，一视同仁。**禁止任何 `ANTHROPIC_BASE_URL` 匹配、厂商白名单或上游探测**；唯一允许据以调整行为的信号是 CLI 自报的能力位（如 `rate_limits_available`），因为那是 CLI 说的、不是我们猜的。`ANTHROPIC_*` 启动期剥除是为「配置文件不许压过 shell 的 provider 凭据」（终端等价），不是限制上游。官方 Remote Control 在网关 / API key 配置下整条不可用，而本项目全功能可用——**这正是它存在的主要理由之一** | 2026-09-01 维护者确认；`app/src/agent/agent.js` 的 `USAGE_THIRD_PARTY_INTERVAL_MS` 头注「不猜 ANTHROPIC_BASE_URL」；`app/src/shared/child-env.js`；[getting-started.md](getting-started.md) |
 | **不新增持久化层** | 消息内容的真相源**永远**是 `~/.claude/projects/<dir>/<id>.jsonl`，CCM 一条都不存（`sessions.json` 只有索引与指针）。新增持久化必须**同时**满足：① claude 侧不存在该概念（设备信任 / 推送订阅 / 审计这类 web 特有物）② 不能从 transcript 重建。缓存类不受此限，但**必须可随时删除、损坏即当作没有**。唯一的反向例外：往 claude 的 jsonl 追加一行 `entrypoint-marker`，那是互通性所需（让 CLI `/resume` 看得到 web 建的会话），不是 CCM 的存储 | 2026-09-01 维护者确认；`app/src/sessions/history.js`；`app/src/server/app.js` 的 entrypoint 写入；[architecture.md](architecture.md) 状态表 |
 | **鉴权是启动前提** | 没有 `AUTH_TOKEN` 就**不启动**，任何绑定模式都一样，`BIND_MODE=loopback` 也不例外——本机浏览器打开同样是 web 访问。纯空白 token 一并拒绝（它 truthy 但形同虚设）。**鉴权面 = 数据面与操作面**，不含静态壳：`index.html` 与前端 JS 必须登录前可取，那是登录门本身。本机 loopback 仍免**设备审批**（第二因子，见 §6），但不免 token | 2026-09-01 维护者确认；`app/src/shared/bind-host.js` `resolveBindPlan` 的 `token_required`；`tests/invariants/bind-host.test.mjs` |
@@ -66,7 +66,7 @@
 | 规则 | 说明 |
 |------|------|
 | 已鉴权 ≠ 限操作面 | 限速只挡鉴权口暴破；用户即 root，对操作面限速违背产品目的 |
-| 工作区白名单 | 路径门，不决定 Claude 工具是否自动放行 |
+| 已连接的文件夹（`WORKDIRS`） | 路径门，不决定 Claude 工具是否自动放行。子目录直接可达（范围里的 worktree 归所属仓库，范围外的平级 worktree 要显式连接），手机上可添加（只浏览家目录内的目录名）；显式越界 cwd 拒绝、不回落（SCOPE-04/05、FOLDER-01） |
 | 范围内文件不敏感过滤 | `.env` 等照读——与「用户即 root」一致 |
 | 子进程 env 不做白名单裁剪 | 指**继承环境**：与终端 claude 一致，第三方网关靠 shell `ANTHROPIC_*` 或 CLI settings 文件的 `env` 块（SDK 会话的 `settingSources` 含 user/project/local，写法见 getting-started「官方订阅与第三方网关」）。`app/src/shared/child-env.js` 有三处例外——滤掉值为空串的键、追加 `CCM_STATUSLINE_ORIGIN` / `CCM_HOOKS_ORIGIN` 两个 origin 标记（后者是 hooks 桥判「这是 web 驱动的子进程、别重复推送」的依据），以及**剥掉 CCM 自己的控制面密钥**（`AUTH_TOKEN` 与 `VAPID_*` / `NTFY_*` / `CF_ACCESS_*` 三组前缀，2026-09-17 安全审查 H1，红线登记为 `AUTH-06`）。第三条**不是对「不做白名单裁剪」的削弱，而是对它的补齐**：本条规则要的是「与终端 claude 一致」，而 server 会把 `ccm.config.json` 的值投影进 `process.env`（`ops/config.js` 的投影循环），于是子进程实际拿到的**比终端更宽**——普通终端里的 claude 环境里根本没有这几个键。剥掉之后才真的等宽。判据是「这个键属于 CCM 还是属于 claude」，`ANTHROPIC_*` / `CLAUDE_CODE_*` / 代理变量一律原样透传，第三方网关路径不受影响。剥离不只对 SDK 会话：server 自己在工作区里跑的 git（变更面板、状态栏）与 `claude --version` 走同一份 `childEnv()`——仓库配置能让 git 执行任意命令（`core.fsmonitor` 等），而 `.git/config` 对模型可写，只剥 SDK 那一路等于留了条绕行（2026-09-22 review P2）。另有一个**叠加层**方向相反：worktree 网关隔离读出的 `resolvedEnv` 经 `agent.js` 的 `filterSafeResolvedEnv` 只放行 `ANTHROPIC_*` / `CLAUDE_CODE_*` 才叠加上去，防 worktree settings 覆盖 `PORT` / `AUTH_TOKEN` / `CCM_DATA_DIR` 等服务端变量 |
 
@@ -90,8 +90,8 @@
 | 项 | 规则 |
 |----|------|
 | 出向 | 唯一信封 `agent:event`（`type` + `seq` + `epoch` + …） |
-| type 白名单 | **`app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 31 种） |
-| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 58 个） |
+| type 白名单 | **`app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 33 种） |
+| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 75 个） |
 | 门禁 | `npm run check` → `tests/gates/contract-check.js` / `agent-event-contract.js` |
 | 改 type | 必须同时改 protocol + 真实 emit 路径 + mock + 前端 handler（否则 check 红） |
 
@@ -123,11 +123,11 @@
 - 发版顺序：bump → 推 `dev` → 等真 CI 绿 → 开发版 PR → 等 PR 检查绿 → 合并 → 在合并后的 `master` HEAD 上打 tag → 建 Release。**tag 必须在合并之后打**：PR 合并没有 ff-only，合出来是 merge commit，tag 打早了就指不到 `master` 的 HEAD。
 - 其它分支 worktree 在仓库外兄弟目录，不是本树源码。
 - **`master` 归档即最新发布**：装机 `curl` 直接指向 GitHub 对 `master` 的源码归档（§4.1.1），所以 `master` 上不得出现未发版的提交。这条此前靠人守，2026-09-12 破过一次——dependabot 的 PR 默认开到默认分支（当时是 `master`），合进去就带上了未发版提交。当时的止血是三道齐上：`.github/dependabot.yml` 的 `target-branch: dev`、默认分支改为 `dev`、以及 `quality` 里那道「只有 `dev` 能进 `master`」。
-- **同日稍后默认分支又切回了 `master`**，现在靠两道：`target-branch: dev` 与 `quality` 那道闸。切回的理由是另一条同样硬的约束——装机拉的是 `master`，而**默认分支决定了访客在仓库首页看到哪份 README**；停在 `dev` 会让首页展示的内容领先于任何人能装到的版本（README 重写合进 `dev` 的那一刻就分叉了）。撤掉的那道是冗余而非唯一：原事故的直接成因是 dependabot 把 PR 开到默认分支，而那条路已被 `target-branch: dev` 写死堵上（它不读默认分支设置），`quality` 那道闸也仍然显式报错拦住任何 head 不是 `dev` 的 PR。**代价是开 PR 时默认 base 变成 `master`，要显式 `--base dev`**；且默认分支是仓库设置，被改回去不会有任何提示——这正是 `dependabot.yml` 里那条注释说「两道一起用」的原因，那份文件在代码评审里看得见，而仓库设置看不见。
+- **同日稍后默认分支又切回了 `master`**，版本更新现在靠两道：`target-branch: dev` 与 `quality` 那道闸。切回的理由是另一条同样硬的约束——装机拉的是 `master`，而**默认分支决定了访客在仓库首页看到哪份 README**；停在 `dev` 会让首页展示的内容领先于任何人能装到的版本（README 重写合进 `dev` 的那一刻就分叉了）。撤掉的那道对版本更新是冗余的：它们由 `target-branch: dev` 写死（不读默认分支设置），`quality` 那道闸也仍然显式报错拦住任何 head 不是 `dev` 的 PR。**代价有两个**：开 PR 时默认 base 变成 `master`，要显式 `--base dev`；以及**安全更新重新开到 `master`**——GitHub 的安全更新不读 `target-branch`、永远开到默认分支，而原事故的 #23 本身就是一条安全更新（它开出时还没有 `dependabot.yml`，那时 dependabot 只开安全更新）。这类 PR 现在只靠 `quality` 那道闸拦下（2026-09-29 的 #184 就是），要把同样的升级移植到 `dev` 处理，做法见 `dependabot.yml` 文件头。
 
 ### 4.1.1 分发形态（GitHub 对 `master` 的源码归档：裁剪过的源码树，不是 npm 包、不上传资产）
 
-装机 `curl` 直接拉 `https://github.com/<repo>/archive/refs/heads/master.tar.gz`：GitHub 现场 `git archive`、遵守被归档那棵树里 `.gitattributes` 的 `export-ignore`（2026-09-08 实测：dev 归档与本地 `git archive origin/dev` 逐项一致；`git archive --remote` 走 GitHub 被 422 拒绝，那条路不通）。发版不打包、不上传任何 Release 资产；`master` 只由 `release.sh` ff 前进，所以 `master` 归档就是最新发布（§4.1）。规则必须已经在被归档的那棵树里——树里没有规则的老 tag 归档不裁剪。裁掉什么由 `.gitattributes` 的 `export-ignore` 决定：**一条 `/tests/**` 前缀就裁掉了用例 + 测试基建（`tests/infra/`）+ 全部门禁（`tests/gates/`）**，另加 `.github/`、`.claude/`、`CLAUDE.md`、`AGENTS.md`、`.gitattributes`、`.dockerignore`、`eslint.config.js`、**`docs/` 下的 `testing.md`**（它通篇引用已被裁掉的 `tests/` 路径与 `mutate:docker`、`test:invariants:*`，留在分发树里全是死引用；这里刻意不把它写成连写路径——`doc-consistency` 的裸提及检测不区分「链接」与「字面提及」，写全了这句解释自己就会在分发树里变成一条指向被裁文件的死链，用户跑 `doctor` 的 D9 见红）与 `scripts/` 里四个维护者工具；**留下**运行时 + 用户运维命令（`setup`/`doctor`/`device`/`config`/`service`/`uninstall`/两个桥）+ `docs/` 下**除 `testing.md` 外**的文档 + `desktop/`。
+装机 `curl` 直接拉 `https://github.com/<repo>/archive/refs/heads/master.tar.gz`：GitHub 现场 `git archive`、遵守被归档那棵树里 `.gitattributes` 的 `export-ignore`（2026-09-08 实测：dev 归档与本地 `git archive origin/dev` 逐项一致；`git archive --remote` 走 GitHub 被 422 拒绝，那条路不通）。发版不打包、不上传任何 Release 资产；`master` 只由 `release.sh` ff 前进，所以 `master` 归档就是最新发布（§4.1）。规则必须已经在被归档的那棵树里——树里没有规则的老 tag 归档不裁剪。裁掉什么由 `.gitattributes` 的 `export-ignore` 决定：**一条 `/tests/**` 前缀就裁掉了用例 + 测试基建（`tests/infra/`）+ 全部门禁（`tests/gates/`）**，另加 `.github/`、`.claude/`、`CLAUDE.md`、`AGENTS.md`、`.gitattributes`、`.dockerignore`、`eslint.config.js`、`tailwind.config.js`、**`docs/` 下的 `testing.md`**（它通篇引用已被裁掉的 `tests/` 路径与 `mutate:docker`、`test:invariants:*`，留在分发树里全是死引用；这里刻意不把它写成连写路径——`doc-consistency` 的裸提及检测不区分「链接」与「字面提及」，写全了这句解释自己就会在分发树里变成一条指向被裁文件的死链，用户跑 `doctor` 的 D9 见红）与 `scripts/` 里四个维护者工具；**留下**运行时 + 用户运维命令（`setup`/`doctor`/`device`/`config`/`service`/`uninstall`/两个桥）+ `docs/` 下**除 `testing.md` 外**的文档 + `desktop/`。
 
 - **为什么门禁住在 `tests/` 下**：此前它们散在 `scripts/`，「哪些是门禁」这份名单要在 `.gitattributes`（17 行）、`tests/unit/dist-manifest.test.mjs` 的正则、`repo-inventory.js` 的规则表**三处各存一份**——加一个门禁脚本要改三个地方，漏了任何一处都没有机制会发现。收进目录后三者全部退化成目录前缀，不需要维护。
 - **两个不能移的例外**：`scripts/doc-consistency.js` 与 `scripts/collect-source-files.js` 被 `scripts/doctor.js` import，而 `tests/**` 是被裁掉的——移进去等于用户跑 `doctor` 直接 `ERR_MODULE_NOT_FOUND`。已由 `dist-manifest.test.mjs` 单列断言保护。
@@ -146,15 +146,15 @@
 
 > ⚠ **`test:invariants` 的两个兄弟不在名单上**，别照后缀类推：`test:invariants:server` 起真 `app/server.js` 子进程；`test:invariants:env` 跑卸载器，隔离依赖被测代码认注入的 `home`/`root`/`appPath`，回落即打在真实家目录上。两条都进容器（`test:docker` 已含）。
 
-**其余一律容器**：`test:docker` · `test:docker:playground` · `mutate:docker` 等。维护者 playground（干净 Linux HOME、发 loopback 端口、fake-claude）走 `npm run playground:up` / `npm run test:docker:playground`，镜像仍是 `Dockerfile.test`。
+**其余一律容器**：`test:docker` · `test:docker:playground` · `mutate:docker` 等。维护者 playground（干净 Linux HOME、发 loopback 端口、fake-claude）走 `npm run playground:up` / `npm run test:docker:playground`，镜像仍是 `tests/infra/Dockerfile.test`。
 
-**单独授权例外**：`RUN_CLAUDE_INTEGRATION=1` · `npm run test:smoke`。
+**单独授权例外**：`RUN_CLAUDE_INTEGRATION=1` · `npm run test:smoke` · 起验收的真模型环境 `node tests/acceptance/env/up.mjs --env <含 E3 / E3proxy / E3cf，或 all> --yes`（钩子 `ask`：起的是真 claude CLI 容器，机主网关凭据会复制进去，此后每个回合都花真额度；真模型只在容器里跑）。验收入口 `tests/acceptance/run.mjs` 是宿主机侧调度，`--tier C` 也只列清单、不执行，不设闸。
 
 根因：2026-08-02 宿主机 `mutate` 误删 `~/.claude/projects`。钩子实现见 `tests/gates/guard-host-tests.js`。
 
 ### 4.3 `npm run check` 包
 
-覆盖面导览，**逐项以 `package.json` 的 `check` 为准**（这行漂过两次：加门禁时没人会回头数散文里的项数）：ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· 架构图漂移（gh-pages 图集的常量/路径/基线）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · 不变量编号（`invariants/` 的 `// 守护：` 行与编号表双向对齐）· Playwright 禁止模式 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· 未分类文件（inventory）。
+覆盖面导览，**逐项以 `package.json` 的 `check` 为准**（这行漂过两次：加门禁时没人会回头数散文里的项数）：ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· 架构图漂移（gh-pages 图集的常量/路径/基线）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · shell 陷阱 · 不变量编号（`invariants/` 的 `// 守护：` 行与编号表双向对齐）· 凭据配置被 `.gitignore` 覆盖 · 执行位守卫接线 · 容器配置隔离 · Playwright 禁止模式 · `tw.css` 与源码一致 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· 未分类文件（inventory）。
 
 链上成员由 `tests/unit/gate-wiring.test.mjs` 钉住：`tests/gates/` 下的门禁要么挂在 check 上，要么在那份 `NOT_IN_CHECK` 白名单里写明理由。新写一个门禁忘了接线会红——**一个不被执行的门禁比没有门禁更危险，它占着「这块有人守」的位置**。
 
@@ -170,7 +170,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 
 - 桌面端占着端口：**勿再手动 `npm start` 撞端口**。  
 - 改配置/代码：桌面端菜单里 server 一行点「重启」；headless 停掉当前 `npm start` 再起。  
-- **例外**：工作区列表热加载（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`）；被移除目录仅拒新开。哪些项可热加载由 `env-schema.js` 的 `reload` 标记决定（缺省 `restart`，当前唯一 `hot` 是 `WORKDIRS`）。
+- **例外**：工作区列表热加载（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`；手机上添加与断开文件夹写的也是这份内联 `WORKDIRS`）；被移除目录仅拒新开。哪些项可热加载由 `env-schema.js` 的 `reload` 标记决定（缺省 `restart`，当前唯一 `hot` 是 `WORKDIRS`）。
 
 ### 4.5 产品 UX 已决
 
@@ -190,7 +190,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 | 格式 | `ccm.config.json`（结构化 JSON）。**存在时优先，缺失才回落 `.env`**；旧部署零改动 |
 | 读写同源 | 面板/CLI 写入的文件必须与启动时读的是同一份。写错源不是报错而是**假成功**——用户看到「已写入」、重启毫无变化（同 CF_ACCESS_* 被 dotenv 吞那次） |
 | 优先级 | shell env > 配置文件 > 内置默认。`ANTHROPIC_*` 只认真实 shell export，写进文件照样剥除 |
-| 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；规则在 `.gitignore`（`ccm.config.json` / `ccm.config.*.json` / `ccm.config.json.*` 三条）。**由 `CONFIG-03` 钉住**（`tests/gates/check-config-gitignored.js`，在 check 链上，逐条跑 `git check-ignore` + 三条反向锚点；**必须是门禁不能是 `tests/invariants/` 下的用例**——它依赖 git 元数据，而 linked worktree 检出的 `.git` 在容器里解析不到，同 `inventory:check` 那条）——2026-09-17 之前这里确实没有任何测试或门禁，删掉那三行不会让任何东西变红。gitleaks 钩子不是替代品：它扫的是「内容像不像凭据」，`CONFIG-03` 管的是「路径会不会被收进来」 |
+| 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；规则在 `.gitignore`（`ccm.config.json` / `ccm.config.*.json` / `ccm.config.json.*` 三条）。**由 `CONFIG-03` 钉住**（`tests/gates/check-config-gitignored.js`，在 check 链上，逐条跑 `git check-ignore` + 四条反向锚点（反向锚点带 `--no-index`，只看规则本身，已跟踪的模板被宽规则盖住也看得出来）；**必须是门禁不能是 `tests/invariants/` 下的用例**——它依赖 git 元数据，而 linked worktree 检出的 `.git` 在容器里解析不到，同 `inventory:check` 那条）——2026-09-17 之前这里确实没有任何测试或门禁，删掉那三行不会让任何东西变红。同一道门禁的哨兵还盖着 `.env` 系列、`workdirs.json` 与验收套件的本机凭据 `tests/acceptance/local/secrets.json`（整个 `local/` 目录由一条 `.gitignore` 规则盖住，哨兵挑其中最敏感的那个文件）。gitleaks 钩子不是替代品：它扫的是「内容像不像凭据」，`CONFIG-03` 管的是「路径会不会被收进来」 |
 | 迁移是显式动作 | 没有任何代码路径会自动创建 `ccm.config.json`（`setup` 与 `config migrate` 除外，两者都是用户发起） |
 | 未登记键：**读宽写严** | 读取侧原样放行进 `process.env`（claude 子进程继承它，`HTTPS_PROXY` / `CLAUDE_CONFIG_DIR` 这类才有效），只打一行提示；写入侧 (`config set` / 面板) 仍只认 `WRITABLE_KEYS`。**这个不对称是有意的**——别为了「一致性」把两侧统一：统一到严，第三方网关用户静默失效；统一到宽，面板变成任意键写入面 |
 | CLI 值解析不复用 `coerceToSchemaType` | `parseCliValue` 自己认 `true/false/on/off/yes/no/1/0`。复用会出事：`TOGGLE_OFF` 的 off 字面量是 `'off'`，`set WEB_STATUSLINE=false` 经 coerce 会**变成开** |
@@ -251,7 +251,7 @@ sessionId 不独等 `init`（`_claimSessionIdEarly`）· 看门狗豁免本地�
 
 详见 [架构说明 · 鉴权与范围边界](architecture.md#鉴权与范围边界)（完整分层图与各层互不替代的边界）。摘要：
 
-**入口凭据：AUTH_TOKEN（必备，无它不启动）‖ 公网 IdP 策略（可选加层，当前唯一实现 CF Access）**，按 Host 二选一 → 设备信任 → 工作区范围门 → CLI permissions.allow + Web 权限档 → Agent 审批 ‖ 文件编辑器直写（独立范围/大小/哈希/审计）。
+**入口凭据：AUTH_TOKEN（必备，无它不启动）‖ 公网 IdP 策略（可选加层，当前唯一实现 CF Access）**，按 Host 二选一 → 设备信任 → 已连接文件夹范围门 → CLI permissions.allow + Web 权限档 → Agent 审批 ‖ 文件编辑器直写（独立范围/大小/哈希/审计）。
 
 第一层是**前提而非选项**（§1「鉴权是启动前提」）：没有 token 连 server 都起不来。**但「起得来」不等于「每个连接都持有令牌」**：IdP 开着时，它管的公网 Host 只认 IdP 凭据（JWT），`AUTH_TOKEN` 在那条路上既不要求也不放行（带着正确 token、没有 JWT 照样 401）。所以下游判据的前提按入口分两种：IdP 管的公网 Host 上是「对方已过 IdP」，其余入口上是「对方已持令牌」。凡是要把 `AUTH_TOKEN` 交出去、或以「反正对方有 token」为由放宽的逻辑，都得先看连接走的是哪条——2026-09-22 review 查出 `connect:qr` 把明文 token 回给了本不持有它的 Access 会话，推理起点正是旧版这里写的「下游永远已持令牌」。第二层写成「公网 IdP 策略」而不是具体产品名，是因为核心代码只认 `app/src/auth/auth-strategy.js` 的接口形状；CF Access 是当前唯一实现，换 IdP 不该动核心。它是**可选的**：第一层 + 第三层就是公网基线（§1「公网入口」）。加层开着时，在它管的公网 Host 上替代第一层，默认档下也替代第三层（`DEVICE_APPROVAL_SCOPE=all` 时第三层照查）；关着时这两层照常生效——两种状态都是完整防线，doctor 不把「未开加层」算成缺陷。
 

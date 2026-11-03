@@ -456,6 +456,14 @@ func testLogHelpers() {
     eq(lastLines("a\nb", 10).count, 2, "行数不足时全给")
     eq(lastLines("", 5), [""], "空文本给一个空行而不是崩")
 
+    // 尾读的起点按字节算，中文日志里约三成字节是多字节字符的续字节：起点切在字符中间时，
+    // 严格解码整段返回 nil，日志窗口就整屏空白。只能丢掉那半个字符。
+    let zh = Data("中文日志\n第二行\n".utf8)
+    eq(decodeLogTail(zh), "中文日志\n第二行\n", "完整文本原样解码")
+    eq(decodeLogTail(zh.subdata(in: 1..<zh.count)), "文日志\n第二行\n", "起点切在「中」的第 2 个字节：丢掉半个字，其余照常")
+    eq(decodeLogTail(zh.subdata(in: 2..<zh.count)), "文日志\n第二行\n", "起点切在「中」的第 3 个字节：同上")
+    eq(decodeLogTail(Data([0x61, 0xFF, 0x62])), "a\u{FFFD}b", "中间混进一个坏字节：只替换它，不吞掉整段")
+
     // 日志源列表：LOG_FILE 配置的路径优先置顶；~/Library/Logs 下的 ccm-*.log 全部列出
     // （tunnel / logrotate / menubar / tunnel-watch……有文件就有源），server 排最前；
     // .gz 轮转历史与非 ccm 前缀文件不进列表。

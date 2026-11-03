@@ -1,7 +1,8 @@
 // helpers: tests/helpers/playwright.ts
 
-import { test, expect } from '@playwright/test';
-import { closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { test, expect, type Page } from '@playwright/test';
+import { captureUserMessages, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession, startNewSessionInWorkspace } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-02 输入框、发送按钮与空输入边界', async ({ page }) => {
@@ -104,7 +105,589 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitUntilConnected(page);
     await waitForIdle(page);
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+    // 验收 O65：重发完了「正在重发离线发送队列中的 1 条消息…」还一直挂着
+    await expect(page.locator('#messages'), '重发已经结束，进行中的横幅要撤掉').not.toContainText('正在重发离线发送队列');
 
+    await expectNoBrowserErrors(page);
+  });
+
+  // MSG-02：离线队列里的实例句柄活得比 server 进程久，重启后可能撞上同号的另一个会话。重放要带上入队时
+  // 那个实例跑的会话，服务端据此核对（核对本身在 tests/invariants/server/instance-identity.test.mjs）。
+  // 两个入队点都得带：离线时发的、在线发出去没被确认转进重发的。mock 是平行实现、不做这道核对，这里只钉前端送出去的是什么。
+  test('P0-02d2 离线时发的消息，重放带上入队时那个会话（MSG-02）', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await gotoMock(page);
+    await waitForIdle(page);
+    await sendChatMessage(page, 'test:disconnect-now');
+    await waitUntilDisconnected(page);
+
+    await page.locator('#input').fill('离线时打的字');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect.poll(() => sent.filter(m => m.fromOutbox === true).length).toBe(1);
+    const replay = sent.find(m => m.fromOutbox === true)!;
+    expect(replay.text).toBe('离线时打的字');
+    expect(replay.instanceId).toBe('inst_1');
+    expect(replay.sessionId, `重放没带入队时的会话，服务端认不出同号的另一个会话：${JSON.stringify(replay)}`)
+      .toBe('mock-session-visual-test');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O107：服务端 viewingInstanceId 是全局单值，新会话页的首发不带 instanceId 就会被回退进另一台设备正看着的
+  // 会话。新会话页每次发送都带这一页的 composeId，服务端据此开新会话（路由本身在
+  // tests/integration/new-session-compose-routing.test.mjs）；进了会话之后靠 instanceId，不再带它。
+  // mock 是平行实现、不做这道路由，这里只钉前端送出去的是什么。
+  test('P0-02d16 新会话页发的消息带 composeId（在线与离线重放都带），会话里发的不带', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await gotoMock(page);
+    await waitForIdle(page);
+
+    // 会话里发的：靠 instanceId 路由，不带 composeId
+    const s0 = sent.length;
+    await sendChatMessage(page, 'test:stream');
+    await expect.poll(() => sent.length).toBeGreaterThan(s0);
+    expect(sent[s0].instanceId, '前提：会话里有查看实例').toBeTruthy();
+    expect(sent[s0].composeId, '会话里发的带了 composeId：服务端会把它当成新会话页').toBeUndefined();
+    await waitForIdle(page);
+
+    // 新会话页发的：不带 instanceId，必须带这一页的 composeId
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expectSidebarClosed(page);
+    const s1 = sent.length;
+    await sendChatMessage(page, 'test:disconnect-now');
+    await expect.poll(() => sent.length).toBeGreaterThan(s1);
+    const first = sent[s1];
+    expect(first.instanceId ?? null, '前提：新会话页没有查看实例').toBeNull();
+    expect(typeof first.composeId === 'string' && first.composeId.length > 0,
+      `新会话页的首发没带 composeId，服务端会回退到全局 viewing：${JSON.stringify(first)}`).toBe(true);
+
+    // 同一页离线时打的字：重放带着同一枚 composeId——服务端据它落回这一页开出的实例
+    await waitUntilDisconnected(page);
+    await page.locator('#input').fill('离线的新会话消息');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+    await expect.poll(() => sent.filter(m => m.fromOutbox === true && m.text === '离线的新会话消息').length).toBe(1);
+    const replay = sent.find(m => m.fromOutbox === true && m.text === '离线的新会话消息')!;
+    expect(replay.composeId, `离线重放没带 composeId，服务端懒开时会续上项目的「当前会话」：${JSON.stringify(replay)}`)
+      .toBe(first.composeId);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-02d3 在线发出去没被确认、转进重发的那条，重放同样带上会话（MSG-02）', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-send-transient-fail');
+    // 武装命令本身不收尾（运行条一直亮着），照其它 arm 用例的做法切到另一个会话再发
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await sendChatMessage(page, '在线没被确认的那条');
+    // 第一次被 mock 以可重试的负 ack 拒掉 → 进 outbox → 重发送达
+    await expect.poll(() => sent.filter(m => m.fromOutbox === true).length).toBe(1);
+    const replay = sent.find(m => m.fromOutbox === true)!;
+    expect(replay.text).toBe('在线没被确认的那条');
+    expect(replay.instanceId).toBe('inst_archived');
+    expect(replay.sessionId, `在线转入重发的条目没带会话：${JSON.stringify(replay)}`).toBe('mock-session-archived');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O31：离线重放被服务端永久拒收后，outbox 清了、输入框是空的，原文只剩一行「已停止重试」——这条再也不会发，
+  // 用户也拿不回自己打的字。投给眼前这个会话、输入框空着时，原文放回输入框。
+  test('P0-02d7 离线重放被永久拒收：原文放回输入框，提示说清已停止重试', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-permanent');
+    // 武装命令本身不收尾（运行条一直亮着），照其它 arm 用例的做法切到另一个会话再发
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.locator('#input').fill('会被永久拒收的那条');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect(page.locator('#input'), '永久拒收后原文丢了：outbox 已清，这条不会再发').toHaveValue('会被永久拒收的那条');
+    await expect(page.locator('#messages')).toContainText('已停止重试');
+    await expect(page.locator('#messages')).toContainText('原文已放回输入框');
+    await expectNoBrowserErrors(page);
+  });
+
+  // PR #232 review：重载页面后恢复出来的 outbox 条目没有气泡。它发往不在眼前的会话、又被服务端永久拒收时，提示没有
+  // 落点，outbox 已清，用户打的字就没了。暂存起来，回到它的会话时交还；别的会话里看不到它。
+  test('P0-02d11 重载后发往别的会话的离线条目被永久拒收：原文暂存，回到那个会话时交还', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-permanent');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    // 重载后恢复出来的条目：发往 Visual Sandbox (Main)，内存里没有气泡。得在应用脚本跑之前写——
+    // 重载前写的会被 pagehide 时的 persistOutbox 用内存里的空队列盖掉。
+    await page.addInitScript(() => localStorage.setItem('ccm-outbox-v1', JSON.stringify([{
+      text: '发往主会话的那条', model: null, clientMessageId: 'p0-02d11-dead-letter',
+      instanceId: 'inst_1', cwd: '/Users/you/code/claude-chat-mobile', sessionId: 'mock-session-visual-test',
+    }])));
+    await page.reload();
+    await waitUntilConnected(page);
+    await expect.poll(() => sent.some(m => m.clientMessageId === 'p0-02d11-dead-letter' && m.fromOutbox === true),
+      { message: '前提：恢复出来的条目要被重放（mock 已武装成永久拒收）' }).toBe(true);
+    // 重载前看的就是这个会话：离线重放的提示先于首次 bindView 写进 #messages，曾被当成它的 DOM 缓存贴回去，
+    // 走 'keep' 不拉历史，整屏只剩空白（R10 修 O135 时发现）
+    await expect(page.locator('#messages'), '眼前这个会话的历史没加载').toContainText('Archived plan replay', { timeout: 10_000 });
+    await expect(page.locator('#messages'), '别的会话的失败不该打到眼前这个会话上').not.toContainText('发往主会话的那条');
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#input'), '永久拒收、outbox 已清：不交还的话这条就没了').toHaveValue('发往主会话的那条');
+    await expect(page.locator('#messages')).toContainText('原文已放回输入框');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O31（R6 AC-13-07）：断线期间 server 重启，离线重放回 stale「目标会话已关闭，请刷新后重发」。重连后视图已回到
+  // 「服务已重启」提示页（viewing=null），条目既不是眼前这个会话的、气泡又随清屏进了那个会话的 DOM 缓存——提示写进缓存里
+  // 那颗脱离的气泡，而实例已经没了，重开会话不会再用那份缓存。修之前原文哪儿都找不回：输入框空、死信暂存是空的。
+  test('P0-02d14 断线期间 server 重启、离线重放被判目标会话已关闭：回到那个会话时原文放回输入框', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-restart-stale');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.locator('#input').fill('重启前离线打的那条');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect(page.locator('#messages'), '前提：重放要真的撞上 stale').toContainText('目标会话已关闭', { timeout: 10_000 });
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('ccm-outbox-v1')), { message: '前提：stale 是死信，outbox 已清' }).toBe('[]');
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+    await expect(page.locator('#input'), '目标会话已关闭、outbox 已清：不交还的话这条就没了').toHaveValue('重启前离线打的那条');
+    await expect(page.locator('#messages')).toContainText('原文已放回输入框');
+    await expect(page.locator('#messages [data-testid="user-message"]', { hasText: '重启前离线打的那条' }), '原文已回到输入框，不该再留一颗没发出去的气泡').toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O126（R7 AC-13-07）：同上一条的场景，P0-02d14 之后原文不再丢，但提示出现那一屏只有服务端那行「目标会话已关闭，
+  // 请刷新后重发」、下面整片空白——没说原文还在，刷新也找不回它，用户只会凭记忆重打。这一屏眼前没有会话，说一句不会污染别的会话。
+  test('P0-02d15 server 重启后的提示页：说明原文已保存，点「回到该会话」原文回到输入框', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-restart-stale');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.locator('#input').fill('重启前离线打的那条');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect(page.locator('#messages'), '提示页上没说原文还在').toContainText('原文已保存，回到该会话时会放回输入框', { timeout: 10_000 });
+    await expect(page.locator('#messages'), '「请刷新后重发」是错误指引：原文在死信暂存里，刷新找不回它').not.toContainText('请刷新后重发');
+    // R7 那片空白的真凶：提示条走 addBar → leaveStartScreen，把「服务已重启」面板（继续此会话 / 回首页 / 新建会话）整个清掉
+    await expect(page.locator('[data-testid="instance-destroyed-surface"]'), '提示把「服务已重启」面板冲掉了').toBeVisible();
+    const goto = page.locator('#messages [data-testid="outbox-parked-goto"]');
+    await expect(goto).toHaveCount(1);
+    await goto.click();
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+    await expect(page.locator('#input'), '点「回到该会话」之后原文没回到输入框').toHaveValue('重启前离线打的那条');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O135（R10 AC-23-10）：v1.13.0 入队的离线条目只有 inst_N、没有会话号。升级重启后发号不复用，重放判 stale；
+  // 重连时全局「正在看」已是别人刚开的会话。修之前提示按「别把 A 的失败写进 B」压掉，原文进了永远交还不了的死信暂存，
+  // 界面上什么都没有，这条话就没了。
+  test('P0-02d17 升级前入队、只剩实例号的离线条目被判 stale：正在看别的会话也把原文写出来', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await page.addInitScript(() => localStorage.setItem('ccm-outbox-v1', JSON.stringify([{
+      text: '升级前离线打的那条', model: null, clientMessageId: 'p0-02d17-legacy',
+      instanceId: 'inst_9', cwd: '/Users/you/code/claude-chat-mobile',
+    }])));
+    await page.reload();
+    await waitUntilConnected(page);
+    await expect.poll(() => sent.some(m => m.clientMessageId === 'p0-02d17-legacy' && m.fromOutbox === true),
+      { message: '前提：升级前的条目要被重放' }).toBe(true);
+    await expect(page.locator('#messages'), '眼前这个会话的历史没加载').toContainText('Archived plan replay', { timeout: 10_000 });
+    await expect(page.locator('#messages'), '交还不了的死信没当场说，这条话就悄悄没了').toContainText('离线时发的一条消息没有发出', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('原文：升级前离线打的那条');
+    await expect(page.locator('#messages [data-testid="outbox-parked-goto"]'), '没有会话号，没有「回到该会话」可去').toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('ccm-outbox-dead-letters-v1') || '[]'), '交还不了的条目不该留在死信暂存里')
+      .not.toContain('升级前离线打的那条');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 离线攒了两条，重放的第 1 条在服务端触发规则 5 置换：同一会话换了实例号，前端先收到新号的广播、再收到 ack，
+  // 离线条目还拿着入队时的旧号。新实例的 sync:since 报磁盘 ahead，前端清屏重载；第 2 条拿着旧号撞上第 1 条开跑的那轮，
+  // 落「未发送 + 重发」。mock 的时序是：清屏 → 第 2 条的负 ack → 历史落地。
+  // 守三件事：① 归属按会话认，批后结算不收掉新实例那轮的运行条 ② 清屏保住同一会话的离线气泡，第 2 条的提示挂在它自己
+  // 的气泡上，气泡排在重载的历史之后、落底可见（修之前气泡随清屏摘下，提示退成一条独立提示条插在空的 #messages 里，
+  // 历史接在它下面，实测 top 为负、要往上翻）③ 已送达的第 1 条被历史认领，屏幕上只有一颗。
+  const replayTwoOfflineAcrossSwap = async (page: Page, [first, second]: [string, string], arm = 'test:arm-outbox-replay-swap') => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, arm);
+    // 武装命令本身不收尾，照其它 arm 用例的做法切到另一个会话再发
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of [first, second]) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+    // 重载的历史落地的标志：mock 只在第 1 条送达之后才把它写进这个会话的历史（uuid 只此一处）
+    await expect(page.locator('[data-testid="user-message"][data-uuid="u-archived-replayed"]'), '清屏重载的历史没有落地').toHaveCount(1, { timeout: 10_000 });
+  };
+
+  const expectResendOnSecondBubbleAfterHistory = async (page: Page, second: string) => {
+    const secondPending = page.locator('[data-testid="user-message"].opacity-70').filter({ hasText: second });
+    await expect(secondPending, '第 2 条的离线气泡不在了：同一会话的清屏重载没保住它，或历史落地时被同文的旧消息认领撤掉').toHaveCount(1);
+    await expect(secondPending.locator('[data-testid="outbox-resend"]'), '「未发送 + 重发」没挂在第 2 条自己的气泡上').toBeVisible();
+    await expect(page.locator('#messages [data-testid="outbox-resend"]'), '提示另起了一条（落在重载的历史上方），不只挂在气泡上').toHaveCount(1);
+    await expect.poll(() => page.evaluate(text => {
+      const tops = [...document.querySelectorAll('#messages > [data-top-level="1"]')];
+      const last = tops[tops.length - 1];
+      return Boolean(last?.classList.contains('opacity-70') && last.textContent?.includes(text));
+    }, second), { message: '第 2 条的气泡要排在重载的历史之后（它是最新的一条）' }).toBe(true);
+    await expect(secondPending.locator('[data-testid="outbox-resend"]'), '「重发」不在视口里，要往上翻才看得到').toBeInViewport();
+  };
+
+  test('P0-02d4 离线重放的第 1 条让同一会话换了实例：运行条留着，第 2 条的「重发」挂在它排在历史之后的气泡上', async ({ page }) => {
+    await replayTwoOfflineAcrossSwap(page, ['离线第一条', '离线第二条']);
+
+    await expectResendOnSecondBubbleAfterHistory(page, '离线第二条');
+    const first = page.locator('[data-testid="user-message"]').filter({ hasText: '离线第一条' });
+    await expect(first, '已送达的第 1 条：历史带回它之后，被保住的离线气泡要让历史认领，屏幕上只能有一颗').toHaveCount(1);
+    await expect(first, '第 1 条留下的应是历史里那颗确认态气泡').not.toHaveClass(/opacity-70/);
+    await expect(page.locator('#streamLiveStatus'), '第 1 条在新实例上开跑的那轮，运行条被批后结算收掉了').toBeVisible();
+    await expectNoBrowserErrors(page);
+  });
+
+  // 第 2 条被在途轮拒收，确定没进 transcript。历史里恰好有一条同文的旧消息（「继续」这类短句天天重复），按文本认领
+  // 会把它当成第 2 条已经落盘，撤掉保住的气泡，「重发」跟着没了。
+  test('P0-02d5 同上，第 2 条与历史里一条旧消息同文：被拒收的气泡不让旧消息认领，「重发」照样留着', async ({ page }) => {
+    await replayTwoOfflineAcrossSwap(page, ['离线第一条', 'Any follow-up questions?']);
+
+    await expectResendOnSecondBubbleAfterHistory(page, 'Any follow-up questions?');
+    await expect(page.locator('[data-testid="user-message"]').filter({ hasText: 'Any follow-up questions?' }),
+      '历史里那条旧消息与被拒收的第 2 条应各占一颗').toHaveCount(2);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O29：第 1 条的回显先于重载的历史到达，把清屏保住的离线气泡认领转正；历史随后落地，落定逻辑只认未确认的
+  // 气泡、跳过了它——它留在历史上方，历史里又渲染出同一条，回复在最底。
+  test('P0-02d8 回显先于重载的历史到达：保住的气泡不留在历史上方，屏幕上只有一颗', async ({ page }) => {
+    await replayTwoOfflineAcrossSwap(page, ['离线第一条', '离线第二条'], 'test:arm-outbox-replay-swap-echo-first');
+
+    const first = page.locator('[data-testid="user-message"]').filter({ hasText: '离线第一条' });
+    await expect(first, '回显转正的那颗与历史里那颗各占一颗：保住的气泡没被历史认领').toHaveCount(1);
+    await expect.poll(() => page.evaluate(() => {
+      const tops = [...document.querySelectorAll('#messages > [data-top-level="1"]')];
+      const at = (needle: string) => tops.findIndex(el => el.textContent?.includes(needle));
+      return at('离线第一条') > at('Okay, heading home.');
+    }), { message: '第 1 条排在历史最后一轮之前：它被留在了重载的历史上方' }).toBe(true);
+    await expectResendOnSecondBubbleAfterHistory(page, '离线第二条');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 同上，但重载的历史先于第 2 条的拒收落地：历史渲染时第 2 条还没有结论。按文字认领会把它当成已落盘，clientMessageId
+  // 交给那条同文的旧消息、撤掉气泡；拒收再到时提示只能另起一条，续发送达，回显带着同一个 id，被当成「旧消息已在屏幕上」
+  // 吞掉，这条送达的消息哪儿都不显示。mock 放出拒收后那一轮随即跑完：排着的第 2 条自动续发（O66），不用点「重发」。
+  test('P0-02d6 历史先于第 2 条的拒收落地、且与旧消息同文：气泡不被认领，本轮结束自动续发送达后这条照样显示', async ({ page }) => {
+    const second = 'Any follow-up questions?';
+    await replayTwoOfflineAcrossSwap(page, ['离线第一条', second], 'test:arm-outbox-replay-swap-history-first');
+
+    await expect(page.locator('#messages [data-testid="outbox-resend"]'), '本轮结束后排着的第 2 条应自动续发、提示收起').toHaveCount(0);
+    const same = page.locator('[data-testid="user-message"]').filter({ hasText: second });
+    await expect(same, '「重发」送达的那条没显示出来（回显被当成历史里同文的旧消息吞掉了）').toHaveCount(2);
+    await expect(same.last(), '送达的那条应被回显转正').not.toHaveClass(/opacity-70/);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O66：断网时连发三条，恢复后第 1 条送出、开跑，后两条撞上这一轮被拒收。此前它们落「⏸ 未发送 + 重发」，
+  // 回合结束也不会自己续发，得逐条点；而且三颗问气泡挨在一起，界面显示成「问1 问2 问3 答1 答2 答3」。
+  // 终端里忙时打的话会排队、回合结束再发——这里对齐：排队、每轮结束按序自动续发下一条，真正发出时气泡挪到最后。
+  test('P0-02d9 离线连发三条：按序排队，每轮结束自动续发下一条，问答顺序与发送一致', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-turns');
+    await waitForIdle(page);
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['离线问一', '离线问二', '离线问三']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const answer = (n: string) => page.locator('[data-testid="assistant-message"]').filter({ hasText: `答：离线问${n}` });
+    const queued = page.locator('[data-testid="user-message"].opacity-70');
+    await expect(answer('一')).toBeVisible();
+    await expect(queued, '第 2、3 条撞上第 1 条那一轮，应在排队').toHaveCount(2);
+    await expect(queued.first()).toContainText('本轮结束后自动发送');
+
+    // 不点「重发」：本轮一结束，第 2 条自己发出；第 3 条还得等第 2 条那一轮
+    await page.request.post('/__outbox-turn-end');
+    await expect(answer('二')).toBeVisible();
+    await expect(queued).toHaveCount(1);
+    await expect(answer('三')).toHaveCount(0);
+    await page.request.post('/__outbox-turn-end');
+    await expect(answer('三')).toBeVisible();
+    await expect(queued).toHaveCount(0);
+    await page.request.post('/__outbox-turn-end');
+
+    const order = await page.locator('#messages [data-testid="user-message"], #messages [data-testid="assistant-message"]')
+      .evaluateAll(nodes => nodes
+        .map(n => ((n.getAttribute('data-testid') === 'assistant-message' ? '答' : '问') + ((n.textContent || '').match(/离线问(一|二|三)/)?.[1] || '')))
+        .filter(x => x.length > 1));
+    expect(order, '问答顺序应与发送顺序一致').toEqual(['问一', '答一', '问二', '答二', '问三', '答三']);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 同上，但排着的那条还没等到本轮结束，页面就被刷新了（手机上切走被系统回收标签页是常态）。批处理一开始就把整批移出了
+  // 持久化队列，排队的条目只活在内存里：刷新之后它既不续发、也没有「重发」，这条话就没了。
+  test('P0-02d18 排着的离线条目没等到本轮结束页面就刷新了：刷新后照样续发，不丢', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-turns');
+    await waitForIdle(page);
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['离线问一', '离线问二']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const received = async () => (await (await page.request.get('/__outbox-received')).json()) as Array<{ text: string; refused: boolean }>;
+    const sentOf = async (text: string) => (await received()).filter(m => m.text === text);
+    await expect(page.locator('[data-testid="assistant-message"]').filter({ hasText: '答：离线问一' })).toBeVisible();
+    await expect(page.locator('[data-testid="user-message"].opacity-70'), '前提：第 2 条撞上第 1 条那一轮，在排队').toContainText('本轮结束后自动发送');
+
+    await page.reload();
+    await waitUntilConnected(page);
+    await page.request.post('/__outbox-turn-end');
+    await expect.poll(async () => (await sentOf('离线问二')).some(m => !m.refused), '刷新前排着的第 2 条，本轮结束后应被送达').toBe(true);
+    expect((await sentOf('离线问一')).length, '刷新前已经送达的第 1 条不该再留在盘上、刷新后又被投一遍').toBe(1);
+    await page.request.post('/__outbox-turn-end');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 新会话页勾了「新 worktree」后离线连发：第 2 条在投递前被改投到第 1 条开出的实例（不再各建一棵树）。改投后的那份
+  // 必须在发出之前就落盘——等 ack 时页面被刷新，盘上若还是改投前的那份（useWorktree:true），恢复后会再建一棵树。
+  // 观察点放在第 2 条真正发出的那一刻（mock 没有扣住 ack 的开关）；socket.io 先轮询后升级，两条传输都挂上。
+  test('P0-02d19 离线连发两条「新 worktree」消息：第 2 条改投后，发出之前盘上就已是改投后的那份', async ({ page }) => {
+    await page.addInitScript(() => {
+      const snap = (data: unknown) => {
+        if (typeof data === 'string' && data.includes('user:message') && data.includes('离线树二')) {
+          const w = window as unknown as { __outboxAtSend?: string | null };
+          if (w.__outboxAtSend === undefined) w.__outboxAtSend = localStorage.getItem('ccm-outbox-v1');
+        }
+      };
+      const wsSend = WebSocket.prototype.send;
+      WebSocket.prototype.send = function (data) { snap(data); return wsSend.call(this, data); };
+      const xhrSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function (body) { snap(body); return xhrSend.call(this, body); };
+    });
+    await gotoMock(page);
+    await waitForIdle(page);
+    await page.locator('#btnNew').click();
+    const surface = page.locator('[data-testid="compose-surface"]');
+    await expect(surface).toBeVisible();
+    await surface.locator('[data-testid="compose-worktree-toggle"]').click();
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['离线树一', '离线树二']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    const queuedRow = async (text: string) => (JSON.parse(await page.evaluate(() => localStorage.getItem('ccm-outbox-v1') || '[]')) as Array<{ text: string; useWorktree?: boolean }>).find(r => r.text === text);
+    expect((await queuedRow('离线树二'))?.useWorktree, '前提：第 2 条入队时也带着 worktree 意图（否则谈不上改投）').toBe(true);
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const atSend = () => page.evaluate(() => (window as unknown as { __outboxAtSend?: string | null }).__outboxAtSend);
+    await expect.poll(async () => (await atSend()) !== undefined, '第 2 条应被投递').toBe(true);
+    const second = (JSON.parse((await atSend()) || '[]') as Array<{ text: string; useWorktree?: boolean }>).find(r => r.text === '离线树二');
+    expect(second, '第 2 条发出时已不在盘上：等 ack 时刷新就丢').toBeTruthy();
+    expect(second?.useWorktree, '第 2 条发出时盘上还是改投前的那份：等 ack 时刷新，恢复后会再建一棵 worktree').not.toBe(true);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 同上，但第 1 条那一轮被用户按了停止：停止 = 不想接着跑，排着的不再自动发（终端里中断后排着的话也不会自己发出去），
+  // 退回手动「重发」；手动点了照样送达，问答顺序照样对。
+  test('P0-02d10 排着的离线条目：按了停止就不再自动续发，退回手动「重发」', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-turns');
+    await waitForIdle(page);
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['离线问一', '离线问二']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const answer = (n: string) => page.locator('[data-testid="assistant-message"]').filter({ hasText: `答：离线问${n}` });
+    const queued = page.locator('[data-testid="user-message"].opacity-70');
+    await expect(answer('一')).toBeVisible();
+    await expect(queued).toHaveCount(1);
+    await expect(queued).toContainText('本轮结束后自动发送');
+
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
+    await page.locator('#btnSend').click();
+    // 停止后那一轮结束（instances 广播 turnRunning:false 到了，主按钮回到发送）——此时若还在排队就会被续发出去
+    await expect(page.locator('#btnSend')).not.toHaveAttribute('data-mode', 'stop');
+    await expect(queued).toContainText('本轮已停止');
+    await expect(answer('二')).toHaveCount(0);
+
+    await queued.locator('[data-testid="outbox-resend"]').click();
+    await expect(answer('二')).toBeVisible();
+    await expect(queued).toHaveCount(0);
+    await page.request.post('/__outbox-turn-end');
+    await expectNoBrowserErrors(page);
+  });
+
+  // O66 review ①：普通工作区的新会话页上离线连发，条目都不带实例号。第一条懒开实例并开跑，第二条被服务端经 viewing
+  // 投给它、撞上那一轮被拒收。此前它按 {instanceId:null} 排队，本轮结束认不出目标，永远不续发。
+  test('P0-02d12 新会话页上离线连发：第一条懒开的那一轮结束后，第二条自动续发', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-turns');
+    await waitForIdle(page);
+    await page.locator('#btnNew').click();
+    await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['新页离线一', '新页离线二']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const received = async () => (await (await page.request.get('/__outbox-received')).json()) as Array<{ text: string; instanceId: string | null; viewing: string | null; refused: boolean }>;
+    const sentOf = async (text: string) => (await received()).filter(m => m.text === text);
+    await expect.poll(async () => (await sentOf('新页离线一')).length).toBe(1);
+    expect((await sentOf('新页离线一'))[0].instanceId, '前提：第一条是懒开（不带实例号）').toBeNull();
+    await expect.poll(async () => (await sentOf('新页离线二')).length).toBe(1);
+    await expect(page.locator('#messages'), '前提：第二条撞上第一条那一轮，在排队').toContainText('本轮结束后自动发送');
+
+    await page.request.post('/__outbox-turn-end');
+    await expect.poll(async () => (await sentOf('新页离线二')).length, '本轮结束应自动续发第二条').toBe(2);
+    expect((await sentOf('新页离线二'))[1].instanceId).toBe('inst_fresh');
+    await page.request.post('/__outbox-turn-end');
+    await expectNoBrowserErrors(page);
+  });
+
+  // O66 review ②：页面重载后从持久化队列恢复的条目没有气泡；发往的又不是眼下查看的会话，就连提示条也没有落点。
+  // 此前没有落点就直接返回、不登记排队，而它已经从持久化队列里移除——既不自动续发，也没有手动「重发」。
+  test('P0-02d13 重载后恢复的离线条目发往后台会话：撞上那一轮也排队，结束后自动续发', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-turns');
+    await waitForIdle(page);
+    await sendChatMessage(page, 'test:tab'); // 备好后台实例 inst_2，眼下仍看 inst_1
+    await waitForIdle(page);
+    // 在新文档起步时写持久化队列：pagehide 会用内存里的空队列覆盖重载前写进去的东西
+    await page.addInitScript(() => {
+      if (sessionStorage.getItem('seed-bg-outbox')) return;
+      sessionStorage.setItem('seed-bg-outbox', '1');
+      const row = (n: number, text: string) => ({
+        text, model: null, clientMessageId: `cm-bg-${n}`,
+        instanceId: 'inst_2', sessionId: 'mock-session-another', cwd: '/Users/you/code/another-react-project',
+      });
+      localStorage.setItem('ccm-outbox-v1', JSON.stringify([row(1, '后台离线一'), row(2, '后台离线二')]));
+    });
+    await page.reload();
+    await waitUntilConnected(page);
+
+    const received = async () => (await (await page.request.get('/__outbox-received')).json()) as Array<{ text: string; instanceId: string | null; viewing: string | null; refused: boolean }>;
+    const sentOf = async (text: string) => (await received()).filter(m => m.text === text);
+    await expect.poll(async () => (await sentOf('后台离线一')).length).toBe(1);
+    await expect.poll(async () => (await sentOf('后台离线二')).length, '前提：第二条被投过一次、撞上第一条那一轮').toBe(1);
+    expect((await sentOf('后台离线二'))[0], '前提：发往后台实例 inst_2、眼下查看的是 inst_1，且被它那一轮拒收').toMatchObject({ instanceId: 'inst_2', viewing: 'inst_1', refused: true });
+    await expect(page.locator('#messages'), '前提：眼下的会话里没有它的提示条').not.toContainText('本轮结束后自动发送');
+
+    await page.request.post('/__outbox-turn-end');
+    await expect.poll(async () => (await sentOf('后台离线二')).length, '本轮结束应自动续发第二条').toBe(2);
+    await page.request.post('/__outbox-turn-end');
     await expectNoBrowserErrors(page);
   });
 
@@ -219,6 +802,54 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     //    /color 就会在这里重新冒出来——这是本条断言唯一要抓的退化。
     await page.locator('#input').fill('/c');
     await expect(page.locator('#cmdHints')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // #456：菜单行带说明与参数提示（终端里输入 / 每个命令旁都有一行说明）；前缀也匹配别名；
+  // 说明来自 skill / 插件 / MCP 文件，是第三方内容，必须按纯文本显示。
+  test('P0-02o 斜杠菜单显示说明与参数提示，别名能搜到，说明里的 HTML 不执行', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    // 本地命令的说明走 i18n
+    await page.locator('#input').fill('/mo');
+    await expect(page.locator('#cmdHints [data-cmd="/model"]')).toContainText('切换模型');
+
+    await sendChatMessage(page, 'test:commands-changed');
+    await waitForIdle(page);
+
+    await page.locator('#input').fill('/rev');
+    const review = page.locator('#cmdHints [data-cmd="/review-pr"]');
+    await expect(review).toContainText('<pr-number>');
+    await expect(review).toContainText('Review a pull request');
+
+    // 别名 stats → /usage，选中插入的是本名
+    await page.locator('#input').fill('/sta');
+    await page.locator('#cmdHints [data-cmd="/usage"]').click();
+    await expect(page.locator('#input')).toHaveValue('/usage ');
+
+    await page.locator('#input').fill('/xss');
+    const probe = page.locator('#cmdHints [data-cmd="/xss-probe"]');
+    await expect(probe).toContainText('<img src=x onerror=');
+    await expect(page.locator('#cmdHints img')).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__slashXss)).toBeUndefined();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 真 CLI 的 init 清单里有 model：/model 交给 CLI 执行，不走前端本地选择器。#456 起清单是对象，
+  // 照旧拿 includes('model') 判断会永远匹配不上，本地分支就把 CLI 自己的 /model 截走了。
+  test('P0-02q CLI 列了 model 时 /model 透传给 CLI，不走本地选择器', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:commands-changed');
+    await waitForIdle(page);
+
+    await page.locator('#input').fill('/model claude-3-opus[1m]');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('/model claude-3-opus[1m]');
+    await expect(page.locator('#messages')).not.toContainText('模型已设为');
 
     await expectNoBrowserErrors(page);
   });

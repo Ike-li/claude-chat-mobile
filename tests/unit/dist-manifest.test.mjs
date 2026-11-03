@@ -78,6 +78,7 @@ test('② 测试树与维护者门禁确实被裁掉', () => {
     f.startsWith('tests/')
     || f.startsWith('.github/')
     || f === 'eslint.config.js'
+    || f === 'tailwind.config.js' // build:css 的配置：产物 tw.css 已提交，装机 npm ci --omit=dev 连 tailwindcss 都不装
     || f === '.dockerignore'
     || MAINTAINER_ONLY_SCRIPTS.test(f),
   );
@@ -115,6 +116,24 @@ test('④ 生产代码只依赖 dependencies，零 devDependency 泄漏', () => 
 
   const undeclared = used.filter(p => !prod.has(p) && !dev.has(p));
   assert.deepEqual(undeclared, [], '生产代码 import 了未声明的包');
+});
+
+// ④ 的扫描是正则，不是解析器：`export function` 之后到模板字符串里的 `from '…'` 之间没有引号时，曾把
+// 替换模板（http.js 的 import 改写）当成包名报「未声明」。import 子句里不可能出现反引号。
+test('④ 的扫描只认 import/export 语句：模板字符串里的 from \'…\' 不算依赖', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-bare-imports-'));
+  try {
+    writeFileSync(join(dir, 'a.js'), [
+      "import express from 'express';",
+      "export { x } from '@scope/pkg/sub';",
+      'export function stamp(source, v) {',
+      '  return source.replace(RE, `from \'$2?v=${v}\'`);',
+      '}',
+    ].join('\n'));
+    assert.deepEqual(bareImports(dir, ['a.js']), ['@scope/pkg', 'express']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true }); // safe-rm: dir 来自本用例的 mkdtemp
+  }
 });
 
 test('③ 裁剪后的树自洽：保留的文档不链接到被裁掉的文件', async () => {

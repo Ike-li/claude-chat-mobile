@@ -1,0 +1,299 @@
+{
+  "domain": 1,
+  "name": "装机与启动",
+  "cases": [
+    {
+      "id": "AC-01-01",
+      "t": "setup 非交互生成配置",
+      "pre": "容器内全新目录",
+      "st": "node scripts/setup.js --yes --hooks=off --desktop=off（不给 --work-dir）",
+      "ex": "生成 ccm.config.json，权限 0600，含随机 AUTH_TOKEN；WORKDIRS 为空，不回落 $HOME",
+      "b": "GS§3 非交互模式；HR§1",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "场景",
+      "j": [
+        "J1"
+      ],
+      "n": "R0：newuser 车道带 --work-dir 的分支已跑通，本条补不给的分支",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-02",
+      "t": "--work-dir 显式空值",
+      "pre": "",
+      "st": "setup --yes --work-dir=",
+      "ex": "拒绝并说明（多半是变量没展开），不生成任何文件",
+      "b": "GS§3",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "边界值",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-03",
+      "t": "--work-dir 指向家目录",
+      "pre": "",
+      "st": "setup --yes --work-dir=$HOME",
+      "ex": "拒绝：家目录本身不能连接",
+      "b": "GS§3；INV SCOPE-03",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "等价类",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-04",
+      "t": "非法取值不猜意图",
+      "pre": "",
+      "st": "分别给 --hooks=maybe、--access-profile=foo、非 macOS 上 --desktop=on",
+      "ex": "三者都拒绝并说明原因，不写任何文件",
+      "b": "HR§1",
+      "env": [
+        "T"
+      ],
+      "p": "P2",
+      "m": "等价类",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-05",
+      "t": "已有配置不覆盖",
+      "pre": "已跑过一次 setup",
+      "st": "再跑 setup --yes；再加 --force",
+      "ex": "不带 --force 拒绝覆盖；带 --force 才覆盖并换新令牌（文档警示所有设备会失效）",
+      "b": "GS§3",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "状态迁移",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-06",
+      "t": "非 TTY 跑交互向导",
+      "pre": "",
+      "st": "用管道跑 npm run setup（无 TTY）",
+      "ex": "直接拒绝，提示改用 --yes",
+      "b": "GS 常见问题",
+      "env": [
+        "T"
+      ],
+      "p": "P2",
+      "m": "错误推测",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-07",
+      "t": "config get 默认脱敏",
+      "pre": "",
+      "st": "config.js get；config.js get AUTH_TOKEN --reveal",
+      "ex": "默认密钥脱敏；只有 --reveal 才出明文",
+      "b": "GS§3",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "两侧验收",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-08",
+      "t": "config set 校验",
+      "pre": "",
+      "st": "同一批 set PORT=abc WEB_STATUSLINE=false；再单独 set WEB_STATUSLINE=false 与 =off",
+      "ex": "含非法值的整批拒写，文件不变；false 与 off 都落成「关」",
+      "b": "GS§3；HR§4.6（off 字面量陷阱）",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "边界值",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-09",
+      "t": "热加载与需重启提示",
+      "pre": "",
+      "st": "set 'WORKDIRS=[...]'；set PORT=4100",
+      "ex": "WORKDIRS 提示热加载；PORT 提示需要重启",
+      "b": "GS§3",
+      "env": [
+        "T"
+      ],
+      "p": "P2",
+      "m": "等价类",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-10",
+      "t": "schema 与面板一致",
+      "pre": "",
+      "st": "config.js schema；对照手机「全部配置」面板",
+      "ex": "两边的配置项与说明一致",
+      "b": "GS§3",
+      "env": [
+        "T",
+        "E3"
+      ],
+      "p": "P2",
+      "m": "两侧验收",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-11",
+      "t": "旧 .env 迁移",
+      "pre": "只有 .env 与 workdirs.json 的目录",
+      "st": "config.js migrate",
+      "ex": "生成 ccm.config.json，WORKDIRS 内联，AUTH_TOKEN 保留原值；.env 不删但不再被读",
+      "b": "GS§3",
+      "env": [
+        "T"
+      ],
+      "p": "P2",
+      "m": "场景",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-12",
+      "t": "没有令牌不启动",
+      "pre": "",
+      "st": "AUTH_TOKEN 置空、纯空白各启动一次；BIND_MODE=loopback 再试",
+      "ex": "都拒绝启动并说明原因",
+      "b": "HR§1；GS 常见问题",
+      "env": [
+        "T"
+      ],
+      "p": "P0",
+      "m": "等价类",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-13",
+      "t": "零文件夹与坏清单",
+      "pre": "",
+      "st": "WORKDIRS=[]；WORKDIRS 全是不存在的路径；WORK_DIRS_FILE 指向读不出的文件",
+      "ex": "前两种照常启动、只剩「无文件夹」，找不到的个数进服务告警；第三种拒绝启动并点名那个文件；任何情况都不回落家目录",
+      "b": "INV SCOPE-03；ARCH",
+      "env": [
+        "T",
+        "E3"
+      ],
+      "p": "P1",
+      "m": "等价类",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-14",
+      "t": "启动横幅",
+      "pre": "",
+      "st": "BIND_MODE=lan 与 loopback 各启动一次看横幅",
+      "ex": "令牌只显示掩码；列出本机地址与 bridge 状态；lan 时列局域网地址，loopback 时不列",
+      "b": "INV AUTH-05；GS§5；GS 常见问题",
+      "env": [
+        "T"
+      ],
+      "p": "P0",
+      "m": "两侧验收",
+      "j": [],
+      "n": "R0：playground 横幅为 [Token: play****cret] ✓",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-15",
+      "t": "doctor 自检",
+      "pre": "",
+      "st": "doctor.js；doctor.js --fix",
+      "ex": "全新安装没有 ✗；--fix 把配置与控制面文件收紧到 0600；分发包下文档一致性检查不误报",
+      "b": "GS§4；INV DIST-01",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "场景",
+      "j": [],
+      "n": "R0：newuser 装机 doctor 无 ✗，两个桥为 ⚠（见 O8）",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-16",
+      "t": "健康检查端点",
+      "pre": "",
+      "st": "curl /health 与 /metrics：带令牌、不带、错令牌",
+      "ex": "带令牌返回 JSON（含 status、versions、buildNonce、timestamp）；后两种 401",
+      "b": "ARCH 可观测；GS§5",
+      "env": [
+        "T"
+      ],
+      "p": "P0",
+      "m": "两侧验收",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-01-17",
+      "t": "环境变量优先与未登记键",
+      "pre": "",
+      "st": "PORT=4100 npm start；配置文件里加 HTTPS_PROXY 和一个拼错的键",
+      "ex": "端口按环境变量；未登记的键原样传给子进程，启动日志逐个提示",
+      "b": "GS§3；HR§4.6",
+      "env": [
+        "T"
+      ],
+      "p": "P2",
+      "m": "等价类",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    }
+  ]
+}

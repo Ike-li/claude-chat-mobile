@@ -17,6 +17,8 @@
 // L3 误盖掉的历史事实，L3 兜底只是补全"历史事实本就不存在"时的展示/取值，风险与 mode/model
 // 不对称，故单独放行。
 
+import { filterEscalatingDefaultMode } from '@anthropic-ai/claude-agent-sdk';
+
 /**
  * CCM / SDK 支持的权限档（与 @anthropic-ai/claude-agent-sdk PermissionMode 集合一致）。
  * 展示顺序：安全档在前，bypassPermissions 置底。集合由 tests/unit/permission-modes-sdk-sync 锁住。
@@ -100,6 +102,7 @@ export function normalizeEffortUiLevel(level) {
 /**
  * 从 resolveSettings().effective 抽出 L3 三字段（未归一前的原始意图 + 归一后的可用值）+ env 块。
  * 不抛；effective 缺失时返回硬默认形状。
+ * mode 没过仓库信任过滤：要采纳 mode 走 defaultsFromResolvedSettings。
  *
  * env 块：worktree 场景下 CLI 的 local source 解析到主 checkout（2.1.211+ 行为），
  * 但 SDK resolveSettings 按 cwd 正确读到 worktree 的 settings.local.json——所以这里拿到的是权威值。
@@ -129,6 +132,43 @@ export function defaultsFromEffectiveSettings(effective) {
       ? effective.autoContinueAtUsageLimit
       : undefined,
   };
+}
+
+// CLI 启动时按来源拦的只有这两档（2.1.284 / 2.1.301 实测）。SDK 的 filterEscalatingDefaultMode 还会剔
+// project 层的 acceptEdits，比终端严；机主 2026-10-16 选终端等价，所以只把这两档交给它。
+const SOURCE_GATED_MODES = new Set(['bypassPermissions', 'auto']);
+
+/**
+ * L3 的入口：吃 resolveSettings() 的完整结果，defaultMode 是 bypassPermissions / auto 时先过 SDK 的
+ * filterEscalatingDefaultMode 再采纳（APPROVAL-03）。新会话的 mode 只许从这里取。
+ *
+ * resolveSettings 原样报告各层的 defaultMode，包括仓库可控的 project / local 层；而 CCM 把它当显式
+ * permissionMode 交给 SDK（bypassPermissions 还是 CCM 自己在 canUseTool 里放行），CLI 自己那道信任过滤
+ * 一次都轮不到。哪几层不认这两档照 SDK（project、local），被剔掉就落回 default、不回落到更低层
+ * （CLI 忽略后同样落 default）。
+ */
+export function defaultsFromResolvedSettings(resolved) {
+  const gated = SOURCE_GATED_MODES.has(resolved.effective?.permissions?.defaultMode);
+  const d = defaultsFromEffectiveSettings(gated ? filterEscalatingDefaultMode(resolved) : resolved.effective);
+  // settings 禁用了 auto 模式（#461）：CLI 不会进 auto，defaultMode:'auto' 也从 default 启动
+  // （SDK 文档：'default' where auto mode is unavailable）。新会话页照它预显，否则显 Auto、实际是 Manual。
+  const autoModeDisabled = isAutoModeDisabled(resolved.effective);
+  return { ...d, autoModeDisabled, ...(autoModeDisabled && d.mode === 'auto' ? { mode: 'default' } : {}) };
+}
+
+// disableAutoMode 在 Settings 类型里有两处（顶层与 permissions 下），值是 'disable'。true 是常见误写：
+// SDK 0.3.312 起 resolveSettings 才按 CLI 口径读 managed 层的这种写法，在那之前原样返回，两种都认。
+// 判成禁用的代价只是 Auto 置灰，漏判则让用户以为分类器在帮他放行，所以拿不准的写法往禁用那边靠。
+const AUTO_MODE_DISABLE_VALUES = new Set(['disable', true]);
+function isAutoModeDisabled(effective) {
+  return AUTO_MODE_DISABLE_VALUES.has(effective?.disableAutoMode)
+    || AUTO_MODE_DISABLE_VALUES.has(effective?.permissions?.disableAutoMode);
+}
+
+// 服务端拦截切到 Auto 的判据（#461）：前端置灰是体验，这里才是防线。只看 settings 这一种「不可用」；
+// 还没读到 settings（cliDefaults 缺席）就不拦，交给 CLI 自己决定，不在这里替它拒。
+export function autoModeBlocked(mode, cliDefaults) {
+  return mode === 'auto' && cliDefaults?.autoModeDisabled === true;
 }
 
 // 审批规则（allow / deny / ask）。数据源与 defaultsFromEffectiveSettings 同一份 effective——
@@ -305,13 +345,25 @@ export function resolveFreshPrefs({
       ultracode = false;
     }
   }
+  // 来源只管显示：L3 的档照样当显式档下发，但用户没选过它，界面按「没指定」显示（docs/display-contracts.md §2.3）。
+  // 「照样下发」以 L3 读到为前提：spawn 前只等 ensureCliDefaults 一个预算（app.js CLI_DEFAULTS_RESUME_BUDGET_MS），
+  // 超时或读失败时 cliDefaults 为空、effort 为 null，不传 --effort，由 CLI 自己读 settings（验收 O117）。
+  // 普通目录下 CLI 读到的与 resolveSettings 是同一份，实际档不变、只是命令行里看不到 --effort；linked worktree
+  // 不然——CLI 把 local 源解析到主 checkout（见 defaultsFromEffectiveSettings 头注），worktree 自己的
+  // settings.local.json 里的 effortLevel 这时不生效，落到的是主 checkout / user 层的档。
+  const effortSource = !effort ? 'default' : (hasPendingEffort ? 'user' : 'cli-settings');
 
-  return { mode, effort, ultracode, model: baseModel };
+  return { mode, effort, effortSource, ultracode, model: baseModel };
 }
 
 /**
  * RESUME 会话 effort 兜底链（resume 场景专用；FRESH 走 resolveFreshPrefs，不要混用）。
- * 权威源优先级：saved（sessions.json 持久值）> inherited（同 cwd 存活实例继承）> L3 CLI settings > null（L4）。
+ * 权威源优先级：saved（sessions.json 持久值）> L3 CLI settings > null（L4）。
+ *
+ * 【不再继承同目录别的实例】（验收 O56）：此前 saved 之后还有一层 inherited（同 cwd 末个存活实例的档）。
+ * 只在某个会话里临时选过一次 low，之后在这个文件夹里恢复的旧会话（自己从没选过档）全都带着 --effort=low
+ * 启动、服务端登记表还把 low 写回它们的 effort——一次临时选择悄悄扩散到同目录所有旧会话。终端 claude --resume
+ * 只看会话自己与 settings，不会拿别的会话的档；这里对齐它。
  *
  * 三层一律经 normalizeEffortLevel 归一——它把 null/undefined/''/非法档统一收作 null，这天然让
  * "显式记了 null"与"压根没记"在这条链里等价、一并继续往下兜底，不再被当成"已确定的终值"锁死。
@@ -325,16 +377,27 @@ export function resolveFreshPrefs({
  * 'auto' 不同：它是用户显式选的「模型内置默认」（CLI {kind:'default'}），持久化成 'auto' 字面量，
  * 在这条链里与具体档同样是终值。若折成 null 往下兜底，重启后会悄悄换成 settings 里存的档。
  *
+ * 来源（source）随取值的那一层带出：会话自己存的档按当初登记的来源，L3 是 'cli-settings'，
+ * 都没有是 'default'。登记为 'cli-settings' 的档不是谁选的，只是当时 settings 的值——settings 此刻
+ * 读得到就跟它（终端 claude --resume 也是每次现读 settings），读不到才沿用记下的档。没记来源的
+ * 旧条目按 'user' 处理，显示与改动前一致。
+ *
  * @param {object} opts
  * @param {string|null|undefined} [opts.savedEffort] sessions.json 持久值（saved?.effort，键不存在则 undefined）
- * @param {string|null|undefined} [opts.inheritedEffortValue] 同 cwd 存活实例继承档（inheritedEffort(cwd)）
+ * @param {string|null|undefined} [opts.savedEffortSource] sessions.json 里同时记下的来源（saved?.effortSource）
  * @param {{ effort?: string|null }|null} [opts.cliDefaults] L3 缓存（cliDefaultsByCwd.get(cwd) || null）
- * @returns {string|null}
+ * @returns {{ effort: string|null, source: 'user'|'cli-settings'|'default' }}
  */
-export function resolveResumeEffort({ savedEffort, inheritedEffortValue, cliDefaults = null } = {}) {
+export function resolveResumeEffort({ savedEffort, savedEffortSource, cliDefaults = null } = {}) {
   const keep = v => (v === 'auto' ? 'auto' : normalizeEffortLevel(v));
-  const saved = keep(savedEffort);
-  const inherited = keep(inheritedEffortValue);
-  const l3 = cliDefaults && 'effort' in cliDefaults ? normalizeEffortLevel(cliDefaults.effort) : null;
-  return saved ?? inherited ?? l3 ?? null;
+  const l3Known = Boolean(cliDefaults) && 'effort' in cliDefaults;
+  const l3 = l3Known ? normalizeEffortLevel(cliDefaults.effort) : null;
+  const fromL3 = () => (l3 ? { effort: l3, source: 'cli-settings' } : { effort: null, source: 'default' });
+  const tier = (value, source) => {
+    const v = keep(value);
+    if (!v) return null;
+    if (source !== 'cli-settings') return { effort: v, source: 'user' };
+    return l3Known ? fromL3() : { effort: v, source: 'cli-settings' };
+  };
+  return tier(savedEffort, savedEffortSource) ?? fromL3();
 }

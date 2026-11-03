@@ -118,10 +118,11 @@ export function shellOverriddenKeys(shellEnv, keys = []) {
 
 // 上面返回的是被压住的**配置键**（面板按它标行）；要让用户 unset 的是 shell 里**真正设着的变量名**。
 // 两者只在别名处不同：WORKDIRS 被 WORK_DIRS 压着时，`unset WORKDIRS` 什么也清不掉（2026-09-23 #152 review）。
+// 同名键与别名同时设着时全部列出：只报同名键，照着 unset 之后重启仍被别名压着（#230 review）。
 export function shellOverrideSources(shellEnv, keys = []) {
   const env = shellEnv && typeof shellEnv === 'object' ? shellEnv : {};
   const isSet = (k) => typeof env[k] === 'string' && env[k] !== '';
-  const names = shellOverriddenKeys(env, keys).flatMap((k) => (isSet(k) ? [k] : SHELL_OVERRIDE_ALIASES[k].filter(isSet)));
+  const names = shellOverriddenKeys(env, keys).flatMap((k) => [k, ...(SHELL_OVERRIDE_ALIASES[k] || [])].filter(isSet));
   return [...new Set(names)];
 }
 

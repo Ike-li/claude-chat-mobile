@@ -49,6 +49,98 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O76（AC-21-08）：手机宽度下顶栏「回首页」「会话日志」「新建会话」与抽屉按钮的可点范围只有 36×36，
+  // 而输入区的按钮都扩到了 44 以上。每个按钮的可点范围要到 44×44（视觉不变），且相邻按钮的热区不能互相压住。
+  test('P0-19e 手机顶栏按钮的可点范围到 44×44，且不压住相邻按钮', async ({ page }) => {
+    await gotoMock(page);
+    const ids = ['btnSessions', 'btnHome', 'btnConsole', 'btnNew'];
+    const report = await page.evaluate((list) => list.map(id => {
+      const btn = document.getElementById(id);
+      if (!btn || btn.offsetParent === null) return { id, visible: false };
+      const r = btn.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const hit = (x, y) => document.elementFromPoint(x, y)?.closest('button')?.id || null;
+      return {
+        id, visible: true,
+        // 按钮边框外 3px（44 的热区比 36 的按钮每边多 4px）
+        above: hit(cx, r.top - 3), below: hit(cx, r.bottom + 3),
+        left: hit(r.left - 3, cy), right: hit(r.right + 3, cy),
+      };
+    }), ids);
+    for (const r of report.filter(x => x.visible)) {
+      expect(r.above, `${r.id} 上沿外 3px 点不到它`).toBe(r.id);
+      expect(r.below, `${r.id} 下沿外 3px 点不到它`).toBe(r.id);
+      expect([r.id, null], `${r.id} 左边外 3px 落到了别的按钮上`).toContain(r.left);
+      expect([r.id, null], `${r.id} 右边外 3px 落到了别的按钮上`).toContain(r.right);
+    }
+    expect(report.filter(x => x.visible).length, '顶栏按钮一个都没找到').toBeGreaterThanOrEqual(3);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O98（AC-21-08）：输入框有字时发送键显出来，它的热区（DOM 在后、叠在上面）压住附件键右缘——
+  // 附件键右缘内 3px 处 elementFromPoint 命中的是 #btnSend，点附件键边缘会把消息发出去。
+  test('P0-19f 输入框有字时，附件键的右缘点得到附件键，不会误触发送', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.locator('#input').fill('有字了');
+    await expect(page.locator('#btnSend')).toBeVisible();
+    const r = await page.evaluate(() => {
+      const hit = (x, y) => document.elementFromPoint(x, y)?.closest('button')?.id || null;
+      const a = document.getElementById('btnAttach').getBoundingClientRect();
+      const s = document.getElementById('btnSend').getBoundingClientRect();
+      const ay = a.top + a.height / 2, sy = s.top + s.height / 2;
+      return {
+        attachRightInside: hit(a.right - 3, ay), attachLeftOutside: hit(a.left - 3, ay),
+        sendLeftInside: hit(s.left + 3, sy), sendRightOutside: hit(s.right + 3, sy),
+      };
+    });
+    expect(r.attachRightInside, '附件键自己的右缘点到了发送键').toBe('btnAttach');
+    expect(r.attachLeftOutside, '附件键左侧的扩展热区没了').toBe('btnAttach');
+    expect(r.sendLeftInside).toBe('btnSend');
+    expect(r.sendRightOutside, '发送键右侧的扩展热区没了').toBe('btnSend');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O99（AC-21-08）：消息操作按钮（复制 / 朗读 / 分叉 / 填入输入框）名义热区 44，实测只有 42——::after 以
+  // padding box 为基准、不含 1px 边框（同 O76 顶栏那次），32 高的按钮扩 6px 只到 30+12。
+  test('P0-19g 消息操作按钮的可点高度到 44', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:stream');
+    await waitForIdle(page);
+    const heights = await page.evaluate(() => [...document.querySelectorAll('.msg-action-btn')].map(b => {
+      const r = b.getBoundingClientRect(); const cx = r.left + r.width / 2;
+      const self = y => { const e = document.elementFromPoint(cx, y); return e === b || b.contains(e); };
+      let up = 0; while (up < 12 && self(r.top - up - 1)) up++;
+      let dn = 0; while (dn < 12 && self(r.bottom + dn)) dn++;
+      return { label: b.title, total: Math.round(r.height + up + dn) };
+    }));
+    expect(heights.length, '一个消息操作按钮都没找到').toBeGreaterThanOrEqual(2);
+    for (const h of heights) expect(h.total, `${h.label} 的可点高度`).toBeGreaterThanOrEqual(44);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O130（AC-21-08）：代码块右上角「复制」可点高度只有 43，靠下的几行点下去命中代码文字——同 O99：::after 以 padding
+  // box 为基准、不含 1px 边框，扩 6px 到不了 44。
+  test('P0-19h 代码块「复制」的可点高度到 44', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:stream');
+    await expect(page.locator('[data-testid="assistant-message"]').last().locator('pre code')).toContainText('tester', { timeout: 20_000 });
+    await waitForIdle(page);
+    const heights = await page.evaluate(() => [...document.querySelectorAll('.code-copy-btn')].map(b => {
+      const r = b.getBoundingClientRect(); const cx = r.left + r.width / 2;
+      const self = y => { const e = document.elementFromPoint(cx, y); return e === b || b.contains(e); };
+      let up = 0; while (up < 12 && self(r.top - up - 1)) up++;
+      let dn = 0; while (dn < 12 && self(r.bottom + dn)) dn++;
+      return Math.round(r.height + up + dn);
+    }));
+    expect(heights.length, '一个代码块「复制」都没找到').toBeGreaterThanOrEqual(1);
+    for (const h of heights) expect(h, '代码块「复制」的可点高度').toBeGreaterThanOrEqual(44);
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-19b 窄屏和横屏下权限审批 sheet 按钮可达', async ({ page }) => {
     await gotoMock(page);
 
@@ -109,7 +201,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       await closeSettings(page);
       await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
 
-      // 通用设置两级化后 L1 目录只有六行、滚不动；内容最长、底部控件最容易被顶出视口的是
+      // 通用设置两级化后 L1 目录只有七行；内容最长、底部控件最容易被顶出视口的是
       // 「通知」页（推送状态 + 四个开关 + 两个试一下按钮）。
       await openGeneralPage(page, 'notify');
       await page.locator('#generalSheetBody').evaluate(el => { el.scrollTop = el.scrollHeight; });
@@ -127,6 +219,85 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       await expect(page.locator('#consoleModal')).toBeHidden();
     }
 
+    await expectNoBrowserErrors(page);
+  });
+
+  // #359 第 1 项：768–1023（平板竖屏、桌面窄窗）与 ≥1024 下，消息流以前整列贴边拉满、composer 却居中 672px，
+  // 上下基线错开。#messages 自己仍铺满（滚动条留在列的最右），只把每条消息的阅读宽度收到与 composer 内层一致。
+  test('P0-19i 平板与桌面：消息与 composer 同宽居中，消息区本身仍铺满整列', async ({ page }) => {
+    for (const viewport of [{ width: 900, height: 900 }, { width: 1280, height: 800 }]) {
+      await page.setViewportSize(viewport);
+      await gotoMock(page);
+      await sendChatMessage(page, 'test:stream');
+      await waitForIdle(page);
+      const m = await page.evaluate(() => {
+        const box = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width }; };
+        const composer = box(document.querySelector('#composerFooter > .max-w-2xl'));
+        const messages = box(document.getElementById('messages'));
+        const header = box(document.querySelector('header'));
+        const rows = [...document.getElementById('messages').children]
+          .filter(el => el.getClientRects().length && getComputedStyle(el).position !== 'absolute')
+          .map(box);
+        return { composer, messages, header, rows };
+      });
+      expect(m.rows.length, `${viewport.width}px 下消息流里没有可见的行`).toBeGreaterThan(0);
+      expect(Math.abs(m.messages.right - m.header.right), `${viewport.width}px 下消息区没有铺到列的最右（滚动条会跑到中间）`).toBeLessThan(2);
+      const center = (b) => (b.left + b.right) / 2;
+      for (const row of m.rows) {
+        expect(row.width, `${viewport.width}px 下有一行比 composer 宽`).toBeLessThanOrEqual(m.composer.width + 1);
+        expect(Math.abs(center(row) - center(m.composer)), `${viewport.width}px 下有一行没和 composer 对齐居中`).toBeLessThan(2);
+      }
+    }
+    await expectNoBrowserErrors(page);
+  });
+
+  // #359 第 2 项：桌面上侧栏常驻，但审批 / 提问 sheet 是 fixed inset-0 的遮罩——移动端靠 body.nav-escape 把侧栏抬到
+  // 遮罩之上，桌面那段 z-index:10 !important 把它压死了，挂着审批时连切会话都点不到。桌面改成这类 sheet 从侧栏右边开始。
+  test('P0-19j 桌面挂着审批时，常驻侧栏仍点得到，审批按钮也没被侧栏盖住', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:permission');
+    await expect(page.locator('#permModal')).toHaveClass(/sheet-open/);
+    // 防误触期（UX-003）内按钮本就 disabled + pointer-events:none，命中测试要等它过去
+    await expect(page.locator('#permModal')).not.toHaveClass(/sheet-arming/);
+    await expect(page.locator('#permAllow')).toBeEnabled();
+    const hit = await page.evaluate(() => {
+      const at = (el, x = 0.5) => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.left + Math.max(4, r.width * x), r.top + r.height / 2); };
+      const sidebarTarget = document.querySelector('#leftSidebar [data-testid="session-row"]') || document.getElementById('leftSidebar');
+      return {
+        sidebar: Boolean(at(sidebarTarget)?.closest('#leftSidebar')),
+        deny: at(document.getElementById('permDeny'), 0)?.id === 'permDeny',
+        allow: at(document.getElementById('permAllow'))?.id === 'permAllow',
+      };
+    });
+    expect(hit.sidebar, '侧栏被审批遮罩盖住了').toBe(true);
+    // 「拒绝」在面板最左：若改成抬高侧栏 z-index，被侧栏盖住的就是它的左半截（所以测左缘，不测中心）
+    expect(hit.deny, '「拒绝」被盖住了').toBe(true);
+    expect(hit.allow, '「允许」被盖住了').toBe(true);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 同上，MCP 表单 / 授权卡（#460）也是「等你答复」那类 sheet，同样不能把常驻侧栏压在遮罩底下
+  test('P0-19k 桌面挂着 MCP 表单卡时，常驻侧栏仍点得到，表单也没被侧栏盖住', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:elicitation-form');
+    await expect(page.locator('#elicitationModal')).toHaveClass(/sheet-open/);
+    await expect(page.locator('#elicitationModal')).not.toHaveClass(/sheet-arming/);
+    const hit = await page.evaluate(() => {
+      const at = (el, x = 0.5) => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.left + Math.max(4, r.width * x), r.top + r.height / 2); };
+      const sidebarTarget = document.querySelector('#leftSidebar [data-testid="session-row"]') || document.getElementById('leftSidebar');
+      const nameInput = document.querySelector('[data-testid="elicitation-field-name"] input');
+      return {
+        sidebar: Boolean(at(sidebarTarget)?.closest('#leftSidebar')),
+        // 输入框铺满面板宽度，被侧栏盖住的会是它的左半截。它常在视口折线以下（表单比审批卡高），
+        // elementFromPoint 打不到，所以比几何：左缘不得落在侧栏右缘以左
+        nameLeft: nameInput.getBoundingClientRect().left,
+        sidebarRight: document.getElementById('leftSidebar').getBoundingClientRect().right,
+      };
+    });
+    expect(hit.sidebar, '侧栏被 MCP 卡的遮罩盖住了').toBe(true);
+    expect(hit.nameLeft, '表单输入框的左半截被侧栏盖住了').toBeGreaterThanOrEqual(hit.sidebarRight);
     await expectNoBrowserErrors(page);
   });
 });

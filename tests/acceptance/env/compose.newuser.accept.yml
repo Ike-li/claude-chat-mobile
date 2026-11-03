@@ -1,0 +1,44 @@
+# tests/acceptance/env/compose.newuser.accept.yml —— 验收用覆盖层：E3 newuser（真 claude CLI）lan / proxy / cf
+#
+# 叠在被测检出的 tests/infra/newuser/docker-compose.yml 之上，项目名 ccm-accept-nu。命令由 env/up.mjs 拼：
+#   node tests/acceptance/env/up.mjs --env E3[,E3proxy,E3cf] [--target <被测检出>]   # 缺省只打印命令
+# up.mjs 先在 os.tmpdir() 下新建运行目录，用 local/ 生成 claude 的 settings 文件，再调被测检出的
+# prepare.mjs --settings 生成分发包与假边缘；--env-file 指向那个运行目录里的 compose.env。
+#
+# 与基础 compose 的差别只有三处：
+#   1. 独立镜像 tag（:accept），CLI 版本钉到 local/config.json 的 e3.claudeCodeVersion（应与宿主机一致）
+#   2. 端口只绑本机回环（基础 compose 绑全部网卡），端口号可由 local/config.json 改；
+#      command 跟着改，是因为 entrypoint 的第二个参数会写进 PUBLIC_URL，两边必须是同一个端口
+#   3. 多一个 ntfy 截获端 sink。E3 的 NTFY_URL 不走环境变量：要测推送时在容器里
+#      node scripts/config.js set NTFY_URL=http://sink:8090 NTFY_TOPIC=accept-probe（写在容器卷里，down -v 即清）
+x-accept-image: &accept-image
+  image: claude-chat-mobile-newuser:accept
+  build:
+    args:
+      CLAUDE_CODE_VERSION: ${CCM_ACCEPT_CLAUDE_CODE_VERSION:-latest}
+
+services:
+  lan:
+    <<: *accept-image
+    command: ["bash", "/newuser/entrypoint.sh", "lan", "${CCM_ACCEPT_PORT_E3:-13001}"]
+    ports: !override
+      - "127.0.0.1:${CCM_ACCEPT_PORT_E3:-13001}:3000"
+  proxy:
+    <<: *accept-image
+    command: ["bash", "/newuser/entrypoint.sh", "reverse-proxy", "${CCM_ACCEPT_PORT_E3_PROXY:-13003}"]
+    ports: !override
+      - "127.0.0.1:${CCM_ACCEPT_PORT_E3_PROXY:-13003}:8080"
+  cf:
+    <<: *accept-image
+    command: ["bash", "/newuser/entrypoint.sh", "cloudflare", "${CCM_ACCEPT_PORT_E3_CF:-13004}"]
+    ports: !override
+      - "127.0.0.1:${CCM_ACCEPT_PORT_E3_CF:-13004}:8081"
+  sink:
+    image: claude-chat-mobile-newuser:accept
+    pull_policy: never
+    init: true
+    healthcheck: !reset null
+    command:
+      - node
+      - -e
+      - "require('http').createServer((q,s)=>{let b='';q.on('data',d=>b+=d);q.on('end',()=>{console.log(JSON.stringify({t:new Date().toISOString(),m:q.method,u:q.url,title:q.headers['title']||q.headers['x-title']||null,h:q.headers,b}));s.end('ok')})}).listen(8090,()=>console.log('sink up'))"

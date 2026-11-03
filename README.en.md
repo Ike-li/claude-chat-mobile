@@ -13,6 +13,7 @@
   <a href="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml"><img src="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
+  <a href="https://deepwiki.com/Ike-li/claude-chat-mobile"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
 > The screenshots below show the Chinese UI. The app ships with an English locale too — switch it in Settings.
@@ -38,7 +39,7 @@
 
 * **It drives the same `claude` you use on your computer.** Your local `claude` CLI, through the Agent SDK: the same CLAUDE.md, MCP servers, skills, login and permission rules. The goal is that anything you can do in the terminal, you can do from the phone.
 * **It works where official Remote Control can't.** Relays, third-party gateways, API keys, non-Anthropic models, Bedrock / Vertex, telemetry disabled: however your `claude` is configured, that is what it uses.
-* **Every session is already there.** All sessions in your allowlisted workspaces can be viewed and resumed: ones started in the terminal, last week's, ones you never turned remote access on for.
+* **Every session is already there.** All sessions in your connected folders can be viewed and resumed: ones started in the terminal, last week's, ones you never turned remote access on for.
 * **The control plane stays on your machine.** Server, transcripts, device trust and audit logs all live on your computer, fully self-contained on a LAN, with no account to sign up for.
 
 ## What you do in the terminal, and how it works on the phone
@@ -48,18 +49,18 @@ Walking away from the desk, the fear isn't losing sight of the output — it's t
 | In the terminal | On the phone |
 | --- | --- |
 | **Tool approval** (y / n) | An approval card: Allow / Deny / **Interrupt turn** (mirrors `Esc`). Tick "always allow" and pick this session only, or permanently |
-| **It asks you something** (`AskUserQuestion`) | Tap the option. Multi-select, a free-form "Other…", and "skip and interrupt turn" are all there |
+| **It asks you something** (`AskUserQuestion`) | Tap the option. Multi-select and a free-form "Other…" are there; "Don't answer" lets it carry on, "Interrupt turn" stops it |
 | **Did it finish, or is it stuck?** | Pushed to your lock screen. Approvals, questions and background-task completions are pushed **unconditionally**, whether or not you have it open |
 
 The rest is about getting work done:
 
 | In the terminal | On the phone |
 | --- | --- |
-| `claude` for a new session / `--resume` to dig through history | `+` in the top bar: pick the workspace, the branch, whether to open it in a fresh worktree. The drawer lists every session in that workspace — titles generated for you, searchable, live ones marked "running" |
+| `claude` for a new session / `--resume` to dig through history | `+` in the top bar: pick the folder (add or create one right on the phone, or choose "No folder"), the branch, whether to open it in a fresh worktree. The drawer lists every session by project — subfolders get their own section, worktrees sit under their repository — titles generated for you, searchable, live ones marked "running" |
 | `Esc` to interrupt | Stop button in the composer |
 | `/model`, permission mode, effort | Tap the composer chip; takes effect from the next message. All six permission modes |
-| `@` to reference a file | Type `@` to search the workspace and insert the path |
-| `/` slash commands | Type `/` for candidates, including the skills you installed |
+| `@` to reference a file | Type `@` to search the workspace and insert `@path` (same as the terminal; the CLI attaches the file contents) |
+| `/` slash commands | Type `/` for candidates, including the skills you installed, each with its description and argument hint; works in a new workspace before the first message |
 | Seeing what it actually changed | Open a tool card to preview the diff; each turn ends with a changed-files summary (± lines) |
 | A quick `git diff` | The "Changes" tab in the workspace panel |
 | Rewind or branch off | Type `/rewind` — two steps, as in the terminal: pick the turn to go back before, then restore the code and conversation, the conversation only, or the code only. Anything that touches the conversation forks a new session from that moment; the original survives. To just branch off, tap **Fork** under a reply (a reply that has just streamed in gets the button once you reopen the session): it copies the conversation only, leaving files alone |
@@ -77,7 +78,7 @@ Also: image upload and screenshot paste, event catch-up after a reconnect, PWA i
 | --- | --- | --- |
 | **Model path** | Requires a claude.ai sign-in and a direct connection to `api.anthropic.com`. API keys, Bedrock / Google Agent Platform / Microsoft Foundry, an `ANTHROPIC_BASE_URL` pointing elsewhere, telemetry switches like `DISABLE_TELEMETRY`, ZDR organizations — any one of these rules it out entirely | Whatever your `claude` CLI is configured with — third-party gateway / API key / Bedrock / Vertex / telemetry disabled all work |
 | **Control-plane data** | Session transcripts are stored on Anthropic's servers for cross-device sync | Service, transcripts, device trust and audit logs all stay on your machine; fully self-contained on a LAN |
-| **What you can see** | Only sessions you explicitly enabled Remote Control on (or new ones once auto-connect is on); `/resume` is terminal-only, so you cannot browse session history from a phone | **Every** session in your allowlisted workspaces — started in a terminal, left over from last week, all visible and resumable |
+| **What you can see** | Only sessions you explicitly enabled Remote Control on (or new ones once auto-connect is on); `/resume` is terminal-only, so you cannot browse session history from a phone | **Every** session in your connected folders — started in a terminal, left over from last week, all visible and resumable |
 | **Driving one session from both ends** | Yes — send from terminal, web or phone interchangeably | **No** — single-driver model; the web side must explicitly take over, and that can fork the session |
 | **Deployment cost** | None | You run a server yourself |
 
@@ -115,6 +116,8 @@ The phone is only a **remote control plane**. What actually executes code, reads
 
 **One boundary worth knowing**: a live session has exactly one driver at a time. While the terminal is driving, the Web side is read-only by default; you can explicitly resume from the Web, but that may fork the session. The two never type into the same live Claude process at once.
 
+Before leaving the computer, `/exit` the session in the terminal; when you are back, reopen it with `claude -c` or `claude --resume`. A terminal left open does not know what you said on the phone. If it writes anything or exits later, the next resume continues from its branch, and the phone segment is not in the model's context. If that happens, you are asked before sending: fork a new session that keeps the phone segment, or send anyway.
+
 Dual path, event sync, session takeover: **→ [Architecture guide](docs/architecture.en.md)**
 
 ## Remote access
@@ -136,8 +139,8 @@ The setup wizard asks how your phone will reach this machine; the answer is stor
 
 1. **Single user.** There is no multi-user or tenant isolation; an authenticated operation carries the permissions of the local account running `claude`.
 2. **No token, no server.** `AUTH_TOKEN` is a startup prerequisite under every bind mode — even a browser on this machine needs it. There is no "local means no auth" path.
-3. **Workspaces are explicitly allowlisted.** Files, sessions and related operations can only reach the configured `WORKDIRS`. Do not add your whole home directory for convenience.
-4. **New devices need trust.** Except for local connections and those already validated by the optional public identity layer (currently Cloudflare Access), a device holding the correct token still needs one approval. Note: **when Access is on it replaces device approval**, so the trust list does not govern connections arriving through it; set `DEVICE_APPROVAL_SCOPE=all` to make approval apply to every path.
+3. **Work stays inside connected folders.** Files, sessions and related operations can only reach the folders in `WORKDIRS`, their subfolders, and those repositories' own git worktrees; "No folder" sessions run in a throwaway directory the app creates. Folders can be added from the phone, but not your home folder itself, the disk root, or `~/.claude`. The wider you connect, the more your phone can reach: connect something as broad as `~/code` and every project inside it is in reach.
+4. **New devices need trust.** Except for direct connections with a local-looking Host and those already validated by the optional public identity layer (currently Cloudflare Access), a device holding the correct token still needs one approval. Two caveats: **when Access is on it replaces device approval**, so the trust list does not govern connections arriving through it; and **the local check reads the Host header, which the client writes**, so under plain TCP forwarding (`ssh -R`, frp tcp) a remote client can send `Host: localhost` and pass as local. Set `DEVICE_APPROVAL_SCOPE=all` to make approval apply to every path.
 5. **Claude Code permissions are inherited.** Existing rules such as `permissions.allow` stay in effect; review your automatic Bash / Write approvals before public use.
 6. **The file editor is a direct write.** It **does not pass through the Agent tool-approval chain** (it does enforce scope checks, a size limit, content-hash conflict detection and audit logging). Set `FILE_EDIT=off` to disable it; turning it off is recommended for long-term public exposure.
 

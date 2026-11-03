@@ -127,6 +127,23 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O23（AC-17-03）：措辞早按来源分了档，告警行却三档都红。本机来源的锁定多半是自己的旧 token，
+  // 判黄；公网与说不清来源的仍红（上一条 P0-22c 就是说不清来源那一档）。
+  test('P0-22c2 本机来源的限速锁定：告警行判黄、措辞说是本机，不再与公网一样标红', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:service-incidents-local');
+    await waitForIdle(page);
+
+    await openGeneralPage(page, 'host');
+    await page.locator('#btnServiceStatus').click();
+    const body = page.locator('#serviceStatusBody');
+    await expect(body).toContainText('登录限速锁定于 42 分钟前（累计 2 次）——来自本机 127.0.0.1');
+    await expect(body.locator('.text-warning', { hasText: '登录限速锁定于' })).toBeVisible();
+    await expect(body.locator('.text-danger', { hasText: '登录限速锁定于' })).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // 安全日志段（2026-09-02）：告警段说「发生过限速锁定」，这一段回答「是谁」。
   // 实测遇到的两次锁定来源都是 ip:127.0.0.1（自己的旧 token），而告警文案当时无条件写
   // 「可能有人在暴力尝试你的入口」——这条用例把「来源分档 → 措辞与判色都跟着变」钉死。

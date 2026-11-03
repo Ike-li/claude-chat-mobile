@@ -79,3 +79,39 @@ test.describe('ensureBranches：切工作区时的竞态', () => {
     assert.equal(s.currentBranch, 'b-main');
   });
 });
+
+// 【源分支只属于「勾了 worktree」这一个决定】没勾时会话开在主工作树、就是仓库当前分支，
+// 胶囊必须如实显示它（2026-10-10 真机：不勾时选了 feat，胶囊一直写 feat，会话却开在 main）。
+// UI 侧靠「不勾时胶囊禁用」挡住直接选；这里钉的是另一条路：勾上→换分支→取消。
+// 取消后若还留着旧选择，胶囊照样显示一个不会生效的分支，再勾上时又悄悄恢复它。
+test.describe('取消勾选：源分支回到跟随当前分支', () => {
+  async function loaded() {
+    const h = harness();
+    const p = h.wt.ensureBranches('/repo');
+    h.sent[0].cb(okBranches(['main', 'feat'], 'main'));
+    await p;
+    return h.wt;
+  }
+
+  test('勾上→换到 feat→取消：胶囊退回 main，发出的消息不带意图', async () => {
+    const wt = await loaded();
+    wt.setEnabled(true);
+    wt.setSourceBranch('feat');
+    assert.deepEqual(wt.newSessionArgs(), { useWorktree: true, sourceBranch: 'feat' });
+
+    wt.setEnabled(false);
+    assert.equal(wt.snapshot().sourceBranch, 'main',
+      '取消勾选后胶囊仍显示 feat —— 会话实际开在 main 的主工作树，界面在说谎');
+    assert.deepEqual(wt.newSessionArgs(), {});
+  });
+
+  test('取消后再勾上：从当前分支起，不悄悄恢复上一次选的 feat', async () => {
+    const wt = await loaded();
+    wt.setEnabled(true);
+    wt.setSourceBranch('feat');
+    wt.setEnabled(false);
+    wt.setEnabled(true);
+    assert.deepEqual(wt.newSessionArgs(), { useWorktree: true, sourceBranch: 'main' },
+      '重新勾选恢复了旧的源分支 —— 用户在两次勾选之间看到的一直是 main');
+  });
+});

@@ -1,19 +1,25 @@
 // history.js —— 读取 CLI 会话历史用于前端展示（方案 2）
 // CLI 历史文件：~/.claude/projects/<project>/<session_id>.jsonl
-import { open, stat, readdir, readFile } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { stat, readdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo, getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
-import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT, managedWorktreeRoot } from './workdirs.js';
+import { MAX_SESSION_LIMIT, BROWSE_HARD_LIMIT, managedWorktreeRoot } from './workdirs.js';
+import { listLinkedWorktrees } from './folder-access.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
-import { toolSummary } from '../shared/tool-summary.js';
+import { toolSummary, toolResultCap, widgetPayload } from '../shared/tool-summary.js';
+// 会话里的图片只出引用（{ref, mediaType, bytes}），图本身走鉴权的 image:get 按需取，判据与 live 侧共用。
+import { imageRefsOf, toolImageRef, userImageRef, stripImageBlocks } from '../shared/transcript-image.js';
 // 本地 slash 命令输出的解析口径同样与 live 侧（agent.js）共用，防两边形态漂移。
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
 import { setCapped } from '../shared/bounded-map.js';
-import { encodeProjectDir } from '../shared/project-dir.js';
+import { encodeProjectDir, projectDirDescendantPrefix } from '../shared/project-dir.js';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
+// 本模块打开 ~/.claude/projects 下的文件一律走这两个：O_NONBLOCK 打开、只认普通文件，FIFO 不再卡死读盘线程。
+import { openRegularFile, readRegularText } from '../shared/regular-file.js';
+import { scanJsonl } from '../shared/jsonl-scan.js';
 
 // 快路径注入口（仅测试用）：测试替置一个函数后，快路径走替身而非真 SDK，便于无网络/无 CLI 环境下
 // 验证字段映射与 hasMore 语义。生产留默认 undefined → 走真 sdkListSessions。
@@ -33,6 +39,8 @@ const CLAUDE_DIR = CLAUDE_PROJECTS_DIR;
 // 正常会话（几百条内）全量返回——与 CLI /resume 的完整历史一致（终端等价性）。不再按字节截断头部。
 export const HISTORY_MAX_MESSAGES = 2000;
 const HEAD_READ_BYTES = 64 * 1024;  // 列表元数据（标题/模型/来源）只需文件头部少量字节
+// 首条消息作搜索键只留前这么多字：meta 按文件缓存（最多 HEAD_META_CACHE_CAP 条），原文全留着最坏常驻几百 MB（#333 review）
+const FIRST_USER_KEY_CHARS = 1000;
 // CLI 把 ai-title 流式追加到「标题生成完成时」的字节位置——首轮工具/思考很重的长会话里常 > 64KB 头窗。
 // 头窗没抓到 ai-title 时补读文件尾部这一段取最新 ai-title（实测最坏「最后一个 ai-title 距文件尾」330KB，512KB 有余量）。
 const TAIL_READ_BYTES = 512 * 1024;
@@ -44,13 +52,22 @@ const LIST_LIMIT = MAX_SESSION_LIMIT;
 // 64KB 足够覆盖「末条消息 + 其后一串元数据」。比 TAIL_READ_BYTES(512KB) 更轻，因列表要对目录内每个会话读一次。
 const LIST_ACTIVITY_TAIL_BYTES = 64 * 1024;
 
-// B2：listSessions 结果按 dir 缓存，4s TTL。重复打开列表不重扫盘。
-const _listCache = new Map(); // dir → { ts, result }
-const LIST_CACHE_TTL = 4000;
+// B2：listSessions 结果按 dir 缓存，按目录内容指纹失效（见 listFingerprint）。重复打开列表不重扫盘。
+const _listCache = new Map(); // cacheKey → { fingerprint, result, expiresAt }
+// SDK 抛错时回落的降级结果（缺 SDK 标题：自造扫盘不读旁路标题，搜索也少了 summary 这个匹配键）不能只按指纹存——
+// SDK 恢复了而目录没变，就会一直给降级结果。它沿用改指纹前的 4s 年龄窗，SDK 一直坏时的开销与那时相同。
+const DEGRADED_LIST_TTL = 4000;
 
 // B6：getSessionHistory 结果按文件路径缓存，按 mtimeMs 失效。切回同一会话无需重新读盘。
 const _histCache = new Map(); // filePath → { mtimeMs, size, messages }（失效判据见 getSessionHistory 的 B6）
 const HIST_CACHE_MAX = 10;
+// 在建的那一次：filePath → { mtimeMs, size, promise }。建完即删，不设上限（同时在建的就那么几个）。
+const _histInflight = new Map();
+// 4a：上次解析到哪、解析出的状态。filePath → { ino, size, offset, state, track }，见 extendHistory。
+// 存的是未精裁的 reducer 状态（最多 2×HISTORY_MAX_MESSAGES 条 + 去重表），比 B6 那份重，表也开得小：
+// 实测一项比只进 B6 多常驻约 2.6MB（54.5MB、2.1 万行那份，去重表随行数长）/ 0.7MB（300.8MB、1.3 万行），2026-10-31。
+const _histIncremental = new Map();
+const HIST_INCREMENTAL_MAX = 4;
 
 // 根据 cwd 推断项目目录名。编码规则见 src/shared/project-dir.js（与 CLI/SDK 逐字节对齐的唯一实现）。
 // cwd 须先经 realpath 规范化（src/server/app.js 的 preflight 启动期做），才与 CLI 的 ~/.claude/projects 命名一致（如 /tmp→/private/tmp）。
@@ -87,6 +104,8 @@ export function isSafeSessionId(id) {
 //   ⑤ 再按 message.id 把并行工具调用的兄弟条目、以及挂在它们下面的 tool_result 补回来。
 // 2026-09-18 我自己先猜过一版单链回溯，①⑤ 两步都漏掉：并行工具那一支整条不见（79 个会话的
 // 对照里 34 个有缺口）。
+// ⚠️ ②③ 在 0.3.283 改过：非 progress 的条目（含 system 行）都能当末端，从物理最靠后的往回找。
+// 两种规则各有选错叶的形态，getSessionHistory 里「SDK 选的叶子不是用户最后看到的那条」那道保护兜底。
 // ⚠️ 但 ① 的「缝合」只把 compactMetadata 点名的那几条接回链上，**压缩之前的其余历史仍然不在
 // 返回里**——当时把「compact 过的会话被砍到只剩 3 条（实测 1284 → 3）」一并归因为自己漏了 ①，
 // 是错的：同一个会话（1ee3b415）换成官方算法实测返回 4 条，3 → 4，问题从未被解决。
@@ -121,16 +140,28 @@ async function readLiveChainUuids(sessionId, cwd, baseDir) {
 //
 // 输出条目：文本 {role,content,timestamp} | tool_use {kind,toolUseId,name,inputSummary,...} |
 // tool_result {kind,toolUseId,ok,outputSummary,...}。前端 loadHistory 据此重建 toolcard。
-export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESSAGES, { baseDir = CLAUDE_DIR } = {}) {
-  if (!isSafeSessionId(sessionId)) return []; // SS-003：非法 id 不拼路径
+export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESSAGES, opts = {}) {
+  return (await readSessionHistory(sessionId, cwd, limit, opts)).messages;
+}
+
+// 同 getSessionHistory，另带削顶前一共有多少条（total）。削顶本身是防爆、不改；只是削了要报数——
+// 不报的话前端只能说「加载了 2000 条历史消息」，读起来像全部，用户以为会话就从这里开始（验收 O44）。
+export async function getSessionHistoryWithTotal(sessionId, cwd, opts = {}) {
+  return readSessionHistory(sessionId, cwd, HISTORY_MAX_MESSAGES, opts);
+}
+
+const NO_HISTORY = Object.freeze({ messages: [], total: 0 });
+
+async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR } = {}) {
+  if (!isSafeSessionId(sessionId)) return NO_HISTORY; // SS-003：非法 id 不拼路径
   const projectDir = getProjectDir(cwd);
   const historyFile = join(baseDir, projectDir, `${sessionId}.jsonl`);
 
-  let mtimeMs, size;
+  let mtimeMs, size, ino;
   try {
-    ({ mtimeMs, size } = await stat(historyFile));
+    ({ mtimeMs, size, ino } = await stat(historyFile));
   } catch {
-    return []; // 文件不存在：新会话或已删
+    return NO_HISTORY; // 文件不存在：新会话或已删
   }
 
   // B6：mtime + size 双判据都未变 = 内容未变，直接返回缓存。缓存的是封顶到 HISTORY_MAX_MESSAGES 的
@@ -155,160 +186,373 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
     // 真 LRU：命中后移到 Map 末尾，避免热会话被冷扫挤掉
     _histCache.delete(historyFile);
     _histCache.set(historyFile, cached);
-    return cached.messages.slice(-limit);
+    return { messages: cached.messages.slice(-limit), total: cached.total, timing: { cache: 'hit' } };
+  }
+
+  // 同一份文件（mtime + size 同上）已经有一次在建：等它的结果，不再从头求链、读一遍（求链是 SDK 自己把整份
+  // transcript 读一遍，大会话上几百毫秒）。文件变了的不并——在建那次读的是旧内容。2026-10-31 性能改造 3d。
+  const inflight = _histInflight.get(historyFile);
+  if (inflight && inflight.mtimeMs === mtimeMs && inflight.size === size) {
+    const built = await inflight.promise;
+    return built === NO_HISTORY ? NO_HISTORY : { messages: built.messages.slice(-limit), total: built.total, timing: { cache: 'shared' } };
+  }
+  const unit = { mtimeMs, size, promise: buildSessionHistory(sessionId, cwd, baseDir, historyFile, { mtimeMs, size, ino, chainSourceAvailable }) };
+  _histInflight.set(historyFile, unit);
+  let built;
+  try {
+    built = await unit.promise;
+  } finally {
+    if (_histInflight.get(historyFile) === unit) _histInflight.delete(historyFile); // 期间文件变了、被新一次顶掉的不删别人的
+  }
+  return built === NO_HISTORY ? NO_HISTORY : { messages: built.messages.slice(-limit), total: built.total, timing: built.timing };
+}
+
+// 缓存没命中时建一次回显，结果进 _histCache。返回不按 limit 切的整份（并进来的调用各按自己的 limit 切）。
+async function buildSessionHistory(sessionId, cwd, baseDir, historyFile, { mtimeMs, size, ino, chainSourceAvailable }) {
+  // timing 随 session:history 回执带给前端（2026-10-31 性能改造 Stage 0）：慢在求链、解析，
+  // 还是没吃上缓存，机主导出的手机日志里分得清。
+  const t0 = Date.now();
+
+  // 4a：上次读到哪还记着、文件只往后长了一截，就只解析新长的那截，不再求链、不重读整份。接不上的一律走下面的全量。
+  // 先从表里取出来再改：同一份状态不让两次在建各改一半（接不上时它已经改坏了，直接丢掉）。
+  const prev = _histIncremental.get(historyFile);
+  _histIncremental.delete(historyFile);
+  if (prev && await extendHistory(historyFile, prev, { size, ino })) {
+    setCapped(_histIncremental, historyFile, prev, HIST_INCREMENTAL_MAX);
+    const { messages: all, total } = prev.state;
+    const messages = all.slice(-HISTORY_MAX_MESSAGES); // 状态里的数组下次还要接着长，交出去和进缓存的是副本
+    setCapped(_histCache, historyFile, { mtimeMs, size, messages, total, unfiltered: false }, HIST_CACHE_MAX);
+    return { messages, total, timing: { cache: 'incremental', parseMs: Date.now() - t0 } };
   }
 
   // 当前链的 uuid 集合。放在缓存判定【之后】：文件没变链就没变，命中缓存时连这次读盘也省掉。
   const liveUuids = await readLiveChainUuids(sessionId, cwd, baseDir);
+  const chainMs = Date.now() - t0;
 
-  const messages = [];
-  // 同 uuid 去重：真实 transcript 存在「interrupt+queue 竞态导致同一消息重复落盘」（同 uuid 写两次）→
-  // 回显成重复气泡（实证 234 会话中 1 个含 8 条）。uuid 是每条唯一标识，同 uuid = 同一逻辑消息（非合法重复），
-  // 按 uuid 去重安全——合法重复内容（两次「继续」）是不同 uuid、不误删。Set 为本次读取的瞬时结构（返回即释放）。
-  const seenUuids = new Set();
-  // 主链最近 Agent/Task toolUseId：sidechain 行常无 parent_tool_use_id 落盘，靠此挂到折叠卡
-  let lastMainAgentToolId = null;
-  // 当前链是否已经开始（读到第一条命中 liveUuids 的主链消息）。在那之前的主链消息一律保留：
-  // 它们不在集合里只说明「已被移出模型上下文」（compact），不说明「已被撤销」（rewind）。
-  let chainStarted = false;
-  // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
-  // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
-  // 「always-on 要稳」的目标。超 2× 才批量 splice → 均摊 O(1)、不每条 shift。
-  const pushCapped = (item) => {
-    messages.push(item);
-    if (messages.length > HISTORY_MAX_MESSAGES * 2) {
-      messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
-    }
-  };
+  let read;
   try {
-    // 逐行读、不一次性 buffer 整个文件——会话可增长到数十 MB，流式读才稳、不阻塞事件循环
-    // （取代原「尾部 1MB」截断方案）。累积数组下方封顶到 HISTORY_MAX_MESSAGES，内存不随会话无限增长。
-    const rl = createInterface({
-      input: createReadStream(historyFile, { encoding: 'utf-8' }),
-      crlfDelay: Infinity
-    });
-    for await (const line of rl) {
-      if (!line.trim()) continue;
-      let entry;
-      try { entry = JSON.parse(line); } catch { continue; } // 末行可能是写入中途的半行 → 跳过
-
-      // 跳过 meta 条目（local-command 输出等）
-      if (entry.isMeta) continue;
-
-      // 当前链【开始之后】不在链上的主链消息 = 被 /rewind 撤销的分支，CLI 自己也不再显示它们。
-      // 只筛 user/assistant：type:'system' 的本地命令输出不在 SDK 的返回里，一并筛会把它们全删掉。
-      // sidechain 也豁免——子 agent 的 uuid 不挂主链，按 live 过滤会误删整棵折叠卡。
-      //
-      // 【为什么要等链开始】liveUuids 表达的是「还在模型上下文里」，compact 会把边界之前的整段
-      // 移出上下文却一行不删——那段记录仍属于这个会话，用户仍该看到（抽屉里这条会话的标题就取自
-      // 开头那段）。不等的话它们会被当成废弃分支一起剪掉：真机 349 个会话里 16 个压缩过，13 个
-      // 丢了开头，最狠的 1284 条只剩 3 条（1ee3b415，标题还挂着开头那句话）。
-      // 边界之前若也 rewind 过，那段废弃分支会重新露面——与本模块既有取舍同向（见 readLiveChainUuids
-      // 的 fail-open）：少显示历史是静默的，多显示几条废弃分支是看得见的。
-      // 【已知窗口，有意不修】compactMetadata 点名保留的 uuid 物理上位于边界之前（实测 preservedSegment
-      // 的 head/anchor/tail 都是边界前那几条），会让这里提前认定「链已开始」，于是它到边界之间那一小段
-      // 仍按当前链剪。全量实测 16 个压缩会话共 3 条，且全部是触发压缩的 `/compact` 命令行本身——要消掉
-      // 这个窗口得改成按 compact_boundary 定位，代价是多读一遍最大 22MB 的 transcript（或把边界前的条目
-      // 全缓冲起来事后再剪），为剪掉一条本就不该显示的命令行付这个代价不划算。
-      if (liveUuids && entry.uuid && !entry.isSidechain
-          && (entry.type === 'user' || entry.type === 'assistant')) {
-        if (liveUuids.has(entry.uuid)) chainStarted = true;
-        else if (chainStarted) continue;
-      }
-
-      // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use + thinking 混排：按 content block
-      // 顺序展开。sidechain（子 agent）一并回显（带 isSidechain / parentToolUseId），前端收进折叠卡；
-      // 不再整段丢弃——刷新后也能看子 agent 详情（与 live parentToolUseId 卡对齐）。
-      // parent_tool_use_id 若意外落盘则直接用作 parent；否则用最近主链 Agent/Task 的 toolUseId 挂靠。
-      if (entry.type === 'user' || entry.type === 'assistant') {
-        // 同 uuid 重复落盘去重（仅 uuid 存在时；缺 uuid 的旧条目不因 undefined 相撞而互删）。
-        // 一条 uuid 对应整条 JSONL entry，展开出的多条 tool/text 共享同一 uuid——只在 entry 级去重一次。
-        if (entry.uuid) { if (seenUuids.has(entry.uuid)) continue; seenUuids.add(entry.uuid); }
-
-        const role = entry.message?.role || entry.type;
-        const isSide = Boolean(entry.isSidechain || entry.parent_tool_use_id);
-        const parentFromDisk = entry.parent_tool_use_id || entry.parentToolUseId || entry.agentId || null;
-        const expanded = expandHistoryEntry(entry.message?.content, role, entry.timestamp, {
-          isSidechain: isSide,
-          parentToolUseId: isSide ? (parentFromDisk || lastMainAgentToolId || 'sidechain') : null,
-          // 分叉锚点只在主链上有效：sidechain（子 agent）消息的 parentUuid 链是另一条支线，forkSession
-          // 「保留到该 uuid 为止」对子 agent 消息语义不明确；前端也只在主链气泡上挂长按分叉入口。
-          uuid: isSide ? null : entry.uuid,
-          // API 报错条（CLI 落盘为普通 assistant + model:'<synthetic>' + 这三个顶层字段）。
-          // 不带出来的话，刷新后 live 侧的红条会退化成看不出异常的普通助手气泡。
-          isApiErrorMessage: entry.isApiErrorMessage === true,
-          apiErrorStatus: entry.apiErrorStatus ?? null,
-          apiError: entry.error ?? null,
-          // 额度墙自动续跑发出的那句（server/auto-continue.js，SDK 归属 auto-continuation）。只认这一种：
-          // human 是缺省，其余来源（peer / task-notification…）另有各自的呈现，不在这里混进来。
-          autoContinuation: entry.origin?.kind === 'auto-continuation',
-        });
-        for (const item of expanded) {
-          // 谁写的这一条（sdk-ts=己方 / cli=终端）。catchUpStep 靠它判增量是不是己方写盘——
-          // 「磁盘变长」回答不了这个问题，而 localBusy/wasBusy 那两道时序防线漏得掉秒级轮次
-          // （见 catchUpStep 里那段注释）。磁盘自报，缺字段就不带、由下游按未知保守处理。
-          if (entry.entrypoint) item.entrypoint = entry.entrypoint;
-          // 主链 spawn 工具（Agent/Task/Workflow）：记住 id，供后续无 parent 字段的 sidechain 行挂靠
-          if (!isSide && item.kind === 'tool_use'
-              && (item.name === 'Agent' || item.name === 'Task' || item.name === 'Workflow')
-              && item.toolUseId) {
-            lastMainAgentToolId = item.toolUseId;
-          }
-          pushCapped(item);
-        }
-        continue;
-      }
-
-      // 本地 slash 命令的输出（web 形态）：{ type:'system', subtype:'local_command',
-      // content:'<local-command-stdout>…</local-command-stdout>' }——content 是顶层字段、不在 message 里，
-      // 故被上面那道 user/assistant 闸整条跳过。/code-review 的结果正落在这个形态上：真机跑满 13 分钟、
-      // 结果完整落盘，刷新后历史里却什么都没有（2026-08-03）。live 侧同一段正文走 agent.js 的
-      // local_command_output 分支，两边共用 parseLocalCommandOutput，形态一致（否则刷新前后两个样）。
-      //
-      // 【为什么 CLI 形态不一并放开】终端里同样的输出以 type:'user' + <local-command-stdout> 落盘，被
-      // isCliSystemLine 当噪音丢弃（实测切 model/effort 的会话里这类回执可占回显 ~30%），那条判断保持不动：
-      // CLI 形态的输出用户在终端里当场看过、web 只是只读回看；web 形态的输出则是用户从没见过的那一份。
-      if (entry.type === 'system' && entry.subtype === 'local_command') {
-        const out = parseLocalCommandOutput(entry.content);
-        // 只收「整段就是完整包装」的形态：这个 subtype 是个大杂烩，同名 subtype 下还落命令名回显等
-        // 非输出条目，裸文本无从判断是不是命令结果。live 侧不看这个标记（那条通道本身就是输出语义）。
-        if (!out?.wrapped) continue;
-        if (entry.uuid) { if (seenUuids.has(entry.uuid)) continue; seenUuids.add(entry.uuid); }
-        // 【out.isError 有意不用】live 侧 stderr 会另发一条 notice 标失败，这里不复刻：notice 是瞬时通道，
-        // 整个通道的内容（informational/mirror_error/notification/compact_error…）刷新后一律不回显，
-        // 不为本地命令一家单开历史标记。正文本身两侧一字不差，失败信息在正文里。
-        // 也不能借 isApiErrorMessage：那个标记在前端渲染成【居中小红条】（app.js renderOne），
-        // 是给一句 "API Error: 503" 用的，几 KB 的命令输出塞进去会整段变成挤在中间的小红字。
-        //
-        // 剥掉包装再交给 expandHistoryEntry：带包装的原文会被 isCliSystemLine 判成噪音丢掉。
-        // 【uuid 传 null】同上面主链分支对 sidechain 的处理：分叉锚点只在对话主链上有效。这是一条
-        // type:'system' 的条目，带出 uuid 会让前端在这个气泡上挂长按分叉入口（renderOne 设
-        // dataset.uuid → resolveForkAnchorUuid 认 role==='assistant' 即采纳），sdkForkSession 遂拿到
-        // 一个非对话行的 upToMessageId。上面那道 seenUuids 去重仍用 entry.uuid，两者用途不同。
-        for (const item of expandHistoryEntry(out.text, 'assistant', entry.timestamp, { uuid: null })) {
-          // 同 225 行：catchUpStep 判「这段增量是不是己方写盘」靠 entrypoint，local_command 分支
-          // （斜杠命令的 web 端输出）同样要透出，否则秒回的 /status、/model 等命令会重现
-          // fix/own-write-misjudged-as-terminal（25ef4424）修的那个 bug——只是换了个分支。
-          if (entry.entrypoint) item.entrypoint = entry.entrypoint;
-          pushCapped(item);
-        }
-      }
-    }
-    // 循环后精裁到上限（批量裁剪可能残留至多 2×）：缓存的数组严格 ≤ HISTORY_MAX_MESSAGES。
-    if (messages.length > HISTORY_MAX_MESSAGES) {
-      messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
-    }
+    read = await readHistoryMessages(historyFile, liveUuids, size);
   } catch {
-    return []; // 读取失败
+    return NO_HISTORY; // 读取失败（含不是普通文件）
+  }
+  const parseMs = Date.now() - t0 - chainMs;
+  const { total } = read.state;
+  const messages = read.state.messages.slice();
+  // 该按链剪却没拿到链（fail-open）的那份不能接着长：同 B6 的 unfiltered，下次得重新求链。
+  if (read.resume && !(chainSourceAvailable && !liveUuids)) {
+    setCapped(_histIncremental, historyFile, { ino, size, ...read.resume, state: read.state }, HIST_INCREMENTAL_MAX);
   }
 
   // B6：缓存消息（LRU 淘汰：上方命中路径 delete+set 移到 Map 末尾，超上限淘汰最久未用的）；已在流式阶段封顶到
   // HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。正常会话（≤上限）即全量历史；仅极端超大会话被削顶——
   // 既防一次性撑爆前端，也防全量常驻 server 内存。mtime 失效保证一致性——被淘汰条目下次 mtime 未变即重入。
   // 写入用 setCapped（FIFO 占位）：命中路径已负责刷新位置；这里只保证新键不把表撑破。
-  setCapped(_histCache, historyFile, { mtimeMs, size, messages, unfiltered: chainSourceAvailable && !liveUuids }, HIST_CACHE_MAX);
+  setCapped(_histCache, historyFile, { mtimeMs, size, messages, total, unfiltered: chainSourceAvailable && !liveUuids }, HIST_CACHE_MAX);
 
-  return messages.slice(-limit);
+  // passes：读了几遍文件。3d 起退回不剪也不再重读，恒 1；键留着，[PERF] 那行的形态不变。
+  return { messages, total, timing: { cache: 'miss', chainMs, parseMs, passes: 1 } };
+}
+
+// 流式读一遍 transcript 的 [0, size) 出回显状态；liveUuids 非 null 时剪掉当前链开始之后的废弃分支（判据见 feedHistory）。
+// 读不出来（含不是普通文件）直接抛，由调用方回 []。
+// resume：这份状态能不能留给下次只解析新长的那截（4a，见 extendHistory），能就带上续读位置和链的跟踪，不能是 null。
+async function readHistoryMessages(historyFile, liveUuids, size) {
+  const pruned = historyState();
+  const track = liveUuids ? chainTrack() : null;
+  let lastEnd = 0;
+  // 不剪的那份：第一次剪掉消息时从 pruned 复制出来，此后两份一起喂，读完再挑（见末尾）。没剪过就不复制——
+  // 剪枝是两份唯一的差别，一条没剪时两份逐条相同。2026-10-31 之前是读完发现要退回不剪再整份重读一遍。
+  let unpruned = null;
+  // 物理上最新的主链 user/assistant（口径与剪枝那道闸相同、另跳过 teamName，剪掉的也算）。
+  let newestMainUuid = null;
+  // 逐行流式读、不一次性 buffer 整个文件——会话可增长到数十 MB，流式读才稳、不阻塞事件循环
+  // （取代原「尾部 1MB」截断方案）。累积数组封顶到 HISTORY_MAX_MESSAGES，内存不随会话无限增长。
+  // 写到一半的尾行解析不了，引擎直接跳过。
+  const offset = await scanJsonl((await openRegularFile(historyFile)).fh, (entry, end) => {
+    lastEnd = end;
+    if (track) { observeChain(track, entry); noteFill(track, entry, liveUuids); }
+    // 跳过 meta 条目（local-command 输出等）
+    if (entry.isMeta) return;
+
+    // teamName 条目 SDK 选叶本就跳过（两版同），它排在最后不说明叶子选错了。
+    if (isMainMessage(entry) && !entry.teamName) newestMainUuid = entry.uuid;
+    if (unpruned) feedHistory(unpruned, entry, null);
+    // 被剪的条目没动过 pruned 的状态，这时复制与在它之前复制等价
+    if (!feedHistory(pruned, entry, liveUuids) && !unpruned) {
+      unpruned = cloneHistoryState(pruned);
+      feedHistory(unpruned, entry, null);
+    }
+  }, { end: size });
+  // 【SDK 选的叶子不是用户最后看到的那条 ⇒ 不剪】（2026-10-15）物理上最新的那条主链 user/assistant
+  // 不在 liveUuids 里，就是 SDK 认定的当前链没走到文件里最后发生的那段对话。当前叶子本该是「物理最靠后
+  // 的分支末端」（readLiveChainUuids 的 ③），rewind 之后的新对话又总写在废弃段后面，所以这条正常恒成立；
+  // 不成立只能是选叶把别的东西当成了末端。
+  // 实例：SDK 0.3.283 起把 system 行（away_summary / informational）也算分支末端，而闲置的终端 CLI
+  // 会把这些行挂在它记得的旧叶子下——「终端停下、手机接着聊」的那段于是被判成撤销分支，照剪就整段
+  // 看不到。这是本产品的核心路径。旧规则也有它的形态：会话以 isMeta 行收尾时 0.3.281 落回压缩前的叶子。
+  // 10/15 全量实测 816 个会话：0.3.281 触发 1 个（cad10f35，回显 344 条只剩 33），0.3.300 触发 2 个
+  // （c78e8b47 丢 36 条、da2b6acb 丢末尾 2 条，都是 away_summary 挂旧叶），其余逐条与不加保护一致。
+  // 退回不剪，方向同 readLiveChainUuids 的 fail-open；代价是这时真被 rewind 掉的段也会露面
+  // （da2b6acb 因此多出一句终端里被丢弃的「继续」）。结果照常进缓存——文件没变，SDK 的选择就不会变。
+  const s = unpruned && newestMainUuid && !liveUuids.has(newestMainUuid) ? unpruned : pruned;
+  // 循环后精裁到上限（批量裁剪可能残留至多 2×）：缓存的数组严格 ≤ HISTORY_MAX_MESSAGES。
+  // 留作增量状态也无妨：往后只从头裁，尾部这些条始终是全量结果的尾部。
+  if (s.messages.length > HISTORY_MAX_MESSAGES) {
+    s.messages.splice(0, s.messages.length - HISTORY_MAX_MESSAGES);
+  }
+  // 不留作增量状态的：最后那行没换行却已经喂进去了的（见 extendHistory 末尾）；退回不剪的那份——往后新写的
+  // 可能让 SDK 选回正常的叶子，那时这次没剪的就该剪了；叶子不是从物理最后那个节点走到的（见 chainTrack）
+  const resume = lastEnd > offset || s === unpruned || (track && !track.tailOk) ? null : { offset, track };
+  return { state: s, resume };
+}
+
+// ── 4a 增量解析（2026-10-31 性能改造）──
+// mirror 每个 tick、每次 session:history 都要一份回显；文件变了就得整份重读，大会话上每次还要 SDK 把整份 transcript
+// 再读一遍求链（几百毫秒）。可 CLI 对 transcript 只追加：新写的那几轮接在当前链末端时，链就是旧链加上它们，
+// 旧条目剪不剪一条都不变——这时只解析新长的那截，接着喂上次留下的状态。
+
+// SDK 求链时当作对话节点的条目（sdk.mjs 0.3.310 的 _d：进它那张 uuid 表的类型，去掉 sidechain、team、
+// progress 和 fork_briefing 附件）。选叶、往上走链都只看这些。
+function isChainNode(e) {
+  if (typeof e.uuid !== 'string' || e.isSidechain || e.teamName) return false;
+  if (e.type === 'attachment') return e.attachment?.type !== 'fork_briefing';
+  return e.type === 'user' || e.type === 'assistant' || e.type === 'system';
+}
+
+// 全量读时顺手记下的、判断新写的接不接得上要用的东西。只有按链剪的那份要它，不剪的（拿不到链）没有链可接。
+function chainTrack() {
+  return {
+    tip: null, // 物理上最后一个链节点：新写的必须一个接一个挂在它下面
+    // 从 tip 往上走能走到一条 user/assistant（SDK 就选它当叶子）：tip 本身是，或一个接一个挂在这样的节点下。
+    // 走不到（中间的父节点不在文件里…）SDK 会换下一个末端，上次的叶子就不是从 tip 走到的，新写的接在 tip 下也不等于接在链尾。
+    tailOk: false,
+    // 压缩边界的 anchor（压缩摘要）：SDK 求链时把挂在它下面的条目改挂到保留段末尾（见 _d）。新写的挂在它下面，
+    // 实际的父节点就不是 tip——触发压缩的那句命令随之掉出链外（feedHistory 里那个「已知窗口」）。
+    // 新写的边界本身 parentUuid 为 null（真机 228 条全是），接不上 tip，不用在这里另记。
+    anchors: new Set(),
+    // 下面两样给 SDK 求链的最后一步（dxe）：它把不在链上、却和链上的回复连着的行补进链。
+    // 不在链上的主链 assistant 的 message.id。一次 API 回复按内容块拆成几行落盘、共用一个 message.id，
+    // 同一回复里不在链上的那几行会被补进链：新写的回复撞上这里的 id，上次剪掉的那行就回到了链上。
+    offMsgIds: new Set(),
+    // 主链上回答过的 tool_use id。回答了链上某个调用、链上却还没人回答它的行会被补进链；新写的再回答一次，
+    // 链上就有人回答了，上次补进来的那行随之出链。
+    answered: new Set(),
+  };
+}
+
+// SDK 的 nF：有 parentUuid、内容里有 tool_result 的 user。sidechain 的不算：补链只认与链上那行同在主链的。
+function toolResultIds(e) {
+  if (e.type !== 'user' || !e.parentUuid || e.isSidechain || !Array.isArray(e.message?.content)) return [];
+  return e.message.content.filter(b => b?.type === 'tool_result' && typeof b.tool_use_id === 'string').map(b => b.tool_use_id);
+}
+
+function noteFill(t, e, onChain) {
+  if (e.type === 'assistant' && !e.isSidechain && !onChain.has(e.uuid) && typeof e.message?.id === 'string') t.offMsgIds.add(e.message.id);
+  for (const id of toolResultIds(e)) t.answered.add(id);
+}
+
+function observeChain(t, e) {
+  if (e.type === 'system' && e.subtype === 'compact_boundary') {
+    const m = e.compactMetadata;
+    for (const a of [m?.preservedMessages?.anchorUuid, m?.preservedSegment?.anchorUuid]) if (a) t.anchors.add(a);
+  }
+  if (!isChainNode(e)) return;
+  t.tailOk = e.type === 'user' || e.type === 'assistant' || (t.tailOk && e.parentUuid === t.tip);
+  t.tip = e.uuid;
+}
+
+const CANNOT_EXTEND = new Error('history: 新写的接不上上次的状态');
+
+// SDK 求链读多少按文件大小分两档（sdk.mjs 的 WL）：超过 5MB 只读最后一条压缩边界之后的那段。
+const SDK_TAIL_READ_BYTES = 5 * 1024 * 1024;
+
+// 把 inc（上次留下的状态）接着喂到文件当前的 size。接得上返回 true、inc 已更新；接不上返回 false，
+// inc 已改了一半，调用方丢掉它走全量。
+async function extendHistory(historyFile, inc, { size, ino }) {
+  // 换了文件（rename 覆盖）、没变长（截短、原地重写）都不是追加：上次的状态对不上现在的内容
+  if (ino !== inc.ino || size <= inc.size) return false;
+  const { state: s, track: t } = inc;
+  // 这次才长过 5MB：SDK 看不见边界之前的了，那里按 message.id、工具调用补进链的行随之出链
+  if (t && inc.size <= SDK_TAIL_READ_BYTES && size > SDK_TAIL_READ_BYTES) return false;
+  const newChain = t ? new Set() : null; // 新写的、接在链上的 user/assistant：按链剪时它们都在链上
+  let offset, lastEnd = 0;
+  try {
+    offset = await scanJsonl((await openRegularFile(historyFile)).fh, (entry, end) => {
+      lastEnd = end;
+      // 新写的压缩边界：主链的 parentUuid 为 null、下面那道闸挡得住；sidechain 的不是链节点，可文件超过 5MB 时
+      // SDK 只拿最后一条边界之后的那段求链、截段不看 isSidechain（qL），链开始的位置就变了
+      if (t && entry.type === 'system' && entry.subtype === 'compact_boundary') throw CANNOT_EXTEND;
+      if (t && isChainNode(entry)) {
+        // 没挂在上一个节点下 = 分支（rewind 之后重来、并行工具的兄弟…）：当前叶子可能换到别的分支，旧条目剪不剪都可能变
+        if (entry.parentUuid !== t.tip || t.anchors.has(entry.parentUuid)) throw CANNOT_EXTEND;
+        if (entry.type === 'assistant' && t.offMsgIds.has(entry.message?.id)) throw CANNOT_EXTEND;
+        if (toolResultIds(entry).some(id => t.answered.has(id))) throw CANNOT_EXTEND;
+        if (entry.type === 'user' || entry.type === 'assistant') newChain.add(entry.uuid);
+        t.tip = entry.uuid;
+      }
+      if (t) noteFill(t, entry, newChain);
+      if (entry.isMeta) return;
+      feedHistory(s, entry, newChain);
+    }, { start: inc.offset, end: size });
+  } catch {
+    return false;
+  }
+  // 最后那行没换行却已经喂进去了：续读位置停在它行首，下次会把它再喂一遍。这种状态不留（CLI 一行连换行一次写下，
+  // 只在两次写之间被撞上时出现）。
+  if (lastEnd > offset) return false;
+  inc.size = size;
+  inc.offset = offset;
+  return true;
+}
+
+// 回显 reducer 的状态。一遍读要喂一份或两份（见 readHistoryMessages），所以拆成可复制的状态 + 逐条喂的函数。
+function historyState() {
+  return {
+    messages: [],
+    // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
+    // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
+    // 「always-on 要稳」的目标。超 2× 才批量 splice（pushCapped）→ 均摊 O(1)、不每条 shift。
+    // total：削顶前一共入列多少条，削掉的也算（getSessionHistoryWithTotal 据此告诉前端「只显示了最近的」）。
+    total: 0,
+    // 同 uuid 去重：真实 transcript 存在「interrupt+queue 竞态导致同一消息重复落盘」（同 uuid 写两次）→
+    // 回显成重复气泡（实证 234 会话中 1 个含 8 条）。uuid 是每条唯一标识，同 uuid = 同一逻辑消息（非合法重复），
+    // 按 uuid 去重安全——合法重复内容（两次「继续」）是不同 uuid、不误删。Set 随状态留作 4a 增量状态时常驻（_histIncremental 封顶），否则读完即释放。
+    seenUuids: new Set(),
+    toolNames: new Map(), // tool_use id → 工具名：tool_result 按它取摘要上限（Bash 2000，见 toolResultCap）
+    // 主链最近 Agent/Task toolUseId：sidechain 行常无 parent_tool_use_id 落盘，靠此挂到折叠卡
+    lastMainAgentToolId: null,
+    // 当前链是否已经开始（读到第一条命中 liveUuids 的主链消息）。在那之前的主链消息一律保留：
+    // 它们不在集合里只说明「已被移出模型上下文」（compact），不说明「已被撤销」（rewind）。
+    chainStarted: false,
+  };
+}
+
+// 复制出来的那份往后各喂各的：已入列的条目都是新建的对象、入列后不再改，数组和两张表各自一份就够。
+function cloneHistoryState(s) {
+  return { ...s, messages: s.messages.slice(), seenUuids: new Set(s.seenUuids), toolNames: new Map(s.toolNames) };
+}
+
+function pushCapped(s, item) {
+  s.total++;
+  s.messages.push(item);
+  if (s.messages.length > HISTORY_MAX_MESSAGES * 2) {
+    s.messages.splice(0, s.messages.length - HISTORY_MAX_MESSAGES);
+  }
+}
+
+const isMainMessage = e => Boolean(e.uuid) && !e.isSidechain && (e.type === 'user' || e.type === 'assistant');
+
+// 把一条（已跳过 isMeta 的）条目喂进 s。返回 false = 这条在当前链开始之后、不在链上，剪掉了，s 没动。
+function feedHistory(s, entry, liveUuids) {
+  // 当前链【开始之后】不在链上的主链消息 = 被 /rewind 撤销的分支，CLI 自己也不再显示它们。
+  // 只筛 user/assistant：type:'system' 的本地命令输出不在 SDK 的返回里，一并筛会把它们全删掉。
+  // sidechain 也豁免——子 agent 的 uuid 不挂主链，按 live 过滤会误删整棵折叠卡。
+  //
+  // 【为什么要等链开始】liveUuids 表达的是「还在模型上下文里」，compact 会把边界之前的整段
+  // 移出上下文却一行不删——那段记录仍属于这个会话，用户仍该看到（抽屉里这条会话的标题就取自
+  // 开头那段）。不等的话它们会被当成废弃分支一起剪掉：真机 349 个会话里 16 个压缩过，13 个
+  // 丢了开头，最狠的 1284 条只剩 3 条（1ee3b415，标题还挂着开头那句话）。
+  // 边界之前若也 rewind 过，那段废弃分支会重新露面——与本模块既有取舍同向（见 readLiveChainUuids
+  // 的 fail-open）：少显示历史是静默的，多显示几条废弃分支是看得见的。
+  // 【已知窗口，有意不修】compactMetadata 点名保留的 uuid 物理上位于边界之前（实测 preservedSegment
+  // 的 head/anchor/tail 都是边界前那几条），会让这里提前认定「链已开始」，于是它到边界之间那一小段
+  // 仍按当前链剪。全量实测 16 个压缩会话共 3 条，且全部是触发压缩的 `/compact` 命令行本身——要消掉
+  // 这个窗口得改成按 compact_boundary 定位，代价是多读一遍最大 22MB 的 transcript（或把边界前的条目
+  // 全缓冲起来事后再剪），为剪掉一条本就不该显示的命令行付这个代价不划算。
+  if (liveUuids && isMainMessage(entry)) {
+    if (liveUuids.has(entry.uuid)) s.chainStarted = true;
+    else if (s.chainStarted) return false;
+  }
+
+  // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use + thinking 混排：按 content block
+  // 顺序展开。sidechain（子 agent）一并回显（带 isSidechain / parentToolUseId），前端收进折叠卡；
+  // 不再整段丢弃——刷新后也能看子 agent 详情（与 live parentToolUseId 卡对齐）。
+  // parent_tool_use_id 若意外落盘则直接用作 parent；否则用最近主链 Agent/Task 的 toolUseId 挂靠。
+  if (entry.type === 'user' || entry.type === 'assistant') {
+    // 同 uuid 重复落盘去重（仅 uuid 存在时；缺 uuid 的旧条目不因 undefined 相撞而互删）。
+    // 一条 uuid 对应整条 JSONL entry，展开出的多条 tool/text 共享同一 uuid——只在 entry 级去重一次。
+    if (entry.uuid) { if (s.seenUuids.has(entry.uuid)) return true; s.seenUuids.add(entry.uuid); }
+
+    // /compact 写下的压缩摘要（type:user、没有 isMeta、带 isCompactSummary）是给模型的上下文，不是用户
+    // 说的话（O115）：终端主视图不显示它，live 侧只发一条「上下文已压缩」。这里换成同义的标记条目，
+    // 【不能整条跳过】：终端 /compact 落盘的只有它和被忽略的 compact_boundary，丢掉它 catchUpStep
+    // 就看不到这次外部写入、不标 externalDirty，手机下一条会从压缩前的叶子写下去，两端分叉。
+    if (entry.isCompactSummary) {
+      const marker = { role: 'system', kind: 'compact_summary', content: '', timestamp: entry.timestamp };
+      if (entry.entrypoint) marker.entrypoint = entry.entrypoint;
+      pushCapped(s, marker);
+      return true;
+    }
+
+    const role = entry.message?.role || entry.type;
+    const isSide = Boolean(entry.isSidechain || entry.parent_tool_use_id);
+    const parentFromDisk = entry.parent_tool_use_id || entry.parentToolUseId || entry.agentId || null;
+    const expanded = expandHistoryEntry(entry.message?.content, role, entry.timestamp, {
+      toolNames: s.toolNames,
+      isSidechain: isSide,
+      parentToolUseId: isSide ? (parentFromDisk || s.lastMainAgentToolId || 'sidechain') : null,
+      // 分叉锚点只在主链上有效：sidechain（子 agent）消息的 parentUuid 链是另一条支线，forkSession
+      // 「保留到该 uuid 为止」对子 agent 消息语义不明确；前端也只在主链气泡上挂长按分叉入口。
+      uuid: isSide ? null : entry.uuid,
+      // API 报错条（CLI 落盘为普通 assistant + model:'<synthetic>' + 这三个顶层字段）。
+      // 不带出来的话，刷新后 live 侧的红条会退化成看不出异常的普通助手气泡。
+      isApiErrorMessage: entry.isApiErrorMessage === true,
+      apiErrorStatus: entry.apiErrorStatus ?? null,
+      apiError: entry.error ?? null,
+      // 额度墙自动续跑发出的那句（server/auto-continue.js，SDK 归属 auto-continuation）。只认这一种：
+      // human 是缺省，其余来源（peer / task-notification…）另有各自的呈现，不在这里混进来。
+      autoContinuation: entry.origin?.kind === 'auto-continuation',
+    });
+    for (const item of expanded) {
+      // 谁写的这一条（sdk-ts=己方 / cli=终端）。catchUpStep 靠它判增量是不是己方写盘——
+      // 「磁盘变长」回答不了这个问题，而 localBusy/wasBusy 那两道时序防线漏得掉秒级轮次
+      // （见 catchUpStep 里那段注释）。磁盘自报，缺字段就不带、由下游按未知保守处理。
+      if (entry.entrypoint) item.entrypoint = entry.entrypoint;
+      // 主链 spawn 工具（Agent/Task/Workflow）：记住 id，供后续无 parent 字段的 sidechain 行挂靠
+      if (!isSide && item.kind === 'tool_use'
+          && (item.name === 'Agent' || item.name === 'Task' || item.name === 'Workflow')
+          && item.toolUseId) {
+        s.lastMainAgentToolId = item.toolUseId;
+      }
+      pushCapped(s, item);
+    }
+    return true;
+  }
+
+  // 本地 slash 命令的输出（web 形态）：{ type:'system', subtype:'local_command',
+  // content:'<local-command-stdout>…</local-command-stdout>' }——content 是顶层字段、不在 message 里，
+  // 故被上面那道 user/assistant 闸整条跳过。/code-review 的结果正落在这个形态上：真机跑满 13 分钟、
+  // 结果完整落盘，刷新后历史里却什么都没有（2026-08-03）。live 侧同一段正文走 agent.js 的
+  // local_command_output 分支，两边共用 parseLocalCommandOutput，形态一致（否则刷新前后两个样）。
+  //
+  // 【为什么 CLI 形态不一并放开】终端里同样的输出以 type:'user' + <local-command-stdout> 落盘，被
+  // isCliSystemLine 当噪音丢弃（实测切 model/effort 的会话里这类回执可占回显 ~30%），那条判断保持不动：
+  // CLI 形态的输出用户在终端里当场看过、web 只是只读回看；web 形态的输出则是用户从没见过的那一份。
+  if (entry.type === 'system' && entry.subtype === 'local_command') {
+    const out = parseLocalCommandOutput(entry.content);
+    // 只收「整段就是完整包装」的形态：这个 subtype 是个大杂烩，同名 subtype 下还落命令名回显等
+    // 非输出条目，裸文本无从判断是不是命令结果。live 侧不看这个标记（那条通道本身就是输出语义）。
+    if (!out?.wrapped) return true;
+    if (entry.uuid) { if (s.seenUuids.has(entry.uuid)) return true; s.seenUuids.add(entry.uuid); }
+    // 【out.isError 有意不用】live 侧 stderr 会另发一条 notice 标失败，这里不复刻：notice 是瞬时通道，
+    // 整个通道的内容（informational/mirror_error/notification/compact_error…）刷新后一律不回显，
+    // 不为本地命令一家单开历史标记。正文本身两侧一字不差，失败信息在正文里。
+    // 也不能借 isApiErrorMessage：那个标记在前端渲染成【居中小红条】（app.js renderOne），
+    // 是给一句 "API Error: 503" 用的，几 KB 的命令输出塞进去会整段变成挤在中间的小红字。
+    //
+    // 剥掉包装再交给 expandHistoryEntry：带包装的原文会被 isCliSystemLine 判成噪音丢掉。
+    // 【uuid 传 null】同上面主链分支对 sidechain 的处理：分叉锚点只在对话主链上有效。这是一条
+    // type:'system' 的条目，带出 uuid 会让前端在这个气泡的操作栏挂「分叉」按钮（appendCopyAction
+    // 见 anchorUuid 即挂），sdkForkSession 遂拿到一个非对话行的 upToMessageId。上面那道 seenUuids 去重仍用 entry.uuid，两者用途不同。
+    for (const item of expandHistoryEntry(out.text, 'assistant', entry.timestamp, { uuid: null })) {
+      // 同 225 行：catchUpStep 判「这段增量是不是己方写盘」靠 entrypoint，local_command 分支
+      // （斜杠命令的 web 端输出）同样要透出，否则秒回的 /status、/model 等命令会重现
+      // fix/own-write-misjudged-as-terminal（25ef4424）修的那个 bug——只是换了个分支。
+      if (entry.entrypoint) item.entrypoint = entry.entrypoint;
+      pushCapped(s, item);
+    }
+  }
+  return true;
 }
 
 // 只读「追平」状态机（纯函数，便于单测）——server 每 tick 用它决定该把哪些【新落定】消息推给 web 端。
@@ -349,6 +593,28 @@ function messageKey(m) {
 export function historyTailKey(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
   return messageKey(messages[messages.length - 1]);
+}
+
+// session:history 分两次传（手机经隧道下行只有一两百 KB/s，整窗 2000 条要等 2–3s）：
+// · { tail } → 只交最近 tail 条，另报窗口条数 diskLen、这段首条在整份历史里的序号 from、首条指纹 anchor；
+// · { before: from, anchor } → 交窗口里 from 之前那段。序号按削顶前的总条数算（窗口只从头削、条目进了数组
+//   不再改），两次之间终端写了、截顶窗口滑了，序号照样对得上；那一格的指纹也对上才交，对不上回 stale——
+//   宁可让前端提示重新加载，也不交一段和已画的尾巴拼不起来的消息。指纹只在服务端算，前端原样带回。
+// 两样都不带（旧前端）就原样整窗。
+export function historyPage({ messages, total }, { tail, before, anchor } = {}) {
+  const windowStart = total - messages.length;
+  if (Number.isInteger(tail) && tail > 0) {
+    const page = messages.slice(-tail);
+    return { messages: page, total, diskLen: messages.length, from: total - page.length, anchor: messageKey(page[0]) };
+  }
+  if (Number.isInteger(before)) {
+    const idx = before - windowStart;
+    if (idx < 0 || idx >= messages.length || messageKey(messages[idx]) !== anchor) {
+      return { messages: [], total, diskLen: messages.length, stale: true };
+    }
+    return { messages: messages.slice(0, idx), total, diskLen: messages.length };
+  }
+  return { messages, total };
 }
 
 // 上一次的尾条之后新写的条目是否全是己方（sdk-ts）。找不到那条、或它之后没有新条目时为 false。
@@ -504,11 +770,18 @@ export function rebaselineAbsorbedExternal({
   // 一律标脏，不再需要知道窗口上限。全仓无调用方传过它。
   prevTailKey = null,
   curTailKey = null,
+  // 读出 curLen 的那份历史。传了才看 entrypoint；不传（读盘失败）按长度与指纹判，保守标脏。
+  messages = null,
 } = {}) {
   if (sameSession !== true) return false;
   if (localBusy === true) return false;
   if (wasOwnTurn === true) return false; // 己方 turn 上一 tick 还在写盘 → 这次增长是自己写的，baseline 只是尚未吸收
   if (!Number.isFinite(curLen) || !Number.isFinite(baseline)) return false;
+  // 2026-10-25：localBusy / wasOwnTurn 都靠时序，罩不住不计在途轮的己方写盘（实证会话 342a2654：Monitor
+  // 事件触发的自动汇报轮写盘时新设备获批，己方写的被判成终端写入，后台任务在跑时发送一直被拒）。
+  // 与 catchUpStep 的增长分支、满窗分支同一判据：上次的尾条还在，之后全是 sdk-ts 自报 = 己方写的。
+  // 尾条找不到（rewind 换了链）或夹着别的 entrypoint，照旧往下按长度与指纹判。
+  if (Array.isArray(messages) && ownWritesSince(messages, prevTailKey)) return false;
   if (curLen > baseline) return true;
   // 变短 = CLI /rewind 撤销了一段（不是削头：削头后 curLen 恒等于 cap）。这时更要标脏——SDK 子进程
   // 的内存上下文还停在 rewind 前的叶子上，不置换实例就发消息等于从一条已被撤销的链上继续写。
@@ -664,6 +937,19 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
     : {};
   // 与 live 侧 user_message.origin 同名同值：前端两条渲染路径共用一个判据
   const originField = opts.autoContinuation && role === 'user' ? { origin: 'auto-continuation' } : {};
+  // 用户贴进对话的图（终端 / 桌面端粘贴）：整条消息的图挂在它展开出的第一条文字气泡上——终端把图放在
+  // 文字后、桌面端放在文字前，两种顺序都是「这条消息带了这些图」。只认主链且有 uuid 的：引用靠 uuid 回找。
+  // 纯图消息（没写字）展开不出文字条，扫完后单独补一条空文本气泡，不得整条消失（同纯附件消息）。
+  let pendingImages = null;
+  if (role === 'user' && !opts.isSidechain && opts.uuid && Array.isArray(content)) {
+    const refs = imageRefsOf(content, n => userImageRef(String(opts.uuid), n));
+    if (refs.length) pendingImages = refs;
+  }
+  const takeImages = () => {
+    const imgs = pendingImages;
+    pendingImages = null;
+    return imgs ? { images: imgs } : {};
+  };
   const pushText = (raw) => {
     let body = raw;
     let attachments = null;
@@ -673,8 +959,8 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       if (split.attachments.length) attachments = split.attachments;
     }
     const text = normalizeHistoryText(body);
-    if (text != null) out.push({ role, content: text, timestamp, ...side, ...uuidField, ...apiErrorField, ...originField, ...(attachments ? { attachments } : {}) });
-    else if (attachments) out.push({ role, content: '', timestamp, ...side, ...uuidField, attachments });
+    if (text != null) out.push({ role, content: text, timestamp, ...side, ...uuidField, ...apiErrorField, ...originField, ...(attachments ? { attachments } : {}), ...takeImages() });
+    else if (attachments || pendingImages) out.push({ role, content: '', timestamp, ...side, ...uuidField, ...(attachments ? { attachments } : {}), ...takeImages() });
   };
   if (typeof content === 'string') {
     pushText(content);
@@ -719,6 +1005,8 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       flushText();
       const id = block.id || block.tool_use_id;
       if (!id || !block.name) continue;
+      const widget = widgetPayload(block.name, block.input); // 桌面端 show_widget 的完整源码，见 tool-summary.js
+      opts.toolNames?.set(String(id), String(block.name));
       out.push({
         kind: 'tool_use',
         role: 'assistant',
@@ -727,6 +1015,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
         inputSummary: toolSummary(block.input ?? {}),
         timestamp,
         ...side,
+        ...(widget ? { widget } : {}),
       });
       continue;
     }
@@ -734,20 +1023,28 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       flushText();
       const id = block.tool_use_id || block.toolUseId || block.id;
       if (!id) continue;
+      // 工具截图（浏览器 / computer use / Read 图片）。子代理流水里的带上那张子代理卡的 id：
+      // 新版 CLI 把子代理写在 subagents/agent-*.jsonl，按引用取图时主 transcript 里找不到它。
+      const images = imageRefsOf(block.content, n => toolImageRef(String(id), n, opts.isSidechain ? opts.parentToolUseId : null));
+      // 上限同 live（display-contracts §5）：按配对 tool_use 的工具名。配不上（tool_use 被削头等）按 600。
+      const cap = toolResultCap(opts.toolNames?.get(String(id)));
+      opts.toolNames?.delete(String(id)); // 每个 id 只配一次，用完即删，长会话里不囤
       out.push({
         kind: 'tool_result',
         role: 'user',
         toolUseId: String(id),
         ok: !block.is_error,
-        outputSummary: toolSummary(block.content ?? ''),
+        outputSummary: toolSummary(images.length ? stripImageBlocks(block.content) : (block.content ?? ''), cap),
+        ...(images.length ? { images } : {}),
         timestamp,
         ...side,
       });
       continue;
     }
-    // 其它未知块：跳过
+    // 其它未知块（含图片块：用户贴图已在上面收进 pendingImages）：跳过
   }
   flushText();
+  if (pendingImages) out.push({ role, content: '', timestamp, ...side, ...uuidField, ...takeImages() });
   return out;
 }
 
@@ -756,7 +1053,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
 // 标签顺序不固定（实测两种真实形态都存在），故不锚定起始位置，只按标签名抓取；command-name 缺失视为
 // 不是这类块（交给 isCliSystemLine 走原有噪音判断，不强行重建）。空参数不留多余空格（裸 "/clear" 而非
 // "/clear "）。返回 null 表示"不是 slash 命令块"，调用方据此决定是否继续按噪音过滤判断。
-function reconstructSlashCommand(content) {
+export function reconstructSlashCommand(content) {
   const t = content.trim();
   const nameMatch = /<command-name>([^<]*)<\/command-name>/.exec(t);
   if (!nameMatch) return null;
@@ -781,7 +1078,7 @@ function isLocalCommandWrapped(text) {
   return /^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t);
 }
 
-function isCliSystemLine(content) {
+export function isCliSystemLine(content) {
   const t = content.trim();
   if (isLocalCommandWrapped(t)) return true;
   // `!` bash 模式注入：终端里 ! 前缀跑 bash，CLI 以 <bash-input>/<bash-stdout>/<bash-stderr> 注入输入/输出
@@ -809,32 +1106,28 @@ function isCliSystemLine(content) {
 //     不是 entrypoint。（entrypoint 仍被 readHeadMeta / 尾部形态判定使用，那是另一条路。）
 //   · 「summary 标题语义 ≠ ai-title > 首条 user > 命令名」——迁移后标题即由 SDK summary 承担，
 //     与 CLI /resume 所见同源，这正是想要的效果。
-// 仍由本函数自己维护、SDK 给不了的：hasMore / total（SDK 不给总数）、TTL 缓存、标题 query 过滤
+// 仍由本函数自己维护、SDK 给不了的：hasMore / total（SDK 不给总数）、列表缓存、标题 query 过滤
 // （候选走 readdir；匹配键 OR SDK summary 与 readHeadMeta 各字段）；
 // 另加两道 SDK 侧兜不住的修正：按 jsonl 是否存在做归属过滤、readdir 补 SDK 漏报的无 summary 会话。
 // 返回 { sessions, hasMore, total }：
 //   total = 该 cwd 会话总数（query 过滤前）；hasMore = 过滤后仍有未返回项（浏览：total>limit；搜索：匹配数>limit）。
 // 缓存键含 limit；有 query 时另加 `q:` 段——否则搜索结果会污染浏览缓存，或反过来。
 // excludeIds：进程内临时排除（删文件窗口 pendingDeleteIds）；传空 Set/不传 = 不过滤。
-export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT, excludeIds, query } = {}) {
+// memberOptions：项目成员目录的裁决（见 listProjectMemberDirs）；不传 = 只并托管 worktree。
+export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT, excludeIds, query, memberOptions } = {}) {
   const normalizedQuery = typeof query === 'string' ? query.trim() : '';
   const own = await scanOneCwd(cwd, baseDir, limit, normalizedQuery);
 
-  // 托管 worktree 的会话并进本列表（2026-09-11）。绝大多数工作区没有 .claude/worktrees/，
-  // 那条路径原样返回 own——**包括不给会话对象平白加上 cwd 字段**，免得前端与 ack 形状凭空多一维。
-  const worktrees = await listManagedWorktreeDirs(cwd, baseDir);
-  if (worktrees.length === 0) return applyExcludeIds(own, excludeIds);
+  // 成员目录（托管 / 平级 worktree、scratch 目录）的会话并进本列表（2026-09-11 起）。绝大多数项目
+  // 没有成员，那条路径原样返回 own——**包括不给会话对象平白加上 cwd 字段**，免得前端与 ack 形状凭空多一维。
+  const members = await listProjectMemberDirs(cwd, baseDir, memberOptions);
+  if (members.length === 0) return applyExcludeIds(own, excludeIds);
 
-  const extra = await Promise.all(worktrees.map(async wt => {
-    const r = await scanOneCwd(wt.cwd, baseDir, limit, normalizedQuery);
-    // cwd 必须带上：父仓只是展示归属，前端点开时拿它去定位 transcript——用父仓 cwd 会查到空目录。
+  const extra = await Promise.all(members.map(async m => {
+    const r = await scanOneCwd(m.cwd, baseDir, limit, normalizedQuery);
+    // cwd 必须带上：项目根只是展示归属，前端点开时拿它去定位 transcript——用项目根会查到空目录。
     // worktreeGone 只在真没了时才加：活树上平白多一个恒 false 的字段，前端还得记得判它。
-    return {
-      ...r,
-      sessions: r.sessions.map(s => ({
-        ...s, cwd: wt.cwd, worktree: wt.name, ...(wt.gone ? { worktreeGone: true } : {}),
-      })),
-    };
+    return { ...r, sessions: r.sessions.map(s => ({ ...s, ...memberRowFields(m) })) };
   }));
 
   // ★ 截断必须发生在合并之后。各处各取 limit 条是对的（每处内部已按活动时间取了最近 N，
@@ -860,34 +1153,104 @@ export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST
   }, excludeIds);
 }
 
-// 单个 cwd 的扫描 + TTL 缓存（原 listSessionsPage 的主体，抽出来供父仓与各 worktree 复用）。
+// 单个 cwd 的扫描 + 缓存（原 listSessionsPage 的主体，抽出来供父仓与各 worktree 复用）。
 async function scanOneCwd(cwd, baseDir, limit, normalizedQuery) {
   const dir = join(baseDir, getProjectDir(cwd));
   const cacheKey = normalizedQuery
-    ? `${dir}:q:${normalizedQuery.toLowerCase()}:${limit}`
-    : `${dir}:${limit}`;
-  // B2：TTL 缓存命中，直接返回（避免重复 readdir + N×stat + 尾窗活动时间 + N×readHeadMeta）——
+    ? `${dir}:${cwd}:q:${normalizedQuery.toLowerCase()}:${limit}`
+    : `${dir}:${cwd}:${limit}`;
+  // B2：目录内容没变就命中（避免重复 N×尾窗活动时间 + N×readHeadMeta + SDK 逐个读头尾）——
   // excludeIds 不进缓存键：缓存的是扫盘结果，排除在缓存之后应用。
-  // 缓存键含 dir，所以父仓与各 worktree 各自成键，不会互相顶掉。
+  // 缓存键含 dir，所以父仓与各 worktree 各自成键，不会互相顶掉；也含 cwd——编码撞名时两个 cwd 共用一个
+  // 目录、结果各不相同（invalidateListCache 按 `${dir}:` 前缀清，照样清得到）。
+  // 指纹在扫描【之前】取：扫描途中有文件被写，存下的是旧指纹，下一次必然不命中、重扫一次；
+  // 扫完再取会让这次写入永远藏在缓存后面。
+  const fingerprint = await listFingerprint(dir);
   const cached = _listCache.get(cacheKey);
-  return cached && Date.now() - cached.ts < LIST_CACHE_TTL
-    ? cached.result
-    : scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, normalizedQuery);
+  if (cached && cached.fingerprint === fingerprint && cached.expiresAt > Date.now()) return cached.result;
+  // 编码撞名：目录里记着别的 cwd 的会话，在排序、截 limit 之前剔掉（见 transcriptOwnerCwd）
+  const { result, degraded } = await scanSessionsPage(dir, cwd, limit, baseDir, normalizedQuery, await foreignSessionIds(dir, cwd));
+  _listCache.set(cacheKey, { fingerprint, result, expiresAt: degraded ? Date.now() + DEGRADED_LIST_TTL : Infinity });
+  return result;
+}
+
+// 列表结果只取决于项目目录里的这些文件：每个 jsonl 的（名、大小、mtime）——名单决定有哪些行，头尾内容决定标题、
+// 活动时间与归属；外加 SDK 会读的旁路标题 `<会话 id>/custom-title.json`（jsonl 尾部没有 custom-title 时它就是
+// 标题，桌面端改名只写它）。不按年龄失效：抽屉每 12s 重验一次，按 4s 年龄判等于每次都整目录重扫，
+// 而那期间绝大多数目录一个字节都没变；反过来年龄窗口内又会挡住刚落盘的新消息。
+// 代价是每次列表一次 readdir + 逐文件 stat（本机最大的目录 463 个 jsonl 约 3ms，整目录重扫约 170ms）。
+// 存摘要不存原串：原串在大目录上几十 KB，而标题搜索每换一个词就是一个新缓存键。
+async function listFingerprint(dir) {
+  let entries;
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return ''; }
+  const subdirs = new Set(entries.filter(e => e.isDirectory()).map(e => e.name));
+  const parts = await Promise.all(entries.filter(e => e.name.endsWith('.jsonl')).map(async ({ name }) => {
+    const id = name.slice(0, -6);
+    const [st, side] = await Promise.all([
+      stat(join(dir, name)).catch(() => null),
+      subdirs.has(id) ? stat(join(dir, id, 'custom-title.json')).catch(() => null) : null,
+    ]);
+    return `${name}:${st?.size}:${st?.mtimeMs}:${side?.size}:${side?.mtimeMs}`;
+  }));
+  return createHash('sha1').update(parts.sort().join('\n')).digest('base64');
+}
+
+// 成员目录里的会话行比项目根自己的多带的字段。scratch 目录不是 worktree，不能标成 worktree。
+const memberRowFields = m => ({
+  cwd: m.cwd,
+  ...(m.scratch ? { scratch: true } : { worktree: m.name }),
+  ...(m.gone ? { worktreeGone: true } : {}),
+});
+
+// 一个项目除了自己的 cwd，还有哪些目录的会话算它的（2026-09-24「已连接的文件夹」）：
+//   · 托管 worktree（`<cwd>/.claude/worktrees/*`，含已删的）——一直都有，不依赖 memberOptions；
+//   · 平级 linked worktree——从仓库侧读 `.git/worktrees/*` 列出，逐个问授权判据「你归哪个项目」，答案是本项目
+//     才并进来。只有落在连接范围里的（父目录整个连着）会答成本项目，范围外的判据不授权（SCOPE-04）；
+//     被显式连接的平级 worktree 自成项目，判据会答它自己；
+//   · 项目本身是 scratch 根时：根下各个 scratch 目录。
+// 并不并由 memberOptions.authorize 决定，也就是 server 判 cwd 用的那一份——列表与「点开能不能打开」
+// 同口径，不在这里另写一套会漂移的规则。平级 worktree 被 `git worktree remove/prune` 之后仓库侧的
+// 回链没了，它的会话就不再归到仓库（已知边界：没有非有损的证据能把它们认回来）。
+export async function listProjectMemberDirs(cwd, baseDir = CLAUDE_DIR, memberOptions) {
+  const authorize = memberOptions?.authorize;
+  if (typeof authorize !== 'function') return listManagedWorktreeDirs(cwd, baseDir);
+  const self = authorize(cwd);
+  if (self?.kind === 'scratch-root') return listScratchMembers(self.path, authorize, baseDir);
+  const managed = await listManagedWorktreeDirs(cwd, baseDir);
+  const seen = new Set(managed.map(m => getProjectDir(m.cwd)));
+  const linked = listLinkedWorktrees(cwd)
+    // 托管 worktree 也是 linked worktree，已经在上面那份里了
+    .filter(w => !seen.has(getProjectDir(w.path)) && authorize(w.path)?.projectKey === cwd)
+    .map(w => ({ name: basename(w.path), cwd: w.path, gone: false }));
+  return [...managed, ...linked];
+}
+
+// scratch 根下的 scratch 目录。readdir 的 isDirectory 不跟随 symlink；形态与归属交给授权判据。
+// 每个 scratch 目录下的托管 worktree 也算：会话中途 EnterWorktree 时 CLI 把 transcript 整份搬进那里的
+// project 目录，不并进来的话「无文件夹」这一节在、会话却列不出来（2026-10-10 review P2）。
+async function listScratchMembers(root, authorize, baseDir) {
+  const out = [];
+  try {
+    for (const e of await readdir(root, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const auth = authorize(join(root, e.name));
+      if (auth?.kind !== 'scratch') continue;
+      out.push({ name: e.name, cwd: auth.path, gone: false, scratch: true });
+      for (const w of await listManagedWorktreeDirs(auth.path, baseDir)) out.push({ ...w, scratch: true });
+    }
+  } catch { /* 根还没建（从没开过无文件夹会话）：没有成员 */ }
+  return out;
 }
 
 const applyExcludeIds = (result, excludeIds) => (!excludeIds || excludeIds.size === 0
   ? result
   : { ...result, sessions: result.sessions.filter(s => !excludeIds.has(s.id)) });
 
-// project 目录名里 `/.claude/worktrees/` 这一段编码后的样子。encodeProjectDir 是逐字符的
-// 「非字母数字 → '-'」，所以整条路径的编码 = 各段编码的拼接，这个中缀可以直接当前缀用。
-const WORKTREE_PROJECT_INFIX = '--claude-worktrees-';
-
 // 枚举该工作区下的托管 worktree（CLI 的 EnterWorktree / --worktree / agent isolation 的落点）。
 //
 // 【为什么 readdir 而不是 `git worktree list`】判据只是"目录在不在"，readdir 零子进程；而 git 那份
-// 会把仓库外的平级兄弟 worktree（`../repo-<分支>`）一并列出来——那类跳出白名单子树，不在派生放行集里
-// （见 workdirs.js 的 resolveManagedWorktree），列出来也点不开，等于造一批必然失败的行。
+// 会跑 git 子进程，而授权判据刻意不在任何目录里执行 git（见 folder-access.js 文件头）。仓库外的平级
+// worktree 由 folder-access.js 的 listLinkedWorktrees 从仓库侧读 `.git/worktrees/*` 列出，不走这里。
 //
 // 残留目录（worktree 已 `git worktree remove`、目录还在）不特意排除：它的 transcript 确实存在过，
 // 列出来是诚实的；真打开时 routeCwd 那道判据仍会独立复核一次。
@@ -896,17 +1259,24 @@ const WORKTREE_PROJECT_INFIX = '--claude-worktrees-';
 // 那棵树下的会话在抽屉里整批消失，而 jsonl 一个字节没少——用户看到的是「工作区抽屉没有这个会话」。
 // 这不是异常路径：CLI 的 ExitWorktree 只认本会话 EnterWorktree 建的树，对 CCM 自己 `git worktree add`
 // 建的那批一律 no-op，于是「干完活退出 worktree」唯一走得通的路就是让模型自己敲 `git worktree remove`。
-// 后半条判据靠 project 目录名的前缀匹配，因为 getProjectDir 是纯字符串编码、不碰磁盘：
-// 一条已经不存在的路径照样算得出它当初落在哪个 project 目录。
+// 后半条判据从 ~/.claude/projects 反查：project 目录名按前缀挑候选，是哪棵 worktree 看 transcript 记的 cwd。
 //
-// 【两处已知的不精确，都无害】① 名字含 `.` 的 worktree，反推出的 name 会把点显示成连字符——
-// 但用它拼回去的路径再编码一次仍是同一个 project 目录（编码幂等），历史读的还是对的那份；
-// ② 父仓路径编码后逼近 200 字符时 encodeProjectDir 会截断 + 接 hash，前缀匹配失效，那种工作区的
-// 孤儿 worktree 扫不到——退回没有这条判据时的行为，不会错列成别人的会话。
+// 【名字与路径不从目录名里切】目录名是有损编码（`.` 也变 `-`），超过 200 字符时还截到 200 再接 hash——
+// worktrees 根与每棵 worktree 各接各的，只剩前 200 个字符相同，切出来的名字带着 hash、拼回去的路径不存在，
+// 仓库路径一长，已删 worktree 的会话就整批消失（2026-10-10 第五轮 review 同类）。
+//
+// 【为什么需要非有损的证据】`<repo>--claude-worktrees-foo` 与 `<repo>/.claude/worktrees/foo` **编码完全相同**；
+// 截断时前 200 个字符相同的别的目录（仓库的其他子目录、名字更长的邻居）也会被前缀挑进来。只按前缀认领的话，
+// 与本仓毫无关系的项目的会话会被列进本仓抽屉、还标成「worktree 已删除」；而 baseDir 装的是本机所有 Claude
+// 项目的 transcript，这个面不小。所以只认父目录正好是本仓 worktrees 根的 cwd。
+//
+// 【失败方向：查不到证据就不认领】读不出 cwd（目录空、文件截断、老版本没这个字段）的 transcript 不算数，
+// 那棵树就扫不到——退回的是「这条会话看不见」，而不是「可能列错项目的会话」。少列一条比列错一条安全。
+// 实测本机 128 个 project 目录全部带这个字段（2026-09-13）。归属取「最近一条编码后等于目录名的记录」
+// （projectCwdsOf），被 EnterWorktree 整份搬过来、头部还记着原仓的 transcript 照样认得出（真机 1c401b5d）。
 async function listManagedWorktreeDirs(cwd, baseDir = CLAUDE_DIR) {
   const root = managedWorktreeRoot(cwd);
-  // 去重键用 project 目录名而不是 name：两条枚举路径给出的 name 规范不同（readdir 是原始目录名，
-  // 前缀匹配是编码后的串），拿 name 去重会让含 `.` 的活树同时出现「活着」与「已删」两行。
+  // 去重键用 project 目录名：活树的 project 目录在下面反查时直接跳过，同一棵树不会既「活着」又「已删」。
   const byProject = new Map();
   try {
     for (const e of await readdir(root, { withFileTypes: true })) {
@@ -916,47 +1286,131 @@ async function listManagedWorktreeDirs(cwd, baseDir = CLAUDE_DIR) {
     }
   } catch { /* 没有 .claude/worktrees/ —— 绝大多数工作区的常态，不是异常 */ }
 
-  const prefix = getProjectDir(cwd) + WORKTREE_PROJECT_INFIX;
+  // 前缀只是**候选筛选**，挡掉的是绝大多数无关目录（`/repo-x` 与 `/repo/sub` 编码后分别是
+  // `-repo-x-…` 与 `-repo-sub-…`，都接不上 `-repo--claude-worktrees-`）。它答不了所有权——见上。
+  const prefix = projectDirDescendantPrefix(root);
   try {
     const candidates = [];
     for (const e of await readdir(baseDir, { withFileTypes: true })) {
-      // 前缀只是**候选筛选**，挡掉的是绝大多数无关目录（`/repo-x` 与 `/repo/sub` 编码后分别是
-      // `-repo-x-…` 与 `-repo-sub-…`，都接不上 `-repo--claude-worktrees-`）。它答不了所有权——
-      // 见下面那道回验。
-      if (!e.isDirectory() || !e.name.startsWith(prefix) || byProject.has(e.name)) continue;
-      const name = e.name.slice(prefix.length);
-      if (name) candidates.push({ project: e.name, name, wtCwd: join(root, name) });
+      if (e.isDirectory() && e.name.startsWith(prefix) && !byProject.has(e.name)) candidates.push(e.name);
     }
-    const verified = await Promise.all(candidates.map(async c => (
-      await transcriptCwdOf(join(baseDir, c.project)) === c.wtCwd ? c : null
-    )));
-    for (const c of verified) {
-      if (c) byProject.set(c.project, { name: c.name, cwd: c.wtCwd, gone: true });
+    const owned = await Promise.all(candidates.map(async project => [
+      project, (await projectCwdsOf(join(baseDir, project))).find(c => sameCwd(dirname(c), root)),
+    ]));
+    for (const [project, wtCwd] of owned) {
+      if (wtCwd) byProject.set(project, { name: basename(wtCwd), cwd: wtCwd, gone: true });
     }
   } catch { /* ~/.claude/projects 不可读：退回只认实际目录 */ }
   return [...byProject.values()];
 }
 
-// 一个 project 目录当初是从哪个 cwd 落下来的 —— 取该目录里任一 transcript 头部记录的 cwd 字段。
-//
-// 【为什么需要非有损的证据】encodeProjectDir 把每个非字母数字字符都换成 '-'，于是
-// `<repo>--claude-worktrees-foo` 与 `<repo>/.claude/worktrees/foo` **编码完全相同**，磁盘上就是
-// 同一个目录名。只按前缀认领的话，前者（一个与本仓毫无关系的独立项目）的会话会被列进本仓抽屉、
-// 还标成「worktree foo 已删除」；而 baseDir 装的是本机所有 Claude 项目的 transcript，这个面不小。
-// CLI 逐条记录写的 cwd 是真实路径，正好是那份编码丢掉的信息。
-//
-// 【失败方向：查不到证据就不认领】读不出 cwd（目录空、文件截断、老版本没这个字段）一律返回 null，
-// 于是那棵树扫不到——退回的是「这条会话看不见」（= 本判据存在之前的行为），而不是「可能列错项目的
-// 会话」。少列一条比列错一条安全。实测本机 128 个 project 目录全部带这个字段（2026-09-13）。
-async function transcriptCwdOf(projectDir) {
+// 一个 project 目录是从哪些 cwd 落下来的：每份 transcript 记的、编码后正好等于这个目录名的那个 cwd。
+// 目录名是有损编码——非字母数字一律变 '-'，中文也是，`/a/b-c` 与 `/a/b/c`、同一父目录下两个等长的中文名
+// 同名——不能反解成路径；也不能只认第一个：两个 cwd 撞名时另一个就永远成不了项目（2026-10-10 review P1）。
+// 读不出 cwd 的老文件不算数。
+export async function projectCwdsOf(projectDir) {
+  const out = new Set();
+  for (const owner of (await transcriptOwners(projectDir)).values()) if (owner) out.add(owner);
+  return [...out];
+}
+
+// ── transcript 的归属（2026-10-10 review P1）─────────────────────────────────────────────
+// 编码撞名时一个 project 目录归两个 cwd，目录说不清会话是谁的；transcript 每条记录自己记着 cwd。
+// 归属 = 最近一条「编码后等于目录名」的记录记的 cwd。不能取第一条：会话可以在两个撞名路径之间换驾驶目录
+// （EnterWorktree 进一个编码相同的已有 worktree），CLI 不搬文件、后面的记录照写进来，只认第一条它就永远归旧的
+// 那个（第四轮 review P1）；也不能取最后一条记录不论是否匹配：会话 cd 进子目录后记的 cwd 编码对不上这个目录。
+// 读不出 → null：老文件没这个字段，谁问都算它的（照旧列着）。
+// 先读尾部 OWNER_TAIL_BYTES——CLI 每条记录都带 cwd，最近的一条几乎总在这里；找不到（尾部是一条超长的工具输出）
+// 才读头尾两窗，取其中最后一个匹配的。按文件缓存，大小与修改时间都没变才复用：一追加，最近的记录就可能换了 cwd。
+const OWNER_TAIL_BYTES = 16 * 1024;
+const TRANSCRIPT_READ_LIMIT = 32; // 整个进程同时打开的 transcript 数：macOS 缺省 256 个文件句柄，一个目录几百份会话
+
+// 列表/搜索读 transcript 的并发上限，整个进程共用：一次全开、或几次扫描（同一项目的多个 worktree 成员、同时到达的
+// 几次请求）各自按批开，加起来都会超过 fd 上限；超出的 open 报 EMFILE，读盘函数把它当「读不出」吞掉，会话就
+// 静默掉出结果（#333 review P1）。释放时名额直接交给排队的下一个，不让新来的插队把并发顶过上限。
+let transcriptReadsActive = 0;
+const transcriptReadWaiters = [];
+async function withTranscriptReadSlot(fn) {
+  if (transcriptReadsActive < TRANSCRIPT_READ_LIMIT) transcriptReadsActive++;
+  else await new Promise(resolve => transcriptReadWaiters.push(resolve));
   try {
-    for (const f of await readdir(projectDir)) {
-      if (!f.endsWith('.jsonl')) continue;
-      const meta = await readHeadMeta(join(projectDir, f), null);
-      if (meta?.cwd) return meta.cwd;
+    return await fn();
+  } finally {
+    const next = transcriptReadWaiters.shift();
+    if (next) next(); else transcriptReadsActive--;
+  }
+}
+const mapWithReadSlots = (items, fn) => Promise.all(items.map(item => withTranscriptReadSlot(() => fn(item))));
+const OWNER_CACHE_CAP = 8192;
+const _ownerCache = new Map(); // file → { owner, size, mtimeMs }
+
+export async function transcriptOwnerCwd(file, dirName) {
+  let st;
+  try { st = await stat(file); } catch { return null; }
+  const hit = _ownerCache.get(file);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.owner;
+  const matches = c => getProjectDir(c) === dirName;
+  let owner = (await readCwdEvidence(file, OWNER_TAIL_BYTES)).findLast(matches) ?? null;
+  if (!owner && st.size > OWNER_TAIL_BYTES) owner = (await readCwdEvidence(file)).findLast(matches) ?? null;
+  setCapped(_ownerCache, file, { owner, size: st.size, mtimeMs: st.mtimeMs }, OWNER_CACHE_CAP);
+  return owner;
+}
+
+const sameCwd = (a, b) => a === b || a.normalize('NFC') === b.normalize('NFC');
+
+// 这份 transcript 算不算 cwd 的：归属读不出来算；读出来就得是它
+async function transcriptBelongsTo(file, cwd) {
+  const owner = await transcriptOwnerCwd(file, getProjectDir(cwd));
+  return owner === null || sameCwd(owner, cwd);
+}
+
+// 目录里每份 transcript 的归属：id → cwd | null
+async function transcriptOwners(dir) {
+  const dirName = basename(dir);
+  let names;
+  try { names = (await readdir(dir)).filter(n => n.endsWith('.jsonl') && isSafeSessionId(n.slice(0, -6))); } catch { return new Map(); }
+  const out = new Map();
+  await mapWithReadSlots(names, async n => {
+    out.set(n.slice(0, -6), await transcriptOwnerCwd(join(dir, n), dirName));
+  });
+  return out;
+}
+
+// 目录里记着别的 cwd 的会话 id——只有编码撞名时才非空
+async function foreignSessionIds(dir, cwd) {
+  const out = new Set();
+  for (const [id, owner] of await transcriptOwners(dir)) if (owner !== null && !sameCwd(owner, cwd)) out.add(id);
+  return out;
+}
+
+// transcript 头窗与尾窗里各条记录的 cwd（按记录先后，可重复）。只读两个窗，与 readHeadMeta 同一对上限：
+// 搬迁后仍在活动的会话，尾窗里就是新 cwd；两窗之间的死区只会让证据更少（方向是少认领，见上）。
+// tailBytes：只读文件末尾这么多（归属判定的快路径）。
+// 不是普通文件（FIFO 等，见 openRegularFile）同读不出：没有证据。
+async function readCwdEvidence(file, tailBytes = 0) {
+  const out = [];
+  let fh;
+  try {
+    let st;
+    ({ fh, st } = await openRegularFile(file));
+    const { size } = st;
+    const windows = tailBytes ? [[Math.max(0, size - tailBytes), Math.min(size, tailBytes)]]
+      : size > HEAD_READ_BYTES + TAIL_READ_BYTES
+        ? [[0, HEAD_READ_BYTES], [size - TAIL_READ_BYTES, TAIL_READ_BYTES]]
+        : [[0, size]];
+    for (const [start, len] of windows) {
+      const buf = Buffer.allocUnsafe(len);
+      const { bytesRead } = await fh.read(buf, 0, len, start);
+      for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; } // 空行 / 窗口切开的半行
+        if (typeof entry?.cwd === 'string' && entry.cwd) out.push(entry.cwd);
+      }
     }
-  } catch { /* 目录不可读 */ }
-  return null;
+  } catch { /* 读不出：没有证据 */ } finally {
+    await fh?.close().catch(() => {});
+  }
+  return out;
 }
 
 // 标题子串匹配（大小写不敏感）。空/空白 query 视为全匹配。前后端各有一份同语义纯函数（前端在
@@ -967,11 +1421,11 @@ export function matchesSessionTitle(title, query) {
   return String(title || '').toLowerCase().includes(q);
 }
 
-// 搜索匹配键：抽屉可见的 SDK summary + readHeadMeta 各字段（ai-title / 未截断 firstUser / 命令名）。
+// 搜索匹配键：抽屉可见的 SDK summary + readHeadMeta 各字段（custom-title / ai-title / firstUser 前 FIRST_USER_KEY_CHARS 字、不按展示的 60 字截 / 命令名）。
 // 浏览走 SDK summary，搜索走扫盘——两套标题不是同一串，必须 OR，否则按看见的词会搜空。
-export function sessionTitleSearchKeys({ summary, aiTitle, firstUser, firstCmd } = {}) {
+export function sessionTitleSearchKeys({ summary, customTitle, aiTitle, firstUser, firstCmd } = {}) {
   const keys = [];
-  for (const raw of [summary, aiTitle, firstUser, firstCmd]) {
+  for (const raw of [summary, customTitle, aiTitle, firstUser, firstCmd]) {
     const s = typeof raw === 'string' ? raw.trim() : '';
     if (s) keys.push(s);
   }
@@ -996,7 +1450,7 @@ export function resolveSessionListTitle({ summary, metaTitle } = {}) {
 //   生产（baseDir === CLAUDE_DIR）→ SDK getSessionInfo.summary（= listSessions 映射到 title 的那串，
 //     含 /rename 自定义标题 / 自动摘要 / 首条 prompt，见 SDKSessionInfo.summary）；
 //   SDK 无 summary（sidechain / 提不出摘要，getSessionInfo 返回 undefined）或隔离测试 baseDir
-//     → 该 jsonl 的 readHeadMeta（ai-title > firstUser > firstCmd）。
+//     → 该 jsonl 的 readHeadMeta（custom-title > ai-title > firstUser > firstCmd）。
 // 占位 '(无标题)' 返回空串，让通知层跳过会话段、只留项目名。非法 id 不拼路径。
 export async function peekSessionListTitle(cwd, sessionId, { baseDir = CLAUDE_DIR } = {}) {
   if (!cwd || !isSafeSessionId(sessionId)) return '';
@@ -1058,23 +1512,29 @@ const useSdk = (baseDir) => baseDir === CLAUDE_DIR;
 // lastUsedAt：优先读 transcript 尾窗「最后主链 user/assistant」时间；读不到才回落 SDK lastModified。
 async function scanSessionsViaSdk(cwd, limit) {
   const fn = __sdkListSessionsForTest || sdkListSessions;
-  // 候选窗口 ≥ 显示 limit，且至少覆盖「显示全部」硬顶，便于按活动时间重排后仍能选出真最近 N。
+  // 候选窗口 ≥ 显示 limit，且至少覆盖一页上限 LIST_LIMIT，便于按活动时间重排后仍能选出真最近 N。
   const fetchLimit = Math.max(limit, LIST_LIMIT) + 1;
-  const all = await fn({ dir: cwd, limit: fetchLimit });
+  // includeWorktrees 缺省 true：SDK 会跑 git worktree list，把每棵 worktree 的会话都并进来。成员目录本模块
+  // 自己枚举（listProjectMemberDirs → 逐个 scanOneCwd），SDK 再展开一次只会挤占候选窗、多扫 N 遍盘（#451）。
+  const all = await fn({ dir: cwd, limit: fetchLimit, includeWorktrees: false });
   const arr = Array.isArray(all) ? all : [];
   const projectDir = join(CLAUDE_DIR, getProjectDir(cwd));
   const enriched = (await Promise.all(arr.map(async s => {
     const file = join(projectDir, `${s.sessionId}.jsonl`);
-    // 归属过滤（2026-07-19 实测）：SDK listSessions 的 dir 匹配含祖先目录——查 worktree 路径会混入
-    // 主仓（祖先 cwd）的会话。jsonl 不在本 cwd 项目目录 = 非本 cwd 会话，滤掉；与 session:switch 的
+    // 归属过滤（2026-07-19 实测）：查 worktree 路径会混入主仓的会话。当时归因成「dir 匹配含祖先目录」，
+    // 读 SDK 0.3.310 实现后更正：混入来自 includeWorktrees 缺省 true 的 worktree 展开，上面已关（#451）。
+    // 过滤仍保留兜底（编码撞名等）：jsonl 不在本 cwd 项目目录 = 非本 cwd 会话，滤掉；与 session:switch 的
     // sessionFileExists 归属校验同一语义（列表 ≡ 可切换，不出「点了报会话不存在」的幽灵行）。
     let st;
     try { st = await stat(file); } catch { return null; }
     let activityAt = null;
     try { activityAt = await readLastMessageActivityMs(file, st.size); } catch { /* 读失败 → 回落 lastModified */ }
+    // SDK 提不出 summary 时回落 readHeadMeta，与搜索、通知横幅同口径——否则搜得到原文、抽屉却是占位（验收 O58）。
+    // 只对空 summary 的那几条才开文件，正常会话不多付一次读。readHeadMeta 读失败返回 {}，落到占位。
+    const title = s.summary || (await readHeadMeta(file, st.size)).title || '(无标题)';
     return {
       id: s.sessionId,
-      title: s.summary || '(无标题)',
+      title,
       lastUsedAt: Math.round(activityAt ?? s.lastModified),
     };
   }))).filter(Boolean);
@@ -1111,8 +1571,10 @@ async function scanSessionsViaSdk(cwd, limit) {
     const extra = await Promise.all(stats.slice(0, fetchLimit).map(async m => {
       const file = join(projectDir, m.name);
       const activityAt = await readLastMessageActivityMs(file, m.size).catch(() => null);
-      // 标题：这类会话主链无消息，readHeadMeta 也提不出，统一回落占位（与快路径空 summary 同口径）
-      return { id: m.name.slice(0, -6), title: '(无标题)', lastUsedAt: Math.round(activityAt ?? m.mtimeMs) };
+      // 标题回落 readHeadMeta（与快路径空 summary 同口径）。本地 slash 命令跑完的会话主链无消息，提不出就是占位；
+      // 首条以 HTML 标签开头的会话 SDK 同样提不出 summary、整条漏报，但首条 user 文本在（验收 O58）。
+      const meta = await readHeadMeta(file, m.size);
+      return { id: m.name.slice(0, -6), title: meta.title || '(无标题)', lastUsedAt: Math.round(activityAt ?? m.mtimeMs) };
     }));
     enriched.push(...extra);
   } catch { /* readdir 失败（目录刚被删等）：SDK 结果照常返回，不因补齐失败而整个列表塌掉 */ }
@@ -1128,12 +1590,13 @@ async function scanSessionsViaSdk(cwd, limit) {
   };
 }
 
-// 搜索 overlay：向 SDK 要浏览窗同量级的 summary，叠到扫盘候选上当匹配键/展示标题。
-// 不拿 SDK 当候选集（窗仍 ≈51）；SDK 失败则 overlay 为空，仍可按 readHeadMeta 搜。
+// 搜索 overlay：向 SDK 要 summary，叠到扫盘候选上当匹配键/展示标题。范围到浏览窗硬顶——抽屉「加载更多」最多显示到
+// 那里，显示的就是 SDK summary（/rename 后的标题）；overlay 只要 51 条的话，窗外改过名的会话看得到新标题却搜不到
+// （PR #333 review）。不拿 SDK 当候选集；SDK 失败则 overlay 为空，仍可按 readHeadMeta 搜。
 async function fetchSdkSummaryMap(cwd) {
   const fn = __sdkListSessionsForTest || sdkListSessions;
-  const fetchLimit = LIST_LIMIT + 1;
-  const all = await fn({ dir: cwd, limit: fetchLimit });
+  const fetchLimit = BROWSE_HARD_LIMIT + 1;
+  const all = await fn({ dir: cwd, limit: fetchLimit, includeWorktrees: false }); // 同 scanSessionsViaSdk（#451）
   const map = new Map();
   for (const s of Array.isArray(all) ? all : []) {
     if (!s || typeof s.sessionId !== 'string') continue;
@@ -1143,34 +1606,36 @@ async function fetchSdkSummaryMap(cwd) {
   return map;
 }
 
-async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, query = '') {
+async function scanSessionsPage(dir, cwd, limit, baseDir, query = '', foreign = new Set()) {
   // 标题搜索必须绕开 SDK 快路径：其 fetchLimit≈51，窗外旧会话永远进不了候选集。
   // query 非空 → 强制全量 readdir + readHeadMeta 再过滤（n=1 下百~数百级可接受）。
+  // 返回 { result, degraded }：degraded = 本该问 SDK 却因它抛错没问成，结果缺 SDK 标题（见 DEGRADED_LIST_TTL）。
   if (query) {
     let titleById = new Map();
+    let degraded = false;
     if (useSdk(baseDir)) {
-      try { titleById = await fetchSdkSummaryMap(cwd); } catch { /* overlay 失败：仍按 readHeadMeta 搜 */ }
+      try { titleById = await fetchSdkSummaryMap(cwd); } catch { degraded = true; /* overlay 失败：仍按 readHeadMeta 搜 */ }
     }
-    return scanViaReaddir(dir, limit, cacheKey, query, titleById);
+    return { result: await scanViaReaddir(dir, limit, query, titleById, foreign), degraded };
   }
-  if (useSdk(baseDir)) {
+  // 目录里有别的 cwd 的会话（编码撞名）时也绕开 SDK：它按目录列，剔掉之后凑不满 limit、total 也不对
+  if (useSdk(baseDir) && !foreign.size) {
     try {
-      const result = await scanSessionsViaSdk(cwd, limit);
-      _listCache.set(cacheKey, { ts: Date.now(), result });
-      return result;
+      return { result: await scanSessionsViaSdk(cwd, limit), degraded: false };
     } catch {
       // SDK 异常（CLI 版本/环境/编码不一致）不 fail-closed：回落自造扫盘兜底，列表照常出。
-      return scanViaReaddir(dir, limit, cacheKey, '');
+      return { result: await scanViaReaddir(dir, limit, ''), degraded: true };
     }
   }
-  return scanViaReaddir(dir, limit, cacheKey, '');
+  return { result: await scanViaReaddir(dir, limit, '', new Map(), foreign), degraded: false };
 }
 
 // 自造扫盘（兜底路径 + baseDir 隔离测试实例 + 标题搜索唯一路径）：
 // readdir + N×stat + 全量尾窗活动时间 + readHeadMeta。
-// 浏览：只对前 limit 条读 meta。搜索：对前 SEARCH_SCAN_LIMIT 条读 meta 再按标题过滤。
+// 浏览：只对前 limit 条读 meta。搜索：对全部会话读 meta 再按标题过滤——浏览窗硬顶之后的提示就是「用搜索找」，
+// 搜索再设顶，那批会话就既加载不出也搜不到（验收 O100）。meta 按文件 (size, mtime) 缓存，只有首次搜索付全量读盘。
 // 排序/lastUsedAt 用最后主链消息时间（无则回落 mtime），避免 mode/permission-mode 等元数据写盘把旧会话顶前。
-async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new Map()) {
+async function scanViaReaddir(dir, limit, query = '', titleById = new Map(), exclude = new Set()) {
   let names;
   try {
     names = await readdir(dir);
@@ -1180,7 +1645,8 @@ async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new 
 
   // B2：stat 并发（Promise.allSettled 容错：单文件失败不影响其他）
   // 只认安全 session id（与 SDK 补齐同口径），避免备份文件进列表。
-  const jsonlNames = names.filter(n => n.endsWith('.jsonl') && isSafeSessionId(n.slice(0, -6)));
+  // exclude：记着别的 cwd 的会话（编码撞名），在排序、截 limit 之前剔掉
+  const jsonlNames = names.filter(n => n.endsWith('.jsonl') && isSafeSessionId(n.slice(0, -6)) && !exclude.has(n.slice(0, -6)));
   const statResults = await Promise.allSettled(
     jsonlNames.map(async name => {
       const file = join(dir, name);
@@ -1193,22 +1659,21 @@ async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new 
     .map(r => r.value);
 
   // 全量读尾窗活动时间再排序（只读 64KB 尾，不对全量 readHeadMeta）——保证 limit 截断窗口本身按真消息时间取最近 N。
-  const activityResults = await Promise.allSettled(
-    stated.map(async s => {
+  const withActivity = (await mapWithReadSlots(stated, async s => {
+    try {
       const activityAt = await readLastMessageActivityMs(s.file, s.size);
       return { ...s, activityAt: activityAt ?? s.mtimeMs };
-    })
-  );
-  const withActivity = activityResults
-    .filter(r => r.status === 'fulfilled')
-    .map(r => r.value);
+    } catch {
+      return null;
+    }
+  })).filter(Boolean);
   // 活动时间相同（或都回落 mtime）时按 id 稳定排序，避免两次 list 顺序抖动。
   withActivity.sort((a, b) => b.activityAt - a.activityAt || String(a.id).localeCompare(String(b.id)));
 
   const total = withActivity.length;
-  const metaBudget = query ? Math.min(total, SEARCH_SCAN_LIMIT) : Math.min(total, limit);
+  const metaBudget = query ? total : Math.min(total, limit);
   const ranked = withActivity.slice(0, metaBudget);
-  const metas = await Promise.all(ranked.map(s => readHeadMeta(s.file, s.size)));
+  const metas = await mapWithReadSlots(ranked, s => cachedHeadMeta(s.file, s.size, s.mtimeMs));
   const decorated = ranked.map((s, i) => {
     const meta = metas[i] || {};
     const overlay = titleById.get(s.id) || '';
@@ -1224,6 +1689,7 @@ async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new 
       _keys: query
         ? sessionTitleSearchKeys({
           summary: overlay,
+          customTitle: meta.customTitle,
           aiTitle: meta.aiTitle,
           firstUser: meta.firstUser,
           firstCmd: meta.firstCmd,
@@ -1243,11 +1709,7 @@ async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new 
     hasMore = total > limit;
   }
   for (const s of sessions) delete s._keys;
-  const result = { sessions, hasMore, total };
-
-  // B2：存缓存（键含 limit；搜索键另含 q:，见 listSessionsPage）
-  _listCache.set(cacheKey, { ts: Date.now(), result });
-  return result;
+  return { sessions, hasMore, total };
 }
 
 // 向后兼容包装：仅返回会话数组（多处 script/测试直接用数组）。新代码若需 hasMore 用 listSessionsPage。
@@ -1267,16 +1729,13 @@ export async function listSessions(cwd, opts = {}) {
 //
 // 不存在 / 不属于本 cwd / id 非法一律静默跳过（allSettled）：调用方拿到的就是「确实还在这个工作区里」
 // 的那些。会话被删掉后 manual 标记会残留在 read-state 里（那张表不知道文件没了），这里正是它的收口。
-export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR } = {}) {
+export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR, memberOptions } = {}) {
   const wanted = [...new Set(ids || [])].filter(id => isSafeSessionId(id));
   if (!wanted.length) return [];
-  // 候选目录 = 工作区自身 + 它的托管 worktree。只查父仓的话，worktree 里被手动标未读的会话
+  // 候选目录 = 项目自身 + 它的成员目录（与 listSessionsPage 同一份）。只查父仓的话，worktree 里被手动标未读的会话
   // 在被 limit 挤出时间窗后就永远拉不回来了——标记还在 read-state 里，行却再也不出现，
   // 而长按确认框对用户的承诺恰恰是「这一行会一直显示未读，直到你再次打开它」。
-  const owners = [
-    { cwd, worktree: null, gone: false },
-    ...(await listManagedWorktreeDirs(cwd, baseDir)).map(w => ({ cwd: w.cwd, worktree: w.name, gone: w.gone })),
-  ];
+  const owners = [{ cwd, member: null }, ...(await listProjectMemberDirs(cwd, baseDir, memberOptions)).map(m => ({ cwd: m.cwd, member: m }))];
   const settled = await Promise.allSettled(wanted.map(async id => {
     // 逐个候选找 jsonl；都没有就抛，由下面的 filter 丢弃（不返回幽灵行）。
     //
@@ -1298,6 +1757,7 @@ export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR } = {})
       const candidate = join(baseDir, getProjectDir(o.cwd), `${id}.jsonl`);
       try {
         const s = await stat(candidate);
+        if (!(await transcriptBelongsTo(candidate, o.cwd))) continue; // 编码撞名：别的 cwd 的会话
         // 判据与 listSessionsPage 同口径：按最后一条消息的时间，读不出来才回落 mtime。
         // 不能只比 mtime——transcript 被复制/touch 过时 mtime 会说谎，而两个入口对同一个会话
         // 给出不同历史是最难归因的一类症状。候选数就是「父仓 + 它的 worktree 数」，逐个读尾部
@@ -1319,9 +1779,8 @@ export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR } = {})
       model: (meta && meta.model) || null,
       entrypoint: (meta && meta.entrypoint) || null,
       lastUsedAt: Math.round(activityAt ?? st.mtimeMs),
-      // 与 listSessionsPage 的行同形：父仓行不带 cwd，worktree 行带——前端点开时要用真实 cwd
-      ...(owner.worktree ? { cwd: owner.cwd, worktree: owner.worktree } : {}),
-      ...(owner.gone ? { worktreeGone: true } : {}),
+      // 与 listSessionsPage 的行同形：项目根的行不带 cwd，成员目录的行带——前端点开时要用真实 cwd
+      ...(owner.member ? memberRowFields(owner.member) : {}),
     };
   }));
   return settled
@@ -1331,7 +1790,7 @@ export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR } = {})
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt || String(a.id).localeCompare(String(b.id)));
 }
 
-// B3：写入新会话后失效该 cwd 的列表缓存，确保 session:list 立即可见（不等待 TTL 过期）。
+// B3：写入新会话后失效该 cwd 的列表缓存，确保 session:list 立即可见（不依赖目录指纹恰好变了）。
 // 键现含 limit → 删该 dir 的所有 limit 变体。
 export function invalidateListCache(cwd) {
   const prefix = join(CLAUDE_DIR, getProjectDir(cwd)) + ':';
@@ -1340,21 +1799,32 @@ export function invalidateListCache(cwd) {
   }
 }
 
-// 读文件头部 HEAD_READ_BYTES，提取 title（ai-title > 首条 user 文本 > 首条命令名）/ model / entrypoint。
-// model/entrypoint/firstUser 都在会话开头，只读头部即可；ai-title 是 CLI 事后追加、位置不定，头部漏读时
-// 再补读尾窗（见 TAIL_READ_BYTES）。末行可能被截断 → JSON.parse 失败即跳过。
-// size 由 listSessionsPage 的 stat 透传复用（省一次 syscall）；未传时回退 fstat，保持可独立调用。
+// 读文件头部 HEAD_READ_BYTES，提取 title（custom-title > ai-title > 首条 user 文本 > 首条命令名）/ model / entrypoint。
+// model/entrypoint/firstUser 都在会话开头，只读头部即可；custom-title / ai-title 是事后追加、位置不定，
+// 还要读尾窗（见 readHeadMeta 里的两档窗口）。末行可能被截断 → JSON.parse 失败即跳过。
+// size 由 listSessionsPage 的 stat 透传（与排序用的同一份）；未传时用打开时 fstat 的。
+const HEAD_META_CACHE_CAP = 8192;
+const _headMetaCache = new Map(); // file → { size, mtimeMs, meta }
+async function cachedHeadMeta(file, size, mtimeMs) {
+  const hit = _headMetaCache.get(file);
+  if (hit && hit.size === size && hit.mtimeMs === mtimeMs) return hit.meta;
+  const meta = await readHeadMeta(file, size);
+  // 读失败（{}）不缓存。满了就只更新已有的、不再收新的：搜索按「新→旧」顺序扫，超过上限的大目录里先进先出会让
+  // 每次扫描都把下一段要用的条目挤掉，缓存永远打不中（#333 review）。代价是满了之后新会话每次重读。
+  if ('title' in meta && (hit || _headMetaCache.size < HEAD_META_CACHE_CAP)) _headMetaCache.set(file, { size, mtimeMs, meta });
+  return meta;
+}
+
 async function readHeadMeta(file, size) {
-  // cwd 是 CLI 逐条记录写进 transcript 的**真实路径**（非有损，不同于 project 目录名那份编码）。
-  // 孤儿 worktree 的归属回验只认它，见 listManagedWorktreeDirs。
-  const meta = { title: '', model: null, entrypoint: null, cwd: null };
-  // 标题优先级：CLI 生成的 ai-title（与 /resume 选择器同款）> 首条真实 user 文本 > 首条斜杠命令名。
+  const meta = { title: '', model: null, entrypoint: null };
+  // 标题优先级与 SDK summary 同口径：用户起的名（/rename、renameSession 写的 custom-title）> CLI 生成的
+  // ai-title（与 /resume 选择器同款）> 首条真实 user 文本 > 首条斜杠命令名。
   // 命令包裹（<command-name>/clear</command-name>…）是 CLI 注入的 meta、非用户原话，不直接当标题。
-  let aiTitle = '', firstUser = '', firstCmd = '';
+  let customTitle = '', aiTitle = '', firstUser = '', firstCmd = '';
   try {
-    const fh = await open(file, 'r');
+    const { fh, st } = await openRegularFile(file);
     try {
-      if (size == null) ({ size } = await fh.stat());
+      size ??= st.size;
       const headLen = Math.min(HEAD_READ_BYTES, size);
       // 两个 buffer 都被 fh.read 全量写入、只 toString 到 bytesRead——allocUnsafe 免去无谓零填充（尤其尾窗 512KB）。
       const buf = Buffer.allocUnsafe(headLen);
@@ -1368,9 +1838,10 @@ async function readHeadMeta(file, size) {
         // 见 app.js writeSessionEntrypoint），恒在头部、早于真实消息行——排除掉，否则所有 web 会话的
         // entrypoint 全部被它抢先误判成 cli。
         if (!meta.entrypoint && entry.entrypoint && entry.type !== 'entrypoint-marker') meta.entrypoint = entry.entrypoint;
-        if (!meta.cwd && typeof entry.cwd === 'string' && entry.cwd) meta.cwd = entry.cwd;
         if (!meta.model && entry.type === 'assistant' && entry.message?.model) meta.model = entry.message.model;
-        if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
+        if (entry.type === 'custom-title' && typeof entry.customTitle === 'string' && entry.customTitle.trim()) {
+          customTitle = entry.customTitle.trim(); // 后写者胜
+        } else if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
           aiTitle = entry.aiTitle.trim(); // 取头窗内最后一次（CLI 会更新，后写更准）
         } else if (entry.type === 'user' && !entry.isMeta) {
           const c = extractContent(entry.message?.content).trim();
@@ -1379,19 +1850,24 @@ async function readHeadMeta(file, size) {
           } else if (c.startsWith('<command-') || c.startsWith('<local-command-')) {
             /* 其他命令片段 / 本地命令 stdout/stderr 包裹：纯噪声，跳过 */
           } else if (c && !firstUser) {
-            firstUser = c;
+            firstUser = c.slice(0, FIRST_USER_KEY_CHARS);
           }
         }
       }
-      // 头窗没抓到 ai-title 且文件比头窗大 → 补读尾窗取最新 ai-title。单独 try 兜底：这第二次读失败绝不能
-      // 连累头窗已提取的 title/model/entrypoint（否则一条好会话反被降级成「(无标题)」）。半行 parse 失败被跳过，
-      // 完整的 ai-title 行仍可读到。⚠️ 头窗与尾窗之间 [64KB, size-512KB) 存在死区：ai-title 若只落在这中间
-      // （早期生成后 CLI 再没更新、且其后堆了 >512KB 内容）会两窗皆漏、回退 firstUser——实测现有会话未触发。
-      if (!aiTitle && size > HEAD_READ_BYTES) {
+      // 文件比头窗大 → 补读尾窗：custom-title 后写者胜，头窗里有也可能被后来的改名盖过，所以总要读；
+      // ai-title 只在头窗没抓到时才从尾窗取。窗口两档：头窗已有 ai-title 时只为找 custom-title，
+      // 读末尾 HEAD_READ_BYTES（与 SDK 列会话读的尾窗同大；CLI 回写元数据就是为了让它留在这个窗里）；
+      // 没有时照旧读 TAIL_READ_BYTES 找 ai-title。单独 try 兜底：这第二次读失败绝不能连累头窗已提取的
+      // title/model/entrypoint（否则一条好会话反被降级成「(无标题)」）。半行 parse 失败被跳过，
+      // 完整的标题行仍可读到。⚠️ 头窗与尾窗之间存在死区：标题若只落在这中间（早期生成后再没更新、
+      // 且其后堆了超过尾窗的内容）会两窗皆漏、回退下一档——实测现有会话未触发。
+      if (size > HEAD_READ_BYTES) {
         try {
-          // 尾窗起点跳过头窗已扫区省重复读，但回退 4KB 重叠——保证跨 64KB 边界的 ai-title 行（短，远小于 4KB）
-          // 被尾窗完整包含、不被两窗各切一半而漏读。>512KB 文件仍只读末尾 512KB。
-          const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : Math.max(0, HEAD_READ_BYTES - 4096);
+          const headAiTitle = Boolean(aiTitle);
+          const tailBytes = headAiTitle ? HEAD_READ_BYTES : TAIL_READ_BYTES;
+          // 尾窗起点跳过头窗已扫区省重复读，但回退 4KB 重叠——保证跨 64KB 边界的标题行（短，远小于 4KB）
+          // 被尾窗完整包含、不被两窗各切一半而漏读。大文件只读末尾 tailBytes。
+          const start = size > tailBytes ? size - tailBytes : Math.max(0, HEAD_READ_BYTES - 4096);
           const tbuf = Buffer.allocUnsafe(size - start);
           const { bytesRead: tRead } = await fh.read(tbuf, 0, size - start, start);
           for (const line of tbuf.toString('utf-8', 0, tRead).split('\n')) {
@@ -1399,11 +1875,13 @@ async function readHeadMeta(file, size) {
             let entry;
             try { entry = JSON.parse(line); } catch { continue; }
             if (!entry) continue; // 字面 "null" 行合法 parse 为 null，不判空会抛 TypeError 连累整个尾窗（头窗同款守卫）
-            if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
+            if (entry.type === 'custom-title' && typeof entry.customTitle === 'string' && entry.customTitle.trim()) {
+              customTitle = entry.customTitle.trim(); // 尾窗内最后一次 = 最新
+            } else if (entry.type === 'ai-title' && !headAiTitle && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
               aiTitle = entry.aiTitle.trim(); // 尾窗内最后一次 = 最新
             }
           }
-        } catch { /* 尾窗补读失败：保留头窗结果、回退 firstUser，不清空 meta */ }
+        } catch { /* 尾窗补读失败：保留头窗结果，不清空 meta */ }
       }
     } finally {
       await fh.close().catch(() => {}); // close 失败同样不该连累已提取的 meta
@@ -1411,10 +1889,11 @@ async function readHeadMeta(file, size) {
   } catch {
     return {};
   }
+  meta.customTitle = customTitle;
   meta.aiTitle = aiTitle;
   meta.firstUser = firstUser;
   meta.firstCmd = firstCmd;
-  meta.title = (aiTitle || firstUser || firstCmd).slice(0, 60);
+  meta.title = (customTitle || aiTitle || firstUser || firstCmd).slice(0, 60);
   return meta;
 }
 
@@ -1441,12 +1920,12 @@ export function lastMessageActivityMs(entries) {
   return null;
 }
 
-// 读 transcript 尾窗，解析最后主链消息时间。size 可注入省一次 stat；失败/空文件 → null。
+// 读 transcript 尾窗，解析最后主链消息时间。size 可注入（缺省用 fstat 的）；失败/空文件 → null。
 async function readLastMessageActivityMs(file, size) {
   try {
-    const fh = await open(file, 'r');
+    const { fh, st } = await openRegularFile(file);
     try {
-      if (size == null) ({ size } = await fh.stat());
+      size ??= st.size;
       if (!size) return null;
       const start = size > LIST_ACTIVITY_TAIL_BYTES ? size - LIST_ACTIVITY_TAIL_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
@@ -1479,14 +1958,14 @@ export function lastPermissionMode(entries) {
 
 // 从 transcript 尾部读回末条 permission-mode（tail-oriented：档记录随会话推进落盘，最后一条在文件尾）。
 // 只读末尾 TAIL_READ_BYTES：与 readHeadMeta 尾窗同款权衡——极端超大会话里若末条档记录距尾 >512KB
-// 则读不到、返回 null 优雅回落（不误、不崩）。size 可注入省一次 stat；baseDir 供单测指向 tmpdir。
+// 则读不到、返回 null 优雅回落（不误、不崩）。size 可注入（缺省用 fstat 的）；baseDir 供单测指向 tmpdir。
 export async function readLastPermissionMode(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
   if (!isSafeSessionId(sessionId)) return null; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
-    const fh = await open(file, 'r');
+    const { fh, st } = await openRegularFile(file);
     try {
-      if (size == null) ({ size } = await fh.stat());
+      size ??= st.size;
       if (size === 0) return null;
       const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
@@ -1525,9 +2004,9 @@ export async function readLastAssistantModel(sessionId, cwd, { baseDir = CLAUDE_
   if (!isSafeSessionId(sessionId)) return null; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
-    const fh = await open(file, 'r');
+    const { fh, st } = await openRegularFile(file);
     try {
-      if (size == null) ({ size } = await fh.stat());
+      size ??= st.size;
       if (size === 0) return null;
       const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
@@ -1648,6 +2127,11 @@ export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, regis
 //   assistant 含 tool_use            → pending（正在执行工具，结果未落盘）
 //   assistant 含 text（无 tool_use）  → settled（轮次收尾；'No response requested.' 自然覆盖）
 //   assistant 只有 thinking          → pending（流式中间态，text/tool_use 未落）
+//   assistant 只有【空】thinking     → 跳过，往前看（验收 O96：第三方网关把空 thinking 写在正文后面，
+//                                      链尾因此永远「只有 thinking」→ 永久 pending、手机一直只读。空 thinking
+//                                      不承载内容；前面是 user / tool_result 时跳过之后照样 pending，只有
+//                                      「正文 → 空 thinking」会收尾——与下面「正文落盘、紧接着还要发 tool_use」
+//                                      是同一个已知误判窗，同由 keepAlive 罩住）
 //   user 含 tool_result              → pending（等 assistant 消费结果继续）
 //   user 中断标记 [Request interrupted…] → settled（轮次被 Ctrl+C 掐掉）
 //   user 其他文本                     → pending（等 assistant 回复）
@@ -1691,6 +2175,11 @@ function hasLocalCommandStdoutAfter(entries, fromIndex) {
   return false;
 }
 
+// thinking 块没有任何文字（签名有无不论）。redacted_thinking 是另一种块、带着加密内容，不算空。
+function isEmptyThinkingBlock(b) {
+  return b?.type === 'thinking' && !String(b.thinking ?? '').trim();
+}
+
 // sidechainOnly=false：只看主链；true：只看子链（isSidechain）。
 // lastChainEntrypoint：链尾那条记录【自报】的写入方（CLI 写 'cli'、本项目 SDK 写 'sdk-ts'）。判「这条
 // pending 是谁留下的」用它——磁盘上的硬证据，比注册表可靠（旧版 CLI 不写注册表）。见 mirrorEntryLock。
@@ -1715,6 +2204,7 @@ function classifyChainTail(entries, sidechainOnly) {
         if (isCliSystemLine(text)) continue; // "No response requested." 等助手噪音：跳过继续往前找真链
         return { verdict: 'settled', lastChainTs, lastChainEntrypoint };
       }
+      if (blocks?.length && blocks.every(isEmptyThinkingBlock)) continue; // 网关噪音：见上方分类表
       return { verdict: 'pending', lastChainTs, lastChainEntrypoint }; // 只有 thinking / 空内容：流式中间态
     }
     // user
@@ -1785,9 +2275,9 @@ export async function readTranscriptTailEntries(sessionId, cwd, { baseDir = CLAU
   if (!isSafeSessionId(sessionId)) return null; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
-    const fh = await open(file, 'r');
+    const { fh, st } = await openRegularFile(file);
     try {
-      if (size == null) ({ size } = await fh.stat());
+      size ??= st.size;
       if (size === 0) return [];
       const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
@@ -1804,6 +2294,15 @@ export async function readTranscriptTailEntries(sessionId, cwd, { baseDir = CLAU
   } catch {
     return null;
   }
+}
+
+// 尾窗里最后一条 custom-title 的标题；尾窗里没有、或读不到，都返回 null。
+// 网页改名的退出补写（sessions/session-rename.js）拿它判断 CLI 收尾时有没有把旧名写回来——
+// 两种 null 都按「最后一条不是用户的名字」处理，再追加一次是无害的。
+export async function readLastCustomTitle(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
+  const entries = await readTranscriptTailEntries(sessionId, cwd, { baseDir });
+  const last = entries?.findLast(e => e?.type === 'custom-title' && typeof e.customTitle === 'string');
+  return last ? last.customTitle.trim() : null;
 }
 
 // IO 包装：读 transcript 尾窗 → classifyTailEntries。
@@ -1823,12 +2322,14 @@ export async function sessionFileExists(cwd, id, { baseDir = CLAUDE_DIR } = {}) 
   // session:switch 是纵深防御层：前端列表已按 cwd 过滤，但构造 payload（如 '../别的cwd/<id>'）不得
   // 借 join 规范化越出本 cwd 的 project 目录（/verify 2026-06-12 实测抓出）。空串也被 + 量词挡掉。
   if (!isSafeSessionId(id)) return false;
+  const file = join(baseDir, getProjectDir(cwd), `${id}.jsonl`);
   try {
-    await stat(join(baseDir, getProjectDir(cwd), `${id}.jsonl`));
-    return true;
+    if (!(await stat(file)).isFile()) return false; // FIFO 之类不是会话：放行了，打开时读历史就卡死
   } catch {
     return false;
   }
+  // 编码撞名时目录里可能是别的 cwd 的会话：在这里 resume 等于在错的文件夹里接着干（2026-10-10 review P1）
+  return transcriptBelongsTo(file, cwd);
 }
 
 // 会话是否属于这个**工作区**（含它的托管 worktree）。与 sessionFileExists 分开是刻意的：
@@ -1836,9 +2337,9 @@ export async function sessionFileExists(cwd, id, { baseDir = CLAUDE_DIR } = {}) 
 // 放宽它等于削弱纵深防御。本函数只服务「工作区级」的判断——最典型的是 session:list 的
 // currentSessionId：那个指针存在父仓名下（工作区轴归父仓），值却可能是 worktree 里的会话，
 // 按父仓单点查会恒判不存在，侧栏于是永远不高亮当前会话。
-export async function sessionExistsInWorkspace(cwd, id, { baseDir = CLAUDE_DIR } = {}) {
+export async function sessionExistsInWorkspace(cwd, id, { baseDir = CLAUDE_DIR, memberOptions } = {}) {
   if (await sessionFileExists(cwd, id, { baseDir })) return true;
-  for (const w of await listManagedWorktreeDirs(cwd)) {
+  for (const w of await listProjectMemberDirs(cwd, baseDir, memberOptions)) {
     if (await sessionFileExists(w.cwd, id, { baseDir })) return true;
   }
   return false;
@@ -1877,9 +2378,48 @@ export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } 
 // 原实现把两者并进同一个 localBusy，一起抑制追平 + 上锁 + 标脏，于是「手机上弹着审批卡片、人走到电脑前
 // 用终端继续同一会话」这 30 分钟里：终端的回合不上屏、手机没有只读横幅、externalDirty 也不置位 ——
 // 下一条手机消息直接送进停在 30 分钟前的 SDK 子进程，从旧 parentUuid 写出第二条链（transcript 分叉）。
-export function externalGrowthWhilePaused({ state, prevSize, curSize } = {}) {
+//
+// 「web 侧不写盘」只在【同一批】审批挂着时成立（O122）：两次 tick 之间若有审批结算（过期 / 批准 / 拒绝），
+// SDK 会写下那条 tool_result、继续跑，几毫秒内下一个审批又挂起——CLI 对并行的多个审批是逐个问的。
+// 两拍看到的都是 'permission'，中间的增长却是己方写的。所以两拍的挂起集合（prevPending/curPending，
+// 审批与提问 id 拼成的键）相同时，增长照旧全归终端；不同时只说明己方写过、不说明这段里【只有】己方，
+// 改看这段新写的条目里有没有别人写的（appendedForeign，见 appendedForeignWrite）。id 每次请求唯一，
+// 旧键不会碰巧等于新集合。
+export function externalGrowthWhilePaused({ state, prevSize, curSize, prevPending, curPending, appendedForeign } = {}) {
   if (state !== 'permission') return false;
-  return Number(prevSize) >= 0 && Number(curSize) >= 0 && Number(curSize) > Number(prevSize);
+  if (!(Number(prevSize) >= 0 && Number(curSize) >= 0 && Number(curSize) > Number(prevSize))) return false;
+  return prevPending === curPending || appendedForeign === true;
+}
+
+// 从 fromByte 读到文件尾，看这段新写的条目里有没有不是己方（sdk-ts）写的。只认自报了 entrypoint 的条目
+// （user / assistant 等主链记录都带）；没带的（快照、last-prompt 之类）不作证据，空行与切开的半行跳过。
+// 返回 { foreign, size }：size 是这次打开时的 fstat，也就是扫到的位置——调用方必须拿它当新基线，不能另外
+// stat 一次：终端恰好在两次读之间追加，扫描没看见、另一次 stat 却已越过它，那段就被吸收进基线（Codex review）。
+// 读不出 → { foreign: true, size: -1 }；这段大过尾窗上限 → foreign 保守为 true：多一次冷重启可以接受，
+// 漏标致分叉不可逆。
+export async function appendedForeignWrite(sessionId, cwd, fromByte, { baseDir = CLAUDE_DIR } = {}) {
+  if (!isSafeSessionId(sessionId)) return { foreign: true, size: -1 };
+  let fh;
+  try {
+    let st;
+    ({ fh, st } = await openRegularFile(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`)));
+    const size = st.size;
+    const len = size - fromByte;
+    if (len <= 0) return { foreign: false, size };
+    if (len > TAIL_READ_BYTES) return { foreign: true, size };
+    const buf = Buffer.allocUnsafe(len);
+    const { bytesRead } = await fh.read(buf, 0, len, fromByte);
+    for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (typeof entry?.entrypoint === 'string' && !isOwnSdkTail(entry.entrypoint)) return { foreign: true, size };
+    }
+    return { foreign: false, size };
+  } catch {
+    return { foreign: true, size: -1 };
+  } finally {
+    await fh?.close().catch(() => {});
+  }
 }
 
 // ---- 子代理进度观察（本地 slash 命令的唯一可见来源）----
@@ -1914,16 +2454,16 @@ export async function scanSubagents(sessionId, cwd, { baseDir = CLAUDE_DIR, sinc
     const entry = { agentId, agentType: null, description: null, lastToolName: null, lastActivityMs: 0 };
     // meta.json：agentType 恒有，description 只有被 spawn 的子代理有（顶层编排 agent 没有）
     try {
-      const meta = JSON.parse(await readFile(join(dir, `agent-${agentId}.meta.json`), 'utf-8'));
+      const meta = JSON.parse(await readRegularText(join(dir, `agent-${agentId}.meta.json`)));
       if (meta && typeof meta === 'object') {
         if (typeof meta.agentType === 'string') entry.agentType = meta.agentType;
         if (typeof meta.description === 'string') entry.description = meta.description;
       }
     } catch { /* meta 缺失/损坏：仍按无描述的子代理报出，不整条丢弃 */ }
     try {
-      const fh = await open(join(dir, name), 'r');
+      const { fh, st } = await openRegularFile(join(dir, name));
       try {
-        const { size, mtimeMs } = await fh.stat();
+        const { size, mtimeMs } = st;
         entry.lastActivityMs = mtimeMs;
         if (size > 0) {
           const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
@@ -1968,29 +2508,34 @@ export async function scanSubagents(sessionId, cwd, { baseDir = CLAUDE_DIR, sinc
 //
 // 【为什么保尾部】与 getSessionHistory 的 pushCapped 同口径。子代理的结论在末尾，
 // 砍尾等于砍掉答案；开头那几十条读文件反而是最不需要的。
+// 按主链那次 Agent 调用的 toolUseId 找出是哪一个子代理（读 agent-*.meta.json）。meta 极小（几十字节），
+// 全扫代价可忽略；找不到返回 null，【不得】回落成「随便给一个」——那会把别的子代理内容显示在这张卡上。
+// 目录不存在返回 undefined（调用方据此区分「本会话没有子代理」与「有，但没有这一个」）。
+// 子代理流水与按引用取图（transcript-image-read.js）共用。
+export async function findSubagentByToolUseId(dir, wanted) {
+  let names;
+  try { names = await readdir(dir); } catch { return undefined; }
+  for (const name of names) {
+    const m = /^agent-([0-9a-zA-Z_-]+)\.meta\.json$/.exec(name); // 字符集同 isSafeSessionId
+    if (!m) continue;
+    try {
+      const meta = JSON.parse(await readRegularText(join(dir, name)));
+      if (meta && typeof meta === 'object' && meta.toolUseId === wanted) {
+        return { agentId: m[1], agentType: typeof meta.agentType === 'string' ? meta.agentType : null,
+          description: typeof meta.description === 'string' ? meta.description : null };
+      }
+    } catch { /* meta 损坏/写入中：跳过，不整条失败 */ }
+  }
+  return null;
+}
+
 export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CLAUDE_DIR, limit = 400 } = {}) {
   if (!isSafeSessionId(sessionId)) return { ok: false, reason: 'bad_session' }; // SS-003 同口径：拼路径前先挡
   const wanted = typeof toolUseId === 'string' ? toolUseId.trim() : '';
   if (!wanted) return { ok: false, reason: 'bad_tool_use_id' };
   const dir = join(baseDir, getProjectDir(cwd), sessionId, 'subagents');
-  let names;
-  try { names = await readdir(dir); } catch { return { ok: false, reason: 'no_subagents' }; }
-
-  // 先按 meta 找出是哪一个 agent。meta 极小（几十字节），全扫代价可忽略；
-  // 找不到就返回 false，【不得】回落成「随便给一个」——那会把别的子代理内容显示在这张卡上。
-  let hit = null;
-  for (const name of names) {
-    const m = /^agent-([0-9a-zA-Z_-]+)\.meta\.json$/.exec(name); // 字符集同 isSafeSessionId
-    if (!m) continue;
-    try {
-      const meta = JSON.parse(await readFile(join(dir, name), 'utf-8'));
-      if (meta && typeof meta === 'object' && meta.toolUseId === wanted) {
-        hit = { agentId: m[1], agentType: typeof meta.agentType === 'string' ? meta.agentType : null,
-          description: typeof meta.description === 'string' ? meta.description : null };
-        break;
-      }
-    } catch { /* meta 损坏/写入中：跳过，不整条失败 */ }
-  }
+  const hit = await findSubagentByToolUseId(dir, wanted);
+  if (hit === undefined) return { ok: false, reason: 'no_subagents' };
   // 无 toolUseId 的 agent 存在（实证 179 个里 7 个：spawnDepth:2 的嵌套子代理，以及本地 slash
   // 命令的顶层编排 agent），它们锚不到主链的任何一次 tool_use，本函数天然找不到——这是已知边界，
   // 不是缺陷：没有锚点就没有可以挂载的卡片。
@@ -1998,16 +2543,16 @@ export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CL
 
   const items = [];
   let total = 0;
+  const toolNames = new Map(); // 同 getSessionHistory：tool_result 按工具名取摘要上限
   const pushCapped = (item) => {
     items.push(item);
     if (items.length > limit * 2) items.splice(0, items.length - limit);
   };
+  let input;
   try {
     // 流式逐行读：单文件可达 1.2MB，一次性 buffer 会在 always-on 进程里堆出峰值
-    const rl = createInterface({
-      input: createReadStream(join(dir, `agent-${hit.agentId}.jsonl`), { encoding: 'utf-8' }),
-      crlfDelay: Infinity,
-    });
+    input = (await openRegularFile(join(dir, `agent-${hit.agentId}.jsonl`))).fh.createReadStream({ encoding: 'utf-8' });
+    const rl = createInterface({ input, crlfDelay: Infinity });
     for await (const line of rl) {
       if (!line.trim()) continue;
       let entry;
@@ -2017,6 +2562,7 @@ export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CL
       // 与主历史同构：复用同一个展开器，前端才能拿同一套渲染跑两条路径。
       // parentToolUseId 一律填这张卡的 id——本函数返回的每一条按定义都属于它。
       const expanded = expandHistoryEntry(entry.message?.content, entry.message?.role || entry.type, entry.timestamp, {
+        toolNames,
         isSidechain: true,
         parentToolUseId: wanted,
         uuid: null, // 分叉锚点只在主链有效（同 getSessionHistory 对 sidechain 的处理）
@@ -2025,6 +2571,8 @@ export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CL
     }
   } catch {
     return { ok: false, reason: 'read_failed' };
+  } finally {
+    input?.destroy();
   }
   const kept = items.slice(-limit);
   return {

@@ -337,7 +337,55 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        立即继续。CLI 的 autoContinueAtUsageLimit 只在交互模式生效，SDK 会话恒进不去，由 server
   //        自己调度（server/auto-continue.js）。**刻意不拆成三个事件**：三个动作共用同一份按 sessionId
   //        归键的状态、同一道相位校验（act()），拆开等于把相位机抄三份。入向 57→58）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 58);
+  //      + folders:browse / folders:add / folders:mkdir（2026-09-24，「已连接的文件夹」：照官方桌面端，
+  //        手机上直接浏览家目录、添加文件夹、新建项目文件夹。刻意不复用 browse:list：那条的范围是已连接
+  //        的文件夹、回的是文件条目；这里要在**范围之外**（家目录）挑一个目录加进来，只回目录名——
+  //        复用它等于把文件浏览的范围门放宽到整个家目录。也不走 env:set 改 WORKDIRS：那条是整份覆盖写，
+  //        手机上拿到的列表可能已过期，而且它不做「家目录内 / 不是 worktree / 不在禁区」的判据（FOLDER-01）。
+  //        三个动作的判据与失败处置各不相同（只读 / 写配置 / 建目录），不合成一个事件。入向 58→61）
+  //      + image:get（2026-10-11，会话里的图片：工具截图与用户贴图。事件与历史只带引用，图按需取——
+  //        截图常有几百 KB，内联会撑爆环形缓冲与手机上的历史加载。不复用 tool:full：那条只认实例内存，
+  //        而历史回放里的图在 transcript 里、实例早已不在；也不复用 attachment:read：那条读的是 CCM
+  //        自己的上传目录，transcript 里的图不在任何文件里。入向 61→62）
+  //      + folders:remove（2026-10-15，抽屉里「⋯ → 断开这个文件夹」，添加的对称面。不走 env:set 改 WORKDIRS，
+  //        理由同 folders:add：那条是整份覆盖写，手机上拿到的列表可能已过期；也不并进 folders:add：一个扩授权面、
+  //        一个缩，审计动作与失败处置不同。入向 62→63）
+  //      + folders:recheck（2026-10-23，#301：「N 个文件夹找不到了」告警里的「重新检查」。热加载只盯配置文件，
+  //        外置盘挂回来服务端察觉不到，只能手动让它重跑一次清单加载。不复用 folders:add / env:set：那两条写配置，
+  //        这条一个字节都不写、不动授权面，回执只带重算后的找不到的个数与路径。入向 63→64）
+  //      + about:get / about:checkUpdate（2026-10-23，设置「关于」页 #303：许可证原文与组件清单、检查更新。
+  //        不开 HTTP 端点（守「不开无鉴权数据端点」）；不并进 service:status：那条每次进「宿主机」页都发，
+  //        而许可证原文几十 KB、检查更新要打 GitHub。两个不合一：一个读本地文件，一个打外网、可能等 5s。入向 64→66）
+  //      + folders:pin（2026-10-23，抽屉文件夹长按「置顶 / 取消置顶」#305。只改展示顺序、存数据目录，不写 WORKDIRS，
+  //        所以不并进 folders:add / folders:remove——那两条改的是授权面。不新增出向事件：成功后复用 instances 快照。入向 66→67）
+  //      folders:pin → folders:reorder（2026-10-26，置顶换成长按拖动排序：载荷从「一个根 + 置顶与否」变成连接根的完整新顺序，
+  //        同一类展示偏好、同一个存储，旧事件不留。入向不变 67）
+  //      + folders:removeMissing（2026-10-27，#355：「N 个文件夹找不到了」告警里一键按原始配置条目移除仍缺失的。
+  //        不复用 folders:remove：那条只认当前有效连接根，缺失路径恰不在 workDirs 里；也不走 env:set 整份覆盖。入向 67→68）
+  //      + mcp:status / mcp:reconnect / mcp:toggle（2026-10-29，#457：「宿主机」页的 MCP 服务器对应终端 /mcp——现查状态、
+  //        重连、启停。三条都是对当前实例的控制请求，不开 HTTP 端点；toggle 会写项目配置，所以只认指定实例、不静默回落。入向 68→71）
+  //      + session:rename（2026-10-29，#458：网页端给会话改名，对应终端 /rename。写的是 transcript 而不是授权面，
+  //        与 deletePermanent 同口径校验；不新增出向事件：别的设备靠 instances 快照与 session:list 刷新跟上。入向 71→72）
+  //      + task:background（2026-10-29，#459 转后台＝终端 Ctrl+B：SDK Query.backgroundTasks(toolUseId?)。
+  //        不并进 task:stop：一个杀任务、一个只换前后台，载荷与失败原因都不同。入向 72→73）
+  //      + elicitation:respond（2026-10-29，#460 MCP 服务器要表单输入 / URL 授权时手机作答。不并进 user:answer：
+  //        那条是 AskUserQuestion 的选项下标 / 自由文本，这条是 accept|decline|cancel + 按 schema 校验的表单内容。入向 73→74）
+  //      + logs:clientPerf（2026-11-01，前端性能记录攒批上报，落成 ccm-server.log 的 [client-perf] 行，scripts/perf-report.js
+  //        按维度出分位值。不并进 logs:clientError：那条一次一个错误、给人读；这条是结构化批次、给统计读，清洗口径也不同。
+  //        fire-and-forget、无回执，所以进 MOCK_INBOUND_EXEMPT。入向 74→75）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 75);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('logs:clientPerf'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:removeMissing'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('about:get'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('about:checkUpdate'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:reorder'));
+  assert.ok(!INBOUND_SOCKET_EVENTS.includes('folders:pin'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:remove'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('image:get'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:browse'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:add'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:mkdir'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:autoContinue'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('logs:server'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('connect:qr'));
@@ -378,13 +426,17 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
 // 出向侧对称的数量锚点。CLAUDE.md 对外宣称的种数，此前全仓没有任何断言盯着
 // AGENT_EVENT_TYPES 的长度——增删 type 时那句话会静默失真。入向早有上面那条断言守着，
 // 出向没有纯属遗漏。数字变动时 doc-consistency 的 checkContractCounts 会把文档侧一并拦下。
-test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 31 种一致', () => {
+test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 32 种一致', () => {
   //      + rewind_applied（2026-09-10，文件轴回退已生效的广播。刻意做成出向事件而不是只回 ack：
   //        回退同时改了【文件】和【对话树】，而这两者在别的设备上都缓存着——另一台手机若只靠 ack
   //        就永远不知道该重载，屏幕上会一直留着已被服务端截断的那几轮，且刷新前不自愈。
   //        它走 outOfBand（跨会话通知，不能触发 currentSessionId 切换），因此必须同时登记进
   //        DEFAULT_REPLAY_OOB_TYPES——否则回放缓冲会把它排队再整批丢弃。出向 30→31）
-  assert.equal(AGENT_EVENT_TYPES.length, 31);
+  //      + foreground_tasks（2026-10-29，#459：此刻挡着本轮、可转后台的前台任务全量快照。瞬时、不进环形缓冲，
+  //        切回 / 重连由 sync:since 补推；同样走 outOfBand、登记进 DEFAULT_REPLAY_OOB_TYPES。出向 31→32）
+  //      + elicitation（2026-10-29，#460：MCP 表单 / URL 授权卡片。与 question 同族：进环形缓冲、走普通 handle，
+  //        进 pending 快照与 eventsSince 过滤；URL 授权完成走既有 system 信封的 kind:'elicitation_complete'，不另开 type。出向 32→33）
+  assert.equal(AGENT_EVENT_TYPES.length, 33);
   assert.ok(AGENT_EVENT_TYPES.includes('rewind_applied'));
   // trusted_devices（2026-09-09）：已受信任设备列表的下发面。载荷里没有全量 token，
   // 只有 shortId + kind/ua/ip/approvedAt + isCurrent（DEVICE-03）。

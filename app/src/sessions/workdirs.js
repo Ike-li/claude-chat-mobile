@@ -10,13 +10,39 @@ import { encodeProjectDir } from '../shared/project-dir.js';
 import { CLAUDE_DIR_NAME } from '../shared/claude-home.js';
 
 export const DEFAULT_SESSION_LIMIT = 6;   // 未指定时每工作区历史会话默认显示条数
-export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 与 src/server/app.js 的 session:list all 分支直接 import 本常量（= 前端「显示全部」的服务端硬顶）
+export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 直接用本常量
 export const MAX_LIVE_SESSIONS = 20;      // 全局硬上限：live 会话实例数量，防止有意保留过多 CLI 子进程
-// 会话标题搜索：SCAN 是扫盘匹配上限，必须高于 MAX_SESSION_LIMIT，否则搜不到「显示全部」窗外的旧会话。
-// RESULT 是返回条数上限，与浏览硬顶同量级（结果列表也不该一次吐上百行）。
-// 单一事实源：history.js 与 session:list handler 同 import。
-export const SEARCH_SCAN_LIMIT = 500;
+// 「显示更多」的硬顶：再往后的会话用标题搜索找——搜索扫全部会话、不设顶（验收 O100，见 history.js scanViaReaddir）。
+export const BROWSE_HARD_LIMIT = 500;
+// 会话标题搜索的返回条数上限，与浏览一页同量级（结果列表也不该一次吐上百行）。
 export const SEARCH_RESULT_LIMIT = 50;
+
+// session:list 的窗口条数，照抄桌面端 Code 侧栏的 Show more（每组初始 5 条，每点一次再显示同样条数）。
+// 初始用该连接根配置的条数，more = 用户点了几次「显示更多」，每次放宽同样条数——服务端没有 offset，
+// 每次照旧全量 readdir 排序、只对前 limit 条读 meta，所以「再显示一档」就是把窗口放宽一档。
+// 硬顶 BROWSE_HARD_LIMIT，再往后用搜索。搜索走 SEARCH_RESULT_LIMIT、不分档。
+// nextLimit：再点一次时的窗口；null = 不能再点。
+export function sessionListWindow({ query = '', more = 0, configuredLimit = DEFAULT_SESSION_LIMIT } = {}) {
+  if (query) return { limit: SEARCH_RESULT_LIMIT, nextLimit: null };
+  const n = Number.isInteger(more) && more > 0 ? more : 0;
+  const limit = Math.min(configuredLimit * (1 + n), BROWSE_HARD_LIMIT);
+  return { limit, nextLimit: limit < BROWSE_HARD_LIMIT ? Math.min(limit + configuredLimit, BROWSE_HARD_LIMIT) : null };
+}
+
+// 一页的收尾。调用方按 limit + 1 扫（多看一条才分得清「只多 1 条」与「还有一堆」）。
+// 不藏单条：只比窗口多 1 条时整页全给——同桌面端（len > t+n+1 才截断），「显示更多 1 个」不如让它直接出现。
+export function fitSessionPage({ sessions, hasMore }, limit) {
+  if (sessions.length > limit && hasMore) return { sessions: sessions.slice(0, limit), hasMore: true };
+  return { sessions, hasMore: hasMore && sessions.length <= limit };
+}
+
+// 再点一次「显示更多」多出几行，0 = 不能再点（没有更早的，或到了硬顶，或剩下的全是已画在页尾的「稍后再看」行）。
+// 下一档会把剩下的全给（不藏单条）时报确切剩余数，pinnedCount 那几行已在屏幕上，不算新行。
+export function showMoreCount({ hasMore, total, shown, nextLimit, pinnedCount = 0 }) {
+  if (!hasMore || nextLimit === null) return 0;
+  const all = Number.isFinite(total) ? total : Infinity;
+  return all <= nextLimit + 1 ? Math.max(0, all - shown - pinnedCount) : nextLimit - shown;
+}
 
 // 校验 sessionLimit：必须是 [1, MAX] 的整数。非法（含缺省交由调用方判断）→ 返回 { value, warning }。
 function validateSessionLimit(raw, path) {
@@ -186,7 +212,9 @@ export function resolveWorkdirSource({
   }
   return {
     ...fold(normalizeWorkdirEntries(picked.kind === 'env-list' ? picked.value : [])),
-    from: 'WORK_DIRS',
+    // 什么都没配（kind none：新装时跳过了文件夹）记作 WORKDIRS：要加就加在配置文件里（手机上的「添加文件夹」
+    // 据此放行写入），doctor 的标签也指向它，而不是一个谁都没设的环境变量。
+    from: picked.kind === 'env-list' ? 'WORK_DIRS' : 'WORKDIRS',
   };
 }
 
@@ -207,70 +235,14 @@ export function loadWorkdirsFile(filePath) {
   return normalizeWorkdirEntries(parsed);
 }
 
-// 白名单兜底：routeCwd 类回退逻辑（无显式 cwd 时改用当前查看实例/查看目录）可能落到一个已被热移除、
-// 但因仍有 live 实例挂着而未被 reloadWorkdirs 归位的目录——这种目录不在 dirs 里，不能直接信任继续新开会话。
-// 归位到 dirs 首位（同 session:new 的既有归位语义），只挡"新开"，不影响该目录上已有会话的继续查看/读取。
-export function ensureWhitelisted(cwd, dirs) {
-  if (dirs.includes(cwd)) return cwd;
-  // 托管 worktree 与白名单目录同权：它不是"被热移除的目录"，归位到 dirs[0] 就把 routeCwd 刚
-  // 放行的 cwd 当场作废。两道闸在 8 个 handler 里成对出现（`ensureWhitelisted(routeCwd(x), dirs)`），
-  // 只改一道等于没改，且症状与完全没改一模一样——不会有任何报错。
-  const managed = resolveManagedWorktree(cwd, dirs);
-  if (managed) return managed.path;
-  return dirs[0];
-}
-
-// 精确白名单判定（单一事实源）：cwd 是否为白名单内目录。供 routeCwd 做越界检测 + 审计信号。
-// 与 ensureWhitelisted 的区别：本函数只回答“在不在范围内”（不做归位），让调用方决定越界时如何处理（回退 + 记审计）。
-// 仓库外的 git linked worktree（`../repo-<分支>` 这类）若要用，须把其绝对路径显式写入 workdirs.json，
-// 与其它工作区同级——无自动探测、无隐式放行。**例外只有一种**，见下方 resolveWorktreeParent。
-export function isWhitelisted(cwd, dirs) {
-  return typeof cwd === 'string' && cwd !== '' && dirs.includes(cwd);
-}
-
 // CLI 托管 worktree 的容器目录（相对 workdir 根）：`EnterWorktree`、`--worktree`、agent isolation
-// 三者的默认落点都是这里。枚举侧（history.js）与放行侧（下方）共用这一份，不各写一遍——
+// 三者的默认落点都是这里。枚举侧（history.js）与「树已删」的推导（下方）共用这一份，不各写一遍——
 // SS-004 那次「注释写着同规则、实际各存一份」就是这么漂的。
+//
+// cwd 授权（子目录可达、worktree 随所属仓库）不在本文件：见 folder-access.js 的 resolveAuthorizedCwd。
+// 这里原有的 ensureWhitelisted / isWhitelisted / resolveManagedWorktree / resolveDrivingCwd /
+// instanceAuthorizedDirs 于 2026-09-24 随「已连接的文件夹」一起退役（server 各闸门统一改经 authorize）。
 export const managedWorktreeRoot = dir => join(dir, CLAUDE_DIR_NAME, 'worktrees');
-
-// 托管 worktree 的派生放行（2026-09-11）。
-//
-// 【为什么这不是给 SCOPE-01 开例外】放行集恒为 `<白名单目录>/.claude/worktrees/<单段>`，
-// 始终落在白名单目录**子树内**——「候选路径 realpath 后须落在授权工作区内」这条原样成立。
-// 真正新增的自由度只有一个：深度固定为 1 的那一层目录名。跳出子树的形态（仓库外的平级兄弟
-// worktree）不在此列，仍须显式写进 WORKDIRS。
-//
-// 【为什么必须 realpath】dirs 恒为已 realpath 的白名单（normalizeWorkdirEntries 出参契约），
-// 候选也要解析后再比：`.claude/worktrees/x -> /somewhere/else` 这种 symlink 若拿未解析路径比前缀，
-// 在 macOS 上就是静默永远放行。
-//
-// 【为什么不递归】允许再深一层，等于从一个已放行的 worktree 里能无限派生出新的授权路径。
-//
-// 【为什么返回解析后的 path 而不只是父仓】调用方拿这个 cwd 去算 transcript 的 project 目录
-// （getProjectDir(cwd)），而 CLI 落盘时用的是它自己解析过的路径——macOS 上 /var 与 /private/var
-// 算出来是两个不同的目录名，传未解析的那个会静默查空。让判据把解析结果一并交出去，
-// 调用方就没有"记得再 realpath 一次"这一步可漏；两次各自 realpath 也会多出一个 TOCTOU 窗口。
-//
-// @returns {{ parent: string, path: string }|null}
-//   parent = 归属的父 workdir（已 realpath，供归组展示）；path = 候选自身 realpath 后的绝对路径
-export function resolveManagedWorktree(cwd, dirs) {
-  if (typeof cwd !== 'string' || cwd === '') return null;
-  if (!Array.isArray(dirs) || dirs.length === 0) return null;
-  let real;
-  try {
-    real = realpathSync(cwd);
-  } catch {
-    return null; // fail-closed：真实落点无法确认（不存在/不可达）一律不放行
-  }
-  for (const d of dirs) {
-    const prefix = managedWorktreeRoot(d) + sep;
-    if (!real.startsWith(prefix)) continue;
-    const rest = real.slice(prefix.length);
-    if (rest === '' || rest.includes(sep)) continue;
-    return { parent: d, path: real };
-  }
-  return null;
-}
 
 // worktree 目录被删之后的父仓推导（2026-09-13，真机会话 5a8793ca）。
 //
@@ -280,7 +252,7 @@ export function resolveManagedWorktree(cwd, dirs) {
 //（CLI 每条命令后都打一行 `Shell cwd was reset to <会话 cwd>`），CwdChanged 一次都不会触发。
 // 结果是实例的驾驶轴停在一条指向已删目录的路径上，且没有任何报错。
 //
-// 【为什么 resolveManagedWorktree 答不了】它先 realpath 再判，悬空路径必然 fail-closed 返回 null。
+// 【为什么授权判据答不了】resolveAuthorizedCwd 先 realpath 再判，悬空路径必然 fail-closed 返回 null。
 // 那个 null 在四个消费点各自回落成互不相干的坏结果：文件面板报「路径不在授权范围内」、
 // git 报 fatal、statusline 的 git 段整个缺席、workspaceCwdOf 回落成悬空路径自身（该实例连父仓的
 // 归属都没了，抽屉里那个工作区下再也看不到它）。同一个根因，四条症状。
@@ -288,12 +260,13 @@ export function resolveManagedWorktree(cwd, dirs) {
 // 【为什么不 realpath，以及为什么这不违反 SCOPE-01】目标已经不存在，realpath 必然抛错——这条判据
 // 存在的前提就是它解析不了。安全性不靠 realpath 兜：**返回值恒取自 dirs**（已 realpath 的白名单
 // 本身），候选路径一个字节都不进返回值，没有 symlink 逃逸面。代价是前缀比较要求候选与 dirs 同规范；
-// 生产路径上这条成立（instance.cwd 恒来自 createSessionWorktree 或 resolveDrivingCwd，两者给的
+// 生产路径上这条成立（instance.cwd 恒来自 createSessionWorktree 或授权判据，两者给的
 // 都是 realpath 后的串），万一不成立也只是判不出、退回没有本函数时的行为——失败方向是「不自愈」
-// 而不是「错放行」。
+// 而不是「错放行」。只认托管形态（`<workdir>/.claude/worktrees/<单段>`）：仓库外的平级 worktree 删掉后
+// 回链也跟着没了，推不出它属于哪个仓库。
 //
-// 路径还在时返回 null 让位给 resolveManagedWorktree：对活着的 worktree 也回落父仓，等于让文件/
-// 改动面板永远看不到 worktree 里的改动。
+// 路径还在时返回 null 让位给授权判据：对活着的 worktree 也回落父仓，等于让文件/改动面板永远看不到
+// worktree 里的改动。
 export function resolveGoneWorktreeParent(cwd, dirs) {
   if (typeof cwd !== 'string' || cwd === '') return null;
   if (!Array.isArray(dirs) || dirs.length === 0) return null;
@@ -301,50 +274,10 @@ export function resolveGoneWorktreeParent(cwd, dirs) {
     const prefix = managedWorktreeRoot(d) + sep;
     if (!cwd.startsWith(prefix)) continue;
     const rest = cwd.slice(prefix.length);
-    if (rest === '' || rest.includes(sep)) continue; // 合法形态集同 resolveManagedWorktree：深度恒为 1
+    if (rest === '' || rest.includes(sep)) continue; // 深度恒为 1：只认托管 worktree 的形态
     return existsSync(cwd) ? null : d;
   }
   return null;
-}
-
-// 会话中途换 cwd 的采信判据（2026-09-13）。CLI 的 EnterWorktree / ExitWorktree 会在**会话运行途中**
-// 把工作目录换掉，transcript 随之落到新 cwd 的 project 目录——实例的驾驶轴 cwd 不跟着走的话，
-// 历史回显、子代理扫描、resume 和附件存储会全部按一个已经空掉的目录去解析（症状：切回会话
-// 「历史消息加载失败」，而磁盘上那份 transcript 完好无损）。
-//
-// 【合法集同 resolveManagedWorktree，失败方向相反】routeCwd 面对的是「前端传错了 cwd」，
-// 回退 viewingCwd 是纠正；这里面对的是「CLI 报来一个新 cwd」，没有安全回退可言——回退到别的
-// 目录等于把驾驶轴指到一个 SDK 并不在那儿跑的地方。拒绝即保持原样（返回 null，调用方不改）。
-//
-// 【为什么要校验】new_cwd 源自 EnterWorktree 的 path 参数，是会话内可被引导的值，与前端传来的
-// 路径同属用户可控面，SCOPE-01 原样适用。
-export function resolveDrivingCwd(cwd, dirs) {
-  if (typeof cwd !== 'string' || cwd === '') return null;
-  if (!Array.isArray(dirs) || dirs.length === 0) return null;
-  let real;
-  try {
-    real = realpathSync(cwd);
-  } catch {
-    return null; // 真实落点无法确认，同 resolveManagedWorktree
-  }
-  // dirs 恒为已 realpath 的白名单，故解析后再比（未解析的候选在 macOS 上会静默判成越界）
-  if (dirs.includes(real)) return real;
-  return resolveManagedWorktree(real, dirs)?.path ?? null;
-}
-
-// 已开实例的授权集：当前白名单 + 它创建时所属的那个工作区（仅当后者已被热移除）。
-//
-// 【为什么需要】工作区热加载的产品判据是「被移除目录上的已开会话继续运行，仅拒新开」。
-// 只拿新 workDirs 校验 resolveDrivingCwd 的话，这类实例中途 EnterWorktree 会被拒，
-// instance.cwd 停在旧值而 CLI 已经搬走——静默复发「历史消息加载失败」。
-//
-// 【为什么这不是给范围门开口子】多出来的恒是「该实例创建时就被授权的那一个根」，
-// 而它的 CLI 本来就在那个目录里跑着、早已能读写那里——不新增任何能力，只是不把
-// 已经发出去的授权在半途收回。别的目录一律照旧由 resolveDrivingCwd 拒掉。
-export function instanceAuthorizedDirs(dirs, authorizedRoot) {
-  if (!Array.isArray(dirs)) return [];
-  if (!authorizedRoot || dirs.includes(authorizedRoot)) return dirs;
-  return [...dirs, authorizedRoot];
 }
 
 // SS-004：与 history.getProjectDir / CLI 同规则。两边共用 src/shared/project-dir.js 的单一实现——
@@ -369,18 +302,21 @@ export function findProjectDirCollisions(dirs = []) {
 }
 
 // realpathSync（解符号链接/相对段，与 CLI 命名一致）+ isDirectory 校验，warn-skip 无效项；realpath 后二次去重。
-// 返回 { dirs: [规范化路径], limits: Map<路径, sessionLimit>, warnings }。
+// 返回 { dirs: [规范化路径], limits: Map<路径, sessionLimit>, warnings, missing: [找不到或不是目录的原样路径] }。
+// missing 喂服务告警：清单为空也能启动之后，全部失效不再以「拒绝启动」示警（SCOPE-03）。
 export function resolveWorkdirs(entries) {
   const dirs = [];
   const limits = new Map();
   const warnings = [];
+  const missing = [];
   for (const { path, sessionLimit } of entries) {
     let real;
     try {
-      real = realpathSync(path);
-      if (!statSync(real).isDirectory()) { warnings.push(`工作区忽略（不是目录）：${path}`); continue; }
+      real = realpathSync.native(path); // 与 folder-access.js 同一种 realpath：连接根与候选路径的写法必须一致
+      if (!statSync(real).isDirectory()) { warnings.push(`工作区忽略（不是目录）：${path}`); missing.push(path); continue; }
     } catch {
       warnings.push(`工作区忽略（不存在/不可达）：${path}`);
+      missing.push(path);
       continue;
     }
     if (limits.has(real)) continue; // realpath 后去重（首见 sessionLimit 优先）
@@ -393,5 +329,64 @@ export function resolveWorkdirs(entries) {
       `工作区 project 目录名碰撞（CLI 编码「${c.encoded}」）：${c.paths.join(' ↔ ')}——会话列表/历史可能混用，请避免仅分隔符不同的路径`,
     );
   }
-  return { dirs, limits, warnings };
+  return { dirs, limits, warnings, missing };
+}
+
+// #355：告警「从列表移除缺失项」——按**原始配置条目**决定删哪几条（纯函数，I/O 在组装根）。
+//
+// list 是配置文件里的 WORKDIRS 原文（string | {path, sessionLimit}），不是 realpath 后的连接根。
+// confirmedMissing 是这一趟重读+复核后确认仍找不到的原样路径；requested 是手机提交的候选
+// （通常就是告警里的路径集合）。两边都命中才删——目录刚挂回来的不能被旧告警误删。
+//
+// legacyPrimary = 配置里退役的 WORK_DIR：来源是它的条目不给自动移除（删 WORKDIRS 也删不掉它，
+// 折进列表后还会再冒出来；要去掉只能人手清 WORK_DIR）。其余条目连同 sessionLimit 原样保留。
+export function planRemoveMissingWorkdirEntries(list = [], {
+  confirmedMissing = [],
+  requested = null,
+  legacyPrimary = '',
+} = {}) {
+  const missing = new Set(
+    (Array.isArray(confirmedMissing) ? confirmedMissing : []).filter(p => typeof p === 'string' && p),
+  );
+  const reqList = Array.isArray(requested)
+    ? requested.filter(p => typeof p === 'string' && p)
+    : null;
+  // 没带候选 = 按这一趟复核出的全部缺失项来（一键移除）
+  const want = new Set(reqList && reqList.length ? reqList : missing);
+  const legacy = String(legacyPrimary ?? '').trim();
+  const next = [];
+  const removed = [];
+  const skippedLegacy = [];
+  for (const entry of Array.isArray(list) ? list : []) {
+    const raw = typeof entry === 'string' ? entry : (entry && typeof entry === 'object' ? entry.path : null);
+    // 与 normalizeWorkdirEntries 同口径 trim：confirmedMissing 来自它，原文带空白的条目否则永远对不上、删不掉
+    const path = typeof raw === 'string' ? raw.trim() : null;
+    if (!path) { next.push(entry); continue; }
+    if (!want.has(path) || !missing.has(path)) { next.push(entry); continue; }
+    if (legacy && path === legacy) {
+      skippedLegacy.push(path);
+      next.push(entry);
+      continue;
+    }
+    removed.push(path);
+  }
+  return { next, removed, skippedLegacy };
+}
+
+// 清单的运行态：从哪来（WORKDIRS / WORK_DIRS / WORK_DIRS_FILE）、配置了却找不到（被删、改名、外置盘没挂上）
+// 几个。组装根在启动、每次热加载与「重新检查」（#301）应用清单时写入，服务告警、体检、instances 广播、启动日志读取；
+// 广播时不重读外置文件。找不到的路径也存（配置里的原样写法）：告警的「忽略」按路径集合记指纹，集合变了要重新出现；
+// 它只随鉴权通道（instances 广播、service:status）下发。配置文件在不在是组装根的事，注入进来。
+export function createWorkdirStatus({ usingConfigJson }) {
+  let from = 'WORKDIRS';
+  let missingPaths = [];
+  return {
+    setSource(next) { from = next; },
+    setMissing(paths) { missingPaths = [...paths]; },
+    missing: () => missingPaths.length,
+    missingPaths: () => [...missingPaths],
+    // 手机上改不了清单时的原因码（与 folders:add 拒绝时同一套：先看配置文件在不在，再看来源是不是内联 WORKDIRS）；
+    // 能改时 null。进广播（foldersReadonly）：零文件夹引导据此不给一个走完选择面板才报错的按钮（2026-10-15 Codex review #204）。
+    readonlyReason: () => (!usingConfigJson() ? 'no_config_file' : from !== 'WORKDIRS' ? 'source_readonly' : null),
+  };
 }

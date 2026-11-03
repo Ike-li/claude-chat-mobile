@@ -9,6 +9,8 @@ import {
   rttToneClass,
   userBubbleFold,
   formatUptime,
+  historyLoadedNotice,
+  gitErrorText,
 } from '../../app/public/js/logic/format.js';
 import { setLang } from '../../app/public/js/i18n.js';
 
@@ -461,3 +463,41 @@ test.describe('formatUptime —— en 语言下的单位', () => {
 });
 
 test.after(() => setLang('zh'));
+
+// 验收 O44 / AC-06-13：服务端只回最近 HISTORY_MAX_MESSAGES 条。总数比显示的多时，提示必须说清只显示了一部分，
+// 否则「加载了 2000 条历史消息」读起来像全部，用户会以为会话就是从第 51 轮开始的。
+test.describe('historyLoadedNotice —— 历史载入提示', () => {
+  test('全量载入：沿用「加载了 N 条历史消息」', () => {
+    assert.equal(historyLoadedNotice(14, 14), '加载了 14 条历史消息');
+  });
+  test('被截掉了更早的：说出显示了几条、一共几条', () => {
+    assert.equal(historyLoadedNotice(2000, 2100), '仅显示最近 2000 条历史消息（共 2100 条），更早的没有加载');
+  });
+  test('旧服务端不回 total：按全量处理，不编造截断', () => {
+    assert.equal(historyLoadedNotice(30, undefined), '加载了 30 条历史消息');
+    assert.equal(historyLoadedNotice(30, null), '加载了 30 条历史消息');
+  });
+  test('英文界面同样说清截断', () => {
+    setLang('en');
+    assert.equal(historyLoadedNotice(2000, 2100), 'Showing only the latest 2000 of 2100 messages from history; earlier ones are not loaded');
+  });
+});
+
+// 验收 O97：英文界面里，工作区面板「改动」页在非 git 目录显示中文「当前目录不是 git 仓库」——服务端把中文
+// 写进回执 error，前端原样显示。服务端不分语言，翻译由前端按 code 做。
+test('gitErrorText：not_git 按界面语言出文案，不用服务端写死的中文', () => {
+  setLang('en');
+  try {
+    const text = gitErrorText({ ok: false, code: 'not_git', error: '当前目录不是 git 仓库' }, 'fallback');
+    assert.doesNotMatch(text, /[一-鿿]/, '英文界面里漏出服务端的中文原文');
+    assert.match(text, /git/i);
+  } finally {
+    setLang('zh');
+  }
+});
+
+test('gitErrorText：其余错误照旧显示服务端原文（git 自己的报错没法翻），没有原文才用兜底', () => {
+  assert.equal(gitErrorText({ ok: false, code: 'git_error', error: 'fatal: bad object' }, '兜底'), 'fatal: bad object');
+  assert.equal(gitErrorText({ ok: false }, '兜底'), '兜底');
+  assert.equal(gitErrorText(null, '兜底'), '兜底');
+});

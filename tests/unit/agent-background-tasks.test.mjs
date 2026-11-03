@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { getSessionLogs } from '../../app/src/agent/interaction-log.js';
 import { buildAgentQueryOptions } from '../../app/src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
-import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getProjectDir } from '../../app/src/sessions/history.js';
@@ -863,6 +863,48 @@ test.describe('buildAgentQueryOptions — worktree 网关隔离经 settings 文�
     const opts = buildAgentQueryOptions(s, { ...process.env });
     assert.deepEqual(opts.settings, { ultracode: true });
     s.dispose();
+  });
+});
+
+// Claude in Chrome（2026-09-26 零 token 探针实测）：终端里 `/chrome` →「Enabled by default」写的是
+// ~/.claude.json 的 claudeInChromeDefaultEnabled，交互模式认它；SDK 会话不认，只认显式 `--chrome`。
+// 同一台机器、同一份配置，不传时 mcpServerStatus 里没有 claude-in-chrome，传了即 connected。
+// 缺陷形态是「手机上的 Claude 声称没有浏览器工具」，终端里却一直好好的。
+test.describe('buildAgentQueryOptions — Claude in Chrome 跟随终端的「默认开启」', () => {
+  const withGlobalConfig = (content) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-chrome-'));
+    const path = join(dir, '.claude.json');
+    if (content !== undefined) writeFileSync(path, content);
+    const { s } = makeSession({ claudeGlobalConfigPath: path });
+    s.abort = new AbortController();
+    return { s, cleanup: () => { s.dispose(); rmSync(dir, { recursive: true, force: true }); } };
+  };
+
+  test('终端开了「默认启用」→ SDK 以 --chrome 启动', (t) => {
+    const { s, cleanup } = withGlobalConfig(JSON.stringify({ claudeInChromeDefaultEnabled: true }));
+    t.after(cleanup);
+    const opts = buildAgentQueryOptions(s, { ...process.env });
+    assert.deepEqual(opts.extraArgs, { chrome: null }, '终端能用浏览器工具而手机上不能——--chrome 没下发');
+  });
+
+  test('没开（false / 缺字段）→ 不传 --chrome，与终端一致', (t) => {
+    for (const cfg of [{ claudeInChromeDefaultEnabled: false }, {}]) {
+      const { s, cleanup } = withGlobalConfig(JSON.stringify(cfg));
+      t.after(cleanup);
+      const opts = buildAgentQueryOptions(s, { ...process.env });
+      assert.equal('extraArgs' in opts, false, `用户没开却加载了浏览器工具（白占上下文）：${JSON.stringify(cfg)}`);
+    }
+  });
+
+  // 失败方向：读不到就按「没开」启动（= 修复前的行为），不抛——开会话不能被一个可选能力拖垮。
+  // CLI 频繁重写 ~/.claude.json，读到半截的 JSON 是真实可能的形态。
+  test('文件缺失或 JSON 损坏 → 不传 --chrome 且不抛', (t) => {
+    for (const content of [undefined, '{"claudeInChromeDefaultEnabled": tr']) {
+      const { s, cleanup } = withGlobalConfig(content);
+      t.after(cleanup);
+      const opts = buildAgentQueryOptions(s, { ...process.env });
+      assert.equal('extraArgs' in opts, false);
+    }
   });
 });
 

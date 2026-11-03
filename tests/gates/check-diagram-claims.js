@@ -139,12 +139,14 @@ const CLAIMS = [
     actual: () => /SDK_TAIL_ENTRYPOINTS = new Set\(\['sdk-ts'\]\)/.test(read('app/src/sessions/history.js')) ? "只认 sdk-ts" : '白名单已改', expect: '只认 sdk-ts' },
   { diagram: '06', shown: '前台判据是 client:presence（hidden !== true）',
     actual: () => /s\?\.data\?\.hidden !== true/.test(read('app/src/ops/notifications.js')) ? 'hidden !== true' : '判据已改', expect: 'hidden !== true' },
-  { diagram: '00', shown: 'claude-agent-sdk 0.3.278',
-    actual: () => JSON.parse(read('package.json')).dependencies['@anthropic-ai/claude-agent-sdk'], expect: '0.3.278' },
-  { diagram: '00 / 01 / 08 / 11', shown: '共 31 种 type',
-    // 同上：27 → 31（trusted_devices、session_recap、prompt_suggestion、rewind_applied）。
+  { diagram: '00', shown: 'claude-agent-sdk 0.3.310',
+    actual: () => JSON.parse(read('package.json')).dependencies['@anthropic-ai/claude-agent-sdk'], expect: '0.3.310' },
+  { diagram: '00 / 01 / 08 / 11', shown: '共 33 种 type',
+    // 同上：27 → 31（trusted_devices、session_recap、prompt_suggestion、rewind_applied）；
+    // 31 → 32（foreground_tasks，#459），gh-pages 四张图与图集首页只换显示文字。
+    // 32 → 33（elicitation，#460），同样只换显示文字。
     actual: () => (/AGENT_EVENT_TYPES = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(read('app/src/shared/protocol.js'))?.[1].match(/'[a-z_]+'/g) || []).length,
-    expect: 31 },
+    expect: 33 },
   { diagram: '06', shown: '但「后台完成」只算真后台：跑得久的前台 Bash 靠 is_backgrounded 滤掉',
     actual: () => {
       const src = read('app/src/agent/agent.js');
@@ -152,8 +154,8 @@ const CLAIMS = [
       const filters = /taskBackgrounded\.get\(doneTaskId\) === false/.test(src);
       return hasMap && filters ? '按 is_backgrounded 过滤' : '过滤已失效';
     }, expect: '按 is_backgrounded 过滤' },
-  { diagram: '12', shown: '16 道零 token 门禁',
-    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 16 },
+  { diagram: '12', shown: '17 道零 token 门禁',
+    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 17 },
 ];
 
 // ── 图还没说、但代码已经成立的事实。──────────────────────────────────
@@ -170,8 +172,11 @@ const CLAIMS = [
 // 四行（凭据 gitignore / 一次性环境守卫 / 容器配置隔离 自成一行），仍与 check 链逐项对应。
 // PINNED_REVISION 未动：那个字段只跟三张 architecture 图的重出走，手工改图 12 的文字不构成推进理由
 // （判据见上面 PINNED_REVISION 处的注释）。
-const PENDING_CLAIMS = [
-];
+// 2026-10-31：16 → 17 道（新增 check-tailwind-css，守预编译的 tw.css 与源码同步）。先挂在这里，
+// 当天补进图（gh-pages 29e8ff4e）后挪回 CLAIMS，这一组重新空着。图 12 的节点 sublabel、卡片标题、
+// meta description 三处改成 17，卡片清单第四行在 Playwright 禁止模式之后插入「Tailwind 产物同步」，
+// 仍与 check 链逐项对应；diagrams/index.html 的摘要现在不写道数，不用改。PINNED_REVISION 同样未动。
+const PENDING_CLAIMS = [];
 
 function git(args) {
   // stderr 收进返回值而不是转发到终端：`cat-file -e` 对缺失对象打的那行 `fatal: Not a valid

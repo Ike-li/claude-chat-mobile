@@ -529,7 +529,7 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
             let from = size > UInt64(LOG_TAIL_BYTES) ? size - UInt64(LOG_TAIL_BYTES) : 0
             try? handle.seek(toOffset: from)
             let data = (try? handle.readToEnd()) ?? Data()
-            let text = String(data: data, encoding: .utf8) ?? ""
+            let text = decodeLogTail(data)
             let body = lastLines(text, 500).joined(separator: "\n")
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }

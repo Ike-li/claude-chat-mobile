@@ -1,7 +1,31 @@
 // helpers: tests/helpers/playwright.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openSessionSettings, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
+
+// 三组磁贴逐张核对「画出来的样子」与 aria-pressed 是否一致：选中 = 30% accent-wash 淡底 + accent 标题，
+// 没选中 = surface 卡片底 + ink 标题；Bypass 的标题两种状态都是 danger。返回对不上的磁贴，
+// 色值能对上 token 的换回 token 名，对不上的原样给出计算值。
+async function tileLookMismatches(page: Page) {
+  return page.evaluate(() => {
+    const probe = document.createElement('div');
+    document.body.appendChild(probe);
+    const bg = (v: string) => { probe.style.backgroundColor = v; return getComputedStyle(probe).backgroundColor; };
+    const fg = (v: string) => { probe.style.color = v; return getComputedStyle(probe).color; };
+    const bgs: Record<string, string> = { wash: bg('color-mix(in srgb, var(--accent-wash) 30%, transparent)'), surface: bg('var(--surface)') };
+    const fgs: Record<string, string> = { accent: fg('var(--accent)'), ink: fg('var(--ink)'), danger: fg('var(--danger)') };
+    probe.remove();
+    const name = (table: Record<string, string>, c: string) => Object.keys(table).find(k => table[k] === c) ?? c;
+    const bad: string[] = [];
+    for (const tile of Array.from(document.querySelectorAll<HTMLElement>('#customModelGrid .model-tile, #customPermGrid .perm-tile, #customEffortGrid .effort-tile'))) {
+      const pressed = tile.getAttribute('aria-pressed') === 'true';
+      const want = `${pressed ? 'wash' : 'surface'} + ${tile.dataset.mode === 'bypassPermissions' ? 'danger' : pressed ? 'accent' : 'ink'}`;
+      const got = `${name(bgs, getComputedStyle(tile).backgroundColor)} + ${name(fgs, getComputedStyle(tile.firstElementChild as Element).color)}`;
+      if (got !== want) bad.push(`${tile.classList[0]}[${tile.dataset.model ?? tile.dataset.mode ?? tile.dataset.level}] aria-pressed=${pressed}：画成 ${got}，应为 ${want}`);
+    }
+    return bad;
+  });
+}
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09 设置面板：权限模式、模型选择、thinking effort 与 [1m] 后缀', async ({ page }) => {
@@ -56,6 +80,58 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillPermText')).toContainText('Plan');
     // 摘要 chip 连写
     await expect(page.locator('#pillDefaults')).toContainText('Plan');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // tw.css 由 Tailwind CLI 预编译，同一组工具类（bg-*、text-*）按字母序产出、排在后面的胜出：选中时只叠上
+  // bg-accent-wash/30、text-accent 而不摘掉 bg-surface、text-ink，画出来就和没选中一样。此前浏览器内编译按 class
+  // 首次出现的先后产出，选中态的类出现得晚，碰巧胜出。这里把渲染、切换、只读重置三条路径各走一遍。
+  test('P0-09-SELECTED 模型、权限、思考强度磁贴：选中的画成淡底加强调色标题，没选中的画成卡片底加正文色', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await openSessionSettings(page);
+    // 磁贴带 transition-all：切换后立刻读到的是过渡中间色，关掉过渡读终态
+    await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; }' });
+    const pressed = (selector: string) => expect(page.locator(selector)).toHaveAttribute('aria-pressed', 'true');
+
+    await pressed('.model-tile[data-model="claude-3-5-sonnet"]');
+    await pressed('.perm-tile[data-mode="default"]');
+    expect(await tileLookMismatches(page), '开局（在跑的 sonnet、default 权限档）').toEqual([]);
+
+    await openSettingsSection(page, 'effort');
+    await page.locator('.effort-tile[data-level="high"]').click();
+    await pressed('.effort-tile[data-level="high"]');
+    expect(await tileLookMismatches(page), '选 high 之后').toEqual([]);
+
+    // 换模型时思考强度整组按新模型重画：high 这次是渲染出来的选中态，不是切换出来的
+    await openSettingsSection(page, 'model');
+    await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
+    await pressed('.model-tile[data-model="claude-3-opus[1m]"]');
+    await pressed('.effort-tile[data-level="high"]');
+    expect(await tileLookMismatches(page), '换到 opus[1m] 之后').toEqual([]);
+
+    await openSettingsSection(page, 'perm');
+    await page.locator('.perm-tile[data-mode="bypassPermissions"]').click();
+    await page.locator('#confirmOk').click();
+    await pressed('.perm-tile[data-mode="bypassPermissions"]');
+    expect(await tileLookMismatches(page), '选 Bypass 之后').toEqual([]);
+    await page.locator('.perm-tile[data-mode="plan"]').click();
+    await pressed('.perm-tile[data-mode="plan"]');
+    expect(await tileLookMismatches(page), '从 Bypass 换到 plan 之后').toEqual([]);
+
+    // 选了模型还没发时清单重发：模型整组只走渲染路径重画
+    await page.request.post('/__replay-models');
+    await expect(page.locator('.model-tile[data-model="claude-replayed-model"]')).toBeAttached();
+    await expect(page.locator('#customModelGrid .model-tile[aria-pressed="true"]')).toHaveCount(1);
+    expect(await tileLookMismatches(page), '模型清单重发之后').toEqual([]);
+
+    // 只读镜像不知道 CLI 的模型和权限档：两组的选中态都要清掉，plan 此刻是选中的
+    await page.request.post('/__mirror-state?readonly=1&observed=empty');
+    await expect(page.locator('#pillModelText')).toHaveText('CLI 模型未知');
+    await expect(page.locator('#pillPermText')).toHaveText('CLI 模式未知');
+    await expect(page.locator('#customModelGrid .model-tile[aria-pressed="true"], #customPermGrid .perm-tile[aria-pressed="true"]')).toHaveCount(0);
+    expect(await tileLookMismatches(page), '只读镜像清空选中之后').toEqual([]);
 
     await expectNoBrowserErrors(page);
   });
@@ -222,6 +298,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 模型清单会整份重发（重连回放、每轮 init 后的 supportedModels()）。前端重建下拉框时若先清空再读待发选择，
+  // 读到的是新列表首项，用户刚点、还没发出去的模型被静默换掉，下一条就用错了模型。
+  test('P0-09-REPLAY 选了模型还没发，模型清单重发一次：下一条消息仍带用户选的模型', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#pillDefaults').click();
+    await openSettingsSection(page, 'model');
+    await page.locator('.model-tile[data-model="claude-3-5-haiku"]').click();
+    await expect(page.locator('#modelInput')).toHaveValue('claude-3-5-haiku');
+    await closeSettings(page);
+
+    await page.request.post('/__replay-models');
+    await expect(page.locator('#modelInput option[value="claude-replayed-model"]')).toHaveCount(1);
+    await expect(page.locator('#modelInput')).toHaveValue('claude-3-5-haiku');
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('model=claude-3-5-haiku');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-09c 不支持 thinking effort 的模型不会沿用旧 effort', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
@@ -266,7 +365,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 没指定（null）= CLI inherit：settings 里存了档就用存的。高亮 auto 就是替它声称「模型内置默认」，
     // 所以一块都不高亮，pill 如实报 CLI 此刻生效的档（mock 固定回 medium）。
     await expect(page.locator('.effort-tile.ring-accent')).toHaveCount(0);
-    await expect(page.locator('#pillEffortText')).toHaveText('medium · CLI 默认');
+    // 胶囊只留档名（「· CLI 默认」后缀会被宽度上限截成「medium · C…」），完整文案在 title
+    await expect(page.locator('#pillEffortText')).toHaveText('medium');
+    await expect(page.locator('#pillDefaults')).toHaveAttribute('title', /medium · CLI 默认/);
 
     await page.locator('.effort-tile[data-level="high"]').click();
     await expect(page.locator('#effortSelect')).toHaveValue('high');
@@ -281,6 +382,40 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:settings-echo');
     await waitForIdle(page);
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('effort=auto');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O15：CLI settings 里存了 effortLevel 时，新会话首发照样带上它（与终端读 settings 一致），
+  // 但用户没选过它。发之前胶囊是「high · CLI 默认」，发完一条变成光秃的「high」——两处说法不一致，
+  // 也看不出这档是不是自己选的。来源跟着实例走之后，发前发后都按「没指定」显示。
+  test('P0-09za 思考强度：CLI settings 来的档发前发后都标「CLI 默认」、不高亮；点同一档才钉成自己的', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.request.post('/__cli-settings-effort?level=high');
+
+    await page.locator('#btnNew').click();
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+    await expect(page.locator('#pillEffortText')).toHaveText('high');
+    await expect(page.locator('#pillDefaults')).toHaveAttribute('title', /high · CLI 默认/);
+
+    await sendChatMessage(page, 'test:fresh-settings-echo');
+    await waitForIdle(page);
+    // 行为不变：settings 的档照样当显式档下发
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('effort=high');
+    await expect(page.locator('#pillEffortText')).toHaveText('high');
+    await expect(page.locator('#pillDefaults')).toHaveAttribute('title', /high · CLI 默认/);
+
+    await page.locator('#pillDefaults').click();
+    await openSettingsSection(page, 'effort');
+    await expect(page.locator('.effort-tile.ring-accent')).toHaveCount(0);
+
+    // 高亮了就点不动它：不高亮，点一下同一档，来源改成用户自己的
+    const high = page.locator('.effort-tile[data-level="high"]');
+    await high.click();
+    await expect(high).toHaveClass(/ring-accent/);
+    await expect(page.locator('#pillEffortText')).toHaveText('high');
+    await closeSettings(page);
 
     await expectNoBrowserErrors(page);
   });
@@ -698,6 +833,96 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillPermText')).toContainText('Plan');
     await expect(page.locator('.perm-tile[data-mode="plan"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('.perm-tile[data-mode="default"]')).toHaveAttribute('aria-pressed', 'false');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // #461：settings 写了 disableAutoMode 时 Auto 磁贴不可选、说明换成原因。禁用之前就切到 Auto 的会话照常显示 Auto，
+  // 切走之后切不回来。点击（含绕得过原生 disabled 的合成点击）都不能把 user:setPermissionMode 发出去。
+  test('P0-09zb settings 禁用了 Auto：磁贴置灰带原因，切走后切不回来', async ({ page }) => {
+    const permFrames: string[] = [];
+    page.on('websocket', ws => ws.on('framesent', frame => {
+      if (typeof frame.payload === 'string' && frame.payload.includes('user:setPermissionMode')) permFrames.push(frame.payload);
+    }));
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await openSessionSettings(page);
+    await openSettingsSection(page, 'perm');
+    const auto = page.locator('.perm-tile[data-mode="auto"]');
+
+    await auto.click();
+    await expect(page.locator('#pillPermText')).toContainText('Auto');
+
+    await page.request.post('/__arm-auto-mode-disabled');
+    await expect(auto).toBeDisabled();
+    await expect(auto).toContainText('disableAutoMode');
+    await expect(auto).toHaveAttribute('aria-pressed', 'true'); // 还停在 Auto：照常显示，不偷偷改档
+    await expect(page.locator('#pillPermText')).toContainText('Auto');
+    await expect(page.locator('.perm-tile[data-mode="plan"]')).toBeEnabled();
+
+    await page.locator('.perm-tile[data-mode="plan"]').click();
+    await expect(page.locator('#pillPermText')).toContainText('Plan');
+    const before = permFrames.length;
+    await auto.dispatchEvent('click');
+    // 屏障：再切一档并等它回显。出站帧按序发，Auto 那次要是发了一定排在它前面
+    await page.locator('.perm-tile[data-mode="acceptEdits"]').click();
+    await expect(page.locator('#pillPermText')).toContainText('Accept edits');
+    const sent = permFrames.slice(before);
+    expect(sent.some(f => f.includes('"auto"')), `不该发出切到 auto 的请求：${sent.join(' | ')}`).toBe(false);
+    expect(sent.some(f => f.includes('"acceptEdits"'))).toBe(true);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // #246 review：模型磁贴的 aria-pressed 要跟着只读镜像观测到的 CLI 模型走。① 在跑的模型不在已加载的列表里时，
+  // 兜底卡是在 syncModelUI 之后才插进去的，一直是 false，读屏说「没有一个选中」；② 不知道 CLI 模型时界面清掉了
+  // 选中样式、胶囊写「CLI 模型未知」，Default 却还是 aria-pressed=true。
+  test('P0-09-ARIA2 只读镜像下模型磁贴的 aria-pressed 跟 CLI 在跑的模型走：不在列表里也选中兜底卡，不知道时一张都不选', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    const grid = page.locator('#customModelGrid');
+    await expect(grid.locator('.model-tile[data-model="default"]'), '前提：模型列表已加载').toBeAttached();
+
+    await page.request.post('/__mirror-state?readonly=1&model=claude-opus-4-8');
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#pillModelText')).toContainText('claude-opus-4-8');
+    await expect(grid.locator('.model-tile[data-model="claude-opus-4-8"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(grid.locator('.model-tile[aria-pressed="true"]')).toHaveCount(1);
+
+    await page.request.post('/__mirror-state?readonly=1&observed=empty');
+    await expect(page.locator('#pillModelText')).toHaveText('CLI 模型未知');
+    await expect(grid.locator('.model-tile[aria-pressed="true"]'), '界面说不知道，读屏却说 Default 选中').toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O53 / O26：网关下跑着的会话打开设置，多出第 5 张「当前加载模型」并选中；用户没动模型，下一条却带着
+  // 从磁贴重建出来的 grok-4.5（丢了 [1m]）发出，把在跑的 grok-4.5[1m] 换掉。
+  // 验收 O52：中途点 haiku，胶囊显示「haiku[1m]」——后缀是在跑模型残留的。
+  test('P0-09-LOADED 网关下跑着的会话：在跑的 wire 落在已有磁贴上；没动模型原样带回在跑模型；点档位后胶囊不带残留后缀', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:gateway-loaded-wire');
+    await waitForIdle(page);
+
+    await openSessionSettings(page);
+    await expect(page.locator('#customModelGrid .model-tile')).toHaveCount(4);
+    await expect(page.locator('#customModelGrid')).not.toContainText('当前加载模型');
+    await expect(page.locator('.model-tile[data-model="opus"]')).toHaveClass(/ring-accent/);
+    await expect(page.locator('#customModelGrid .model-tile.ring-accent')).toHaveCount(1);
+    await closeSettings(page);
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=grok-4.5[1m];');
+
+    await openSessionSettings(page);
+    await page.locator('.model-tile[data-model="haiku"]').click();
+    await expect(page.locator('#pillModelText')).toHaveText('grok-4.5');
+    await closeSettings(page);
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=grok-4.5;');
 
     await expectNoBrowserErrors(page);
   });

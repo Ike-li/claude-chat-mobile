@@ -13,3 +13,5 @@ test-results
 .DS_Store
 .claude
 .worktrees
+# 验收套件的本机配置、网关凭据与每轮产物（gitignore 挡在仓库外，工作树里却在）：构建上下文不带它
+tests/acceptance/local

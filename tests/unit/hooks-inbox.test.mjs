@@ -2,7 +2,7 @@
 // 真相仍由 scanHookEvents 提供；watch 建不起来时退化成现有 2.5s 轮询，功能不缺失。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -130,5 +130,90 @@ test('watch 触发：落一个事件文件后无需手动 scan 也会被消费',
       ]);
       assert.equal(events[0].sessionId, SID);
     } finally { clearTimeout(timer); inbox.close(); }
+  } finally { rmSync(d.root, { recursive: true, force: true }); }
+});
+
+// 验收 O35：此前 server 启动就替用户建 ~/.claude/ccm/hooks-v1/events（为了「先起 server 后装桥」免重启），
+// 于是没装过桥、或刚卸载干净的机器，server 一重启 ~/.claude/ccm 又冒出来。现在不建：目录在就盯，不在就等，
+// 每隔 rearmMs 看一眼——装上（目录出现）就盯上并立刻扫一遍，卸掉（目录被删）就放手。
+function waitForConsumed(inbox, got, ms = 3000) {
+  let timer;
+  return Promise.race([
+    got,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${ms}ms 内没被消费`)), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+test('目录不存在（桥没装）：不替用户建目录', () => {
+  const d = dirs();
+  try {
+    const inbox = createHooksInbox({ eventsDir: d.events, acksDir: d.acks, enabled: true, rearmMs: 20 });
+    try {
+      assert.equal(existsSync(d.events), false, '没装桥的机器上不该凭空出现投递箱目录');
+    } finally { inbox.close(); }
+  } finally { rmSync(d.root, { recursive: true, force: true }); }
+});
+
+test('先起 inbox 后出现目录（先起 server 后装桥）：免重启，事件照样被消费', async () => {
+  const d = dirs();
+  try {
+    let resolveSeen;
+    const got = new Promise(r => { resolveSeen = r; });
+    const inbox = createHooksInbox({
+      eventsDir: d.events, acksDir: d.acks, enabled: true, debounceMs: 20, rearmMs: 20,
+      onEvents: e => { if (e.length) resolveSeen(e); },
+    });
+    try {
+      put(d.events); // 写事件会建目录，等同安装器 / runner 先落了第一条
+      const events = await waitForConsumed(inbox, got);
+      assert.equal(events[0].sessionId, SID);
+    } finally { inbox.close(); }
+  } finally { rmSync(d.root, { recursive: true, force: true }); }
+});
+
+test('目录被删后又出现（卸载后重装、server 不重启）：照样被消费', async () => {
+  const d = dirs();
+  try {
+    put(d.events); // 目录先在（启动清扫会把这条清掉）
+    let resolveSeen;
+    const got = new Promise(r => { resolveSeen = r; });
+    const inbox = createHooksInbox({
+      eventsDir: d.events, acksDir: d.acks, enabled: true, debounceMs: 20, rearmMs: 20,
+      onEvents: e => { if (e.length) resolveSeen(e); },
+    });
+    try {
+      rmSync(d.events, { recursive: true, force: true });
+      await new Promise(r => setTimeout(r, 100));
+      assert.equal(existsSync(d.events), false, '卸载删掉的目录不该被 inbox 自己建回来');
+      put(d.events);
+      const events = await waitForConsumed(inbox, got);
+      assert.equal(events[0].sessionId, SID);
+    } finally { inbox.close(); }
+  } finally { rmSync(d.root, { recursive: true, force: true }); }
+});
+
+// PR #259 review：目录在两次检查之间被删又建（hooks:uninstall 紧接 hooks:install、面板一键重装），每次检查时路径都在，
+// 定时检查永远看不到「目录没了」；而 Linux 的 inotify 盯的是旧 inode，之后的事件文件不再有人消费，直到 server 重启。
+// rearmMs 拉到 60s，保证这条只靠 watcher 自己发现目录被换掉。macOS 的 FSEvents 按路径盯，修不修这里都绿——
+// 红的那一侧只在 Linux（容器 / CI）上看得见。
+test('目录在两次检查之间被删又建：仍能消费之后的事件', async () => {
+  const d = dirs();
+  try {
+    put(d.events);
+    let resolveSeen;
+    const got = new Promise(r => { resolveSeen = r; });
+    const inbox = createHooksInbox({
+      eventsDir: d.events, acksDir: d.acks, enabled: true, debounceMs: 20, rearmMs: 60_000,
+      // 只认重建之后才落的那条：删目录本身会让旧 watcher 触发一次扫描，顺手消费掉重建时同步落下的那条
+      onEvents: e => { if (e.some(x => x.sessionId === 'sess-after-replace')) resolveSeen(e); },
+    });
+    try {
+      rmSync(d.events, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录下
+      put(d.events); // 立刻重建并落一条：中间没有任何定时检查
+      await new Promise(r => setTimeout(r, 200));
+      put(d.events, { session_id: 'sess-after-replace' });
+      const events = await waitForConsumed(inbox, got);
+      assert.ok(events.some(x => x.sessionId === 'sess-after-replace'));
+    } finally { inbox.close(); }
   } finally { rmSync(d.root, { recursive: true, force: true }); }
 });

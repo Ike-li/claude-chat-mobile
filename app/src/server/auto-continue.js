@@ -18,6 +18,7 @@
 //   3. 注册表里没有终端或桌面端开着这个会话（单驾驶员，SESSION-01）；注册表读不全也不发
 //   4. 实例没有在跑一轮、内存上下文没有陈旧（externalDirty）
 // 2、3 不过且原因是「有别人可能在驾驶」时转 stale：横幅留一个「继续」按钮，由用户拍板。
+// 另：resume 出来的实例带分叉结论（这次续接会丢掉最新那段对话）时同样转 stale(diverged)，见 fire()。
 import {
   AUTO_CONTINUE_PROMPT,
   computeFireAt,
@@ -25,6 +26,7 @@ import {
   planQuotaWall,
   wallStillTail,
 } from '../agent/quota-auto-continue.js';
+import { awaitResumeDivergence } from '../sessions/resume-anchor.js';
 import { terminalStateKey } from '../sessions/session-registry.js';
 
 export const AUTO_CONTINUE_TICK_MS = 30_000;
@@ -48,6 +50,7 @@ export function createAutoContinue({
   listTerminalStates,
   getLiveInstance,
   resumeInstance,
+  resolveCwd = async cwd => cwd,
   onChange = () => {},
   log = () => {},
 } = {}) {
@@ -118,7 +121,10 @@ export function createAutoContinue({
   }
 
   async function fire(entry) {
-    const { sessionId, cwd } = entry;
+    const { sessionId } = entry;
+    const cwd = await resolveCwd(entry.cwd, sessionId);
+    if (entries.get(sessionId) !== entry) return;
+    if (!cwd) { toStale(entry, 'unverified'); onChange(); return; }
     if (entry.origin === 'auto' && !isAutoEnabled(cwd)) {
       if (remove(sessionId, 'setting_off')) onChange();
       return;
@@ -152,6 +158,16 @@ export function createAutoContinue({
     }
     // resume 的 await 间隙里用户可能已经取消、手动发送或删了会话：条目不在了就不发。
     if (entries.get(sessionId) !== entry) return;
+    // 分叉判定在后台读盘（回执不等它），这里等它落定；等到上限按读不动放行，同发送闸。
+    if (!(await awaitResumeDivergence(inst))) log(sessionId, '[SYS] 自动继续：续接分叉判定超时未落定，按读不动放行');
+    if (entries.get(sessionId) !== entry) return;
+    // 这次续接会丢掉最新那段对话（SESSION-04，实例上的结论见 sessions/resume-anchor.js）：代发的「继续」会接在
+    // CLI 选的那一支上，模型忘了手机上刚聊的那段。只有用户在 diverged 横幅上点过「继续」才算知情放行——
+    // 因别的原因 stale 时点的那一下确认的不是这件事，先改成 diverged 再问一次。
+    if (inst.resumeDivergence) {
+      if (!(entry.phase === 'stale' && entry.reason === 'diverged')) { toStale(entry, 'diverged'); onChange(); return; }
+      inst.resumeDivergence = null;
+    }
     inst.emitNotice?.(FIRED_NOTICE, 'info');
     const sent = await inst.send(AUTO_CONTINUE_PROMPT, undefined, { origin: 'auto-continuation' });
     remove(sessionId, sent ? 'fired' : 'busy');

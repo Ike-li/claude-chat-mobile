@@ -943,8 +943,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: 首次装机向导
     //
     // **这是 Swift 在整个方案里存在的唯一硬理由**：scripts/setup.js 的 resolveSetupPlan 规定
-    // 非交互模式必须显式 --work-dir 且绝不回落 $HOME（"那等于把整个家目录交给 agent"），
-    // 而零命令行用户没法输路径。NSOpenPanel 正好补上这一个洞。
+    // 非交互模式绝不回落 $HOME（"那等于把整个家目录交给 agent"）——不给 --work-dir 就一个文件夹都不连
+    // （2026-10-15 起可以跳过），而零命令行用户没法输路径。NSOpenPanel 正好补上这一个洞。
     //
     // 其余每步仍然委托 CLI（判定只有一份），但在**内嵌任务窗口**里跑：用户看得见每一步的
     // 真实输出、失败时报错就在眼前，而不必切到 Terminal。桌面端不再依赖任何终端。

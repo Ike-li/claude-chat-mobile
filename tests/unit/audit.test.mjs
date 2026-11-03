@@ -31,9 +31,10 @@ test.describe('audit.js 单元测试', () => {
     assert.deepEqual(r.meta, { relPath: '../x' });
   });
 
+  // 两条必须是不同的事件：完全相同的两条在 60 秒内会合并成一条（下面「合并」那组），id 本来就该相同
   test('recordAudit: 每条记录 id 唯一', () => {
-    const a = AU.recordAudit({ action: 'x' });
-    const b = AU.recordAudit({ action: 'x' });
+    const a = AU.recordAudit({ action: 'x', target: 'id-a' });
+    const b = AU.recordAudit({ action: 'x', target: 'id-b' });
     assert.notEqual(a.id, b.id);
   });
 
@@ -92,6 +93,61 @@ test.describe('audit.js 单元测试', () => {
     process.env.CCM_AUDIT_FILE = prevFile;
     if (prevCap === undefined) delete process.env.AUDIT_RECORD_CAP; else process.env.AUDIT_RECORD_CAP = prevCap;
     rmSync(isoDir, { recursive: true, force: true });
+  });
+
+  // ── 合并完全相同的记录（2026-11-01）──────────────────────────────────────────
+  // 一个每 12 秒触发一次的拒绝（抽屉轮询一个已删掉的文件夹）就是每小时 300 条，几小时把 5000 条环形上限里
+  // 真正稀有的安全记录（设备批准、吊销、限速锁定）轮转掉。完全相同的记录在首条之后 60 秒内只计数不另起：
+  // 信息不丢（第一次、最后一次、几次），占用降到每分钟至多一条。窗口从首条算起，持续的刷屏每分钟仍留一条新记录，
+  // 看得出它还在发生。
+  test.describe('合并：60 秒内完全相同的记录只计数', () => {
+    let M;
+    let mergeDir;
+    test.before(async () => {
+      mergeDir = mkdtempSync(join(tmpdir(), 'ccm-audit-merge-'));
+      const prevFile = process.env.CCM_AUDIT_FILE;
+      process.env.CCM_AUDIT_FILE = join(mergeDir, 'audit-records.json');
+      M = await import('../../app/src/ops/audit.js?t=merge'); // 独立模块实例：记录数从 0 起，不受上面各条干扰
+      process.env.CCM_AUDIT_FILE = prevFile;
+    });
+    test.after(() => { if (mergeDir) rmSync(mergeDir, { recursive: true, force: true }); });
+    const rec = (ts, over = {}) => M.recordAudit({ action: 'scope_violation', target: '/gone', outcome: 'denied', meta: { via: 'routeCwd' }, ts, ...over });
+
+    test('两个目标交替刷（两个消失的文件夹被同一轮轮询）：各合并成一条，记次数与最后一次', () => {
+      const t0 = 1_000_000;
+      for (let i = 0; i < 5; i++) {
+        rec(t0 + i * 12_000, { target: '/gone-a' });
+        rec(t0 + i * 12_000 + 5, { target: '/gone-b' });
+      }
+      const rows = M.getAll().filter(r => r.ts >= t0 && r.ts < t0 + 60_000);
+      assert.deepEqual(rows.map(r => [r.target, r.repeat, r.lastTs]), [
+        ['/gone-a', 5, t0 + 48_000],
+        ['/gone-b', 5, t0 + 48_005],
+      ]);
+    });
+
+    test('从首条起满 60 秒另起一条；首条之后的单条没有 repeat 字段', () => {
+      const t0 = 2_000_000;
+      const first = rec(t0, { target: '/gone-c' });
+      rec(t0 + 59_999, { target: '/gone-c' });
+      const next = rec(t0 + 60_000, { target: '/gone-c' });
+      assert.notEqual(next.id, first.id);
+      assert.equal(first.repeat, 2);
+      assert.equal(next.repeat, undefined, '单独一条的形态不变，旧记录与读取方不受影响');
+    });
+
+    test('任何一个字段不同都不合并：actor、target、outcome、meta', () => {
+      const t0 = 3_000_000;
+      const base = { action: 'device_approved', target: 'dev-1', outcome: 'allowed', meta: { via: 'web' }, actor: { deviceId: 'd1', via: 'web' } };
+      M.recordAudit({ ...base, ts: t0 });
+      M.recordAudit({ ...base, actor: { deviceId: 'd2', via: 'web' }, ts: t0 + 1 });
+      M.recordAudit({ ...base, target: 'dev-2', ts: t0 + 2 });
+      M.recordAudit({ ...base, outcome: 'error', ts: t0 + 3 });
+      M.recordAudit({ ...base, meta: { via: 'cli' }, ts: t0 + 4 });
+      const rows = M.getAll().filter(r => r.ts >= t0 && r.ts < t0 + 60_000);
+      assert.equal(rows.length, 5);
+      assert.ok(rows.every(r => r.repeat === undefined));
+    });
   });
 
   test('flushSaveSync: 同步落盘后文件内容与 getAll() 一致', () => {

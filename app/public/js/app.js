@@ -4,45 +4,29 @@
 import {
   esc,
   formatToolSummary,
+  toolOutputHighlightClass,
+  toolInputHighlightClass,
   formatToolCardTitle,
   formatTaskToolTitle,
   renderTaskToolResultText,
   shouldEmitModeChangeBar,
-  resolveModelTileDisplay,
   resolveModelDisplayName,
-  modelGridEmptyHint,
-  resolveGatewayModelName,
-  resolveModelPillText,
-  formatCachePercent,
-  effortLevelSubtitle,
+  modelTileValueFor,
+  resolveOutgoingModel,
   shouldShowBusyWithMirror,
   formatStreamPreviewIntervalMs,
   statusIconSpec,
   STATUS_ICON_TONES,
   toolPreviewLabel,
-  effortLevelsFor,
-  modelLabelFor,
-  effortUiState,
   resolvePanelState,
   resolvePanelCwd,
   resolveSessionCwd,
   resolveWorktreeGoneNotice,
   aggregateStates,
-  owningWorkspace,
-  resolveDrawerStatus,
-  isBlockedSurfaceTarget,
-  resolveDrawerStatusChip,
-  formatSessionRowSubtitle,
-  summarizeOtherWorkspaces,
-  projectDisplayName,
-  shouldShowStartScreen,
-  shouldShowComposer,
-  shouldShowTopContextPill,
-  sessionIdBlockView,
+  mirrorRowLockChanged,
   resolveEmptySurface,
   wasViewingInstanceDestroyed,
   detectServerRestart,
-  formatComposeDefaultsSummary,
   shouldRestoreOptimisticBusy,
   planSessionDraftSwap,
   draftKeyFor,
@@ -51,34 +35,20 @@ import {
   describeHandshakeError,
   syncAckAction,
   shouldReloadOnEnter,
+  prefetchedHistoryFits,
+  prefetchCheckable,
+  HISTORY_TAIL_FIRST,
   shouldForceScrollAfterReplay,
   shouldStickScrollToBottom,
   resolveReplayBufferAction,
   sessionDomCachePlan,
-  keyboardInsetPadding,
-  logEntryVisibleForInstance,
-  consoleLogEntryLayout,
   defaultModelTileLabel,
-  withUltracodeTier,
-  withAutoTier,
   resolveDeepLinkTarget,
   armedTakeoverStep,
   presentTurnResult,
-  formatServiceNotices,
-  formatHooksBridgeRow,
-  formatMcpServers,
-  formatPushStatusRow,
-  formatStatuslineBridgeRow,
-  pushEnvHint,
-  readPushOptOut,
-  serviceStatusBasicRows,
-  shouldSendOnEnter,
-  whatNeedsAttention,
-  resolveHeaderConnBadge,
-  resolveHeaderAttentionChip,
+  isSoftKeyboardPrimaryDevice,
   userBubbleFold,
-  mergeRecentSessionsAcrossWorkspaces,
-  remainingOlderSessionCount,
+  historyLoadedNotice,
   formatNotifyIdentity,
   notifySessionTag,
   lookupNotifySessionTitle,
@@ -92,6 +62,7 @@ import {
   summarizeTurnFileChanges,
   formatSubagentCardTitle,
   isToolSummaryTruncated,
+  localizeServerThinkingText,
   formatMirrorBannerText,
   formatMirrorComposerHint,
   shouldEmitThrottledHint,
@@ -99,8 +70,8 @@ import {
   shouldResetMirrorOnViewChange,
   resolveComposerPrimaryMode,
   shouldHideComposerSendButton,
-  pillPermTone,
   shouldShowComposerDiscoverHint,
+  resolveComposerDiscoverAriaDescription,
   formatLiveActivityText,
   INTERRUPT_PENDING_TIMEOUT_MS,
   shouldClearInterruptPendingOnSystem,
@@ -115,12 +86,22 @@ import {
   shouldBusyAfterOfflineBatch,
   outboxItemTargetsViewing,
   outboxNoticePlacement,
+  outboxParkedNotice,
+  outboxDeadLetterHead,
+  isUnreturnableDeadLetter,
+  shouldCarryOutboxBubbleOnClear,
+  canTextClaimPendingBubble,
   SEND_ACK_FALLBACK_MS,
   SEND_ACK_TRANSPORT_MS,
   OFFLINE_RESEND_ACK_MS,
   planOutboxDrainNotice,
   planOutboxWorktreeReuse,
+  planOutboxScratchReuse,
+  nextOutboxScratchAnchor,
+  nextOutboxLazyOpenAnchor,
+  planOutboxBlockedTarget,
   nextOutboxWorktreeAnchor,
+  outboxComposeKey,
   planOutboxEnqueue,
   parseDurableOutbox,
   dumpDurableOutbox,
@@ -133,79 +114,93 @@ import {
   shouldClearBusyBySnapshot,
   buildClientErrorReport,
   clientErrorGateStep,
-  formatLogsForCopy,
-  isRestoredBoundary,
   guessImageMime,
-  formatDiagLogEntry,
-  filterConsoleEntries,
   nextHistoryRenderChunk,
+  historyRenderSplit,
   findHistoryClaimForPending,
   resolveUnreadAnchorIndex,
   shouldAckUnreadOnScroll,
-  resolveForkAnchorUuid,
-  detectAtMentionQuery,
-  applyAtMentionPick,
-  buildSlashCommandHints,
+  hasSlashCommand,
   unifiedDiffLines,
   MAX_DIFF_LINES_FOR_LCS,
-  formatStatuslineCollapsedSummary,
-  formatStatuslineCopyText,
-  formatStatuslineCtxLeft,
   formatWorkspaceChangeBadge,
-  shouldRenderStatusline,
   readPushPreviewPref,
   writePushPreviewPref,
-  shouldRerenderSessionList,
   buildDirInstanceSignatures,
   diffDirSignatures,
-  permissionModeTileSpecs,
+  dirPanelStructuralKey,
   resolveComposerPlaceholder,
   resolveTurnEndScroll,
-  resolveSendModel,
-  applyGatewaySuffix,
-  formatRestartRows,
-  formatAgoShort,
-  formatAuditEntry,
   isLanOrLocalHostname,
   authFailurePath,
-  summarizeRecentsLoad,
+  shouldHandshakeOnBoot,
   shortDeviceId,
   formatRelativeApprovedAt,
   rewindOutcomeNotes,
+  isPathWithin,
 } from './logic.js';
-import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
+import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, confirmAndWriteLangPref, applyI18nToDocument } from './i18n.js';
+import { readThemePref, writeThemePref, applyThemeToDocument } from './theme.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
 // 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
-import { resolveDirUnreadBadge } from './logic/unread.js';
+import { askQuestionResultView } from './logic/questions.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
+import { createPerfReporter } from './app/perf-report.js';
+import { createPerfTrace } from './app/perf-trace.js';
 import { createAlertController } from './app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from './app/attachments.js';
+import { createTranscriptImages } from './app/transcript-images.js';
 import { createRttMonitor } from './app/connection-sync.js';
 import { createConnectionBannerController } from './app/connection-banner.js';
 import { createAutoContinueBannerController, tagAutoContinueBubble } from './app/auto-continue-banner.js';
 import { createMessageRenderer } from './app/message-renderer.js';
 import { createMessageTimeline } from './app/message-timeline.js';
 import { createHistoryLoadGate } from './app/history-load-gate.js';
+import { createHistoryPrefetch } from './app/history-prefetch.js';
 import { createAgentEventDispatcher, createReplayBuffer } from './app/event-dispatch.js';
 import { createFileBrowser } from './app/file-browser.js';
 import { createUnreadTracker } from './app/unread-tracker.js';
-import { createDrawerUnreadJump } from './app/drawer-unread-jump.js';
-import { attachLongPress } from './app/long-press.js';
+import { createScrollToBottomController } from './app/scroll-to-bottom.js';
 import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
 import { createNewSessionWorktree } from './app/new-session-worktree.js';
+import { createComposePage } from './app/compose-page.js';
 import { createSettingsController } from './app/settings.js';
 import { createGeneralNav } from './app/general-nav.js';
+import { createAboutPage } from './app/about-page.js';
+import { createHostMcp } from './app/host-mcp.js';
 import { createEnvConfigPanel } from './app/env-config.js';
+import { createNoticeDismissals } from './app/notice-dismissals.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
+import { createOutboxDeadLetters } from './app/outbox-dead-letters.js';
 import { createSessionWorkspaceState } from './app/session-workspaces.js';
+import { createProjectsState } from './app/projects-state.js';
+import { createFolderPicker } from './app/folder-picker.js';
 import { createInteractionQueueState, createApprovalController } from './app/approval-questions.js';
 import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
+import { createSessionRowMenu } from './app/session-row-menu.js';
+import { createElicitationSheet } from './app/elicitation-sheet.js';
+import { createForegroundTasks } from './app/foreground-tasks.js';
+import { createSessionRenameController } from './app/session-rename.js';
+import { createCrashNotices } from './app/crash-notices.js';
 import { createRewindCommandController } from './app/rewind-command.js';
-import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
+import { createResumeDivergencePrompt } from './app/resume-divergence.js';
+import { createOutboxAfterTurn } from './app/outbox-after-turn.js';
+import { createOutboxInFlight } from './app/outbox-in-flight.js';
+import { createLocalReset } from './app/local-reset.js';
+import { createWidgetRenderer } from './app/widget-render.js';
+import { createModelIntent } from './app/model-intent.js';
+import { createGateFocusController } from './app/focus-layers.js';
+import { createConsoleModal } from './app/console-modal.js';
+import { createServiceStatus } from './app/service-status.js';
+import { createStatuslineView } from './app/statusline-view.js';
+import { createEmptySurfaces } from './app/empty-surfaces.js';
+import { createSessionSidebar } from './app/session-sidebar.js';
+import { createComposerControls } from './app/composer-controls.js';
+import { createKeyboardInset } from './app/keyboard-inset.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -247,6 +242,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   setLang(resolveInitialLang(k => localStorage.getItem(k), navigator.language));
   applyI18nToDocument(document);
 
+  // ⑩ 主题：theme-boot.js 已在首屏写过 data-theme / manifest；这里再跑一遍以同步 theme-color / hljs media / manifest，
+  // 并在「跟随系统」时监听系统切换（强制档不听——用户显式钉死了）。
+  const systemDarkMq = window.matchMedia?.('(prefers-color-scheme: dark)') || null;
+  const systemDarkNow = () => !!(systemDarkMq && systemDarkMq.matches);
+  const applyStoredTheme = () => applyThemeToDocument(
+    document,
+    readThemePref(k => localStorage.getItem(k)),
+    { systemDark: systemDarkNow() },
+  );
+  applyStoredTheme();
+  if (systemDarkMq) {
+    const onScheme = () => {
+      if (readThemePref(k => localStorage.getItem(k)) === 'system') applyStoredTheme();
+    };
+    // 新旧 Safari：addEventListener 与 addListener 都要兜
+    if (typeof systemDarkMq.addEventListener === 'function') systemDarkMq.addEventListener('change', onScheme);
+    else if (typeof systemDarkMq.addListener === 'function') systemDarkMq.addListener(onScheme);
+  }
+
   // ---- DOM ----
   const $ = id => document.getElementById(id);
   const messagesEl = $('messages'), inputEl = $('input'), statusEl = $('statusLine'), connDot = $('connDot'), connRttEl = $('connRtt'), connDotWrap = $('connDotWrap');
@@ -256,7 +270,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 流内 live 活动行（懒创建 #streamLiveStatus）；composer 顶条 #activeStatusPill 已移除
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
-  const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), taskBannerLabel = $('taskBannerLabel'), btnTaskStop = $('btnTaskStop'), taskBannerToggle = $('taskBannerToggle');
+  const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), taskBannerLabel = $('taskBannerLabel'), btnTaskStop = $('btnTaskStop'), taskBannerToggle = $('taskBannerToggle'), taskBannerChevron = $('taskBannerChevron');
   const unreadPillEl = $('unreadPill'), unreadPillCountEl = $('unreadPillCount'); // 未读角标悬浮胶囊
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
@@ -282,40 +296,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 三块始终展开的设置分区 id 留在 HTML（#modelSection / #effortSection / #permSection）供滚动与 E2E，JS 不握引用。
 
   const modelInput = $('modelInput');   // 模型 select：候选由 models 事件填充；任意名走 /model 拦截动态插入
-  const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
-  const cliStatusWrapEl = $('cliStatusWrap'); // E16：状态栏折叠包裹（<details>，揭示=去 hidden）
-  const cliSummaryEl = $('cliSummary'); // E16：折叠条摘要 git · ctx（formatStatuslineCollapsedSummary）
-  const cliStatusCopyBtn = $('cliStatusCopy'); // 点按复制（不触发展开）
-  let lastStatusLinePayload = null; // 最近一次 status_line，供复制
-  if (cliStatusCopyBtn) {
-    // mousedown 也拦截：部分浏览器在 summary 内点按钮会先 toggle details
-    cliStatusCopyBtn.addEventListener('click', async (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      const text = formatStatuslineCopyText(lastStatusLinePayload)
-        || (cliSummaryEl?.textContent || '').trim();
-      if (!text || text === 'statusline') {
-        addBar(t('暂无状态可复制'), 'text-ink-faint');
-        return;
-      }
-      try {
-        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-        else {
-          const ta = document.createElement('textarea');
-          ta.value = text;
-          ta.style.position = 'fixed';
-          ta.style.left = '-9999px';
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          ta.remove();
-        }
-        addBar(t('已复制状态摘要'), 'text-success');
-      } catch {
-        addBar(t('复制失败'), 'text-danger');
-      }
-    });
-  }
+  const modelIntent = createModelIntent(); // 当前会话里亲手选过模型没有（发送意图，见 app/model-intent.js）
+  const statuslineView = createStatuslineView({
+    $, addBar: (...args) => addBar(...args), messagesEl, renderLiveLine, updateWorkspaceChangeBadge,
+    getCurrentCwd: () => currentCwd, getLiveLine: () => liveLine,
+    getViewingInstanceId: () => viewingInstanceId,
+  });
+  const { cliStatusBarEl, hideStatuslineWrap, renderStatusLine } = statuslineView;
   const permModeSelect = $('permModeSelect');  // 权限档切换器：选项/磁贴由 rebuildPermissionModeUi 按 SDK PermissionMode 填充
   const effortSelect = $('effortSelect');      // 思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
   const effortRow = $('effortRow');            // effort 整行容器：当前模型不支持 effort（如 haiku）时隐藏
@@ -339,10 +326,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 插进 CSS selector 或 HTML 串。
     if (customModelGrid && !customModelGrid.querySelector(`[data-model="${CSS.escape(value)}"]`)) {
       const card = el(`
-        <div class="model-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
+        <button type="button" aria-pressed="false" class="model-tile w-full text-left p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
           <div class="text-xs font-semibold truncate text-ink"></div>
           <div class="text-[9.5px] text-ink-soft truncate mt-0.5"></div>
-        </div>
+        </button>
       `);
       card.dataset.model = value;                 // 属性走 dataset，不进 HTML 串
       const [nameDiv, noteDiv] = card.children;   // 两个内层 div，textContent 赋值（自动转义）
@@ -352,6 +339,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (mirrorReadonlySid) { addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
         haptic('tap');
         modelInput.value = value;
+        modelIntent.markPicked(); // 用户点的才算发送意图（见 resolveOutgoingModel）
         delete modelInput.dataset.fullModel; // 发送时 dataset.fullModel 优先级高于 value，选中此卡须清掉旧的（同 rebuildCustomModelGrid）
         syncModelUI(value);
       };
@@ -370,6 +358,21 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const deviceDenied = $('deviceDenied'), deviceDeniedRetry = $('deviceDeniedRetry'), deviceDeniedHelp = $('deviceDeniedHelp');
   const deviceModalEl = $('deviceModal'); // TOFU 待授权全屏遮罩（连接横幅的抑制判据之一）
   const accessHelp = $('accessHelp'), accessHelpClose = $('accessHelpClose'), accessHelpOpen = $('accessHelpOpen'), authHelpLink = $('authHelpLink');
+  // 全屏门开着时背后的页面不可 Tab（验收 O74）。按 DOM 顺序传：同为 z-50，靠后的在上面。
+  // sessionBlockedSurface（z-20）是中层 aria-modal（#393）：走 overlays，不要塞进 gates——
+  // 否则会 inert 掉更高的 leftSidebar（层序注释：落地页在侧栏之下，要能直接翻会话列表）。
+  // overlayCovers 点名它（fixed inset-0 z-20）实际盖住的东西：顶栏、连接横幅、消息区、未读胶囊、输入区；
+  // 桌面（≥1024）常驻侧栏是 relative z-10，也在它下面。设备授权卡（z-30）、手机抽屉（z-40）与各类 sheet
+  // 在它上面，不点名、照常可用。
+  const sessionBlockedSurface = $('sessionBlockedSurface');
+  createGateFocusController({
+    gates: [authGate, accessRelogin, deviceModalEl, deviceDenied, accessHelp],
+    overlays: [sessionBlockedSurface],
+    overlayCovers: () => [
+      document.querySelector('header'), $('connBanner'), $('messages'), $('unreadPill'), $('composerFooter'),
+      window.innerWidth >= 1024 ? leftSidebar : null,
+    ],
+  });
   const btnConsole = $('btnConsole'), consoleModal = $('consoleModal'),
         consoleClose = $('consoleClose'), consoleClear = $('consoleClear'),
         consoleLogArea = $('consoleLogArea');
@@ -488,143 +491,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   let currentGatewaySuffix = '';        // 保存第三方网关的特殊后缀（如 [1m]）进行无感适配，保持 Web 选项名称干净
   let activeSpeechBtn = null;           // 语音朗读当前播放的按钮
   let currentSessionIdForCopy = null;   // 当前查看会话完整 id（供 pillSession 点按复制）
-
-  // 短 session_id 胶囊：显前 8 位、点按复制完整 id。便于对照 CLI /resume、日志、多设备定位同一会话。
-  // 无 id 时不再只藏行——那会在面板底部留下一个没人管的「🆔 会话标识」标题（标题恒显），形似渲染故障；
-  // 改为收起胶囊 + 就地说明懒创建（判定与文案见 logic/panel-state.js sessionIdBlockView）。
-  function updatePillSession(sid, emptyCtx = {}) {
-    const pill = $('pillSession'), txt = $('pillSessionText'), row = $('settingsSessionRow');
-    if (!pill || !txt) return;
-    const view = sessionIdBlockView({ sessionId: sid, ...emptyCtx });
-    currentSessionIdForCopy = view.showRow ? sid : null;
-    txt.textContent = view.showRow ? sid.slice(0, 8) : '';
-    pill.classList.toggle('hidden', !view.showRow);
-    row?.classList.toggle('hidden', !view.showRow);
-    const hint = $('settingsSessionHint');
-    if (hint) {
-      hint.textContent = view.hint || '';
-      hint.classList.toggle('hidden', !view.hint);
-    }
-  }
-
-  function syncModelUI(model, displayOverride) {
-    // 底栏模型 chip：原样显示当前 model（+ 网关后缀）；未选时用 CLI default 的 displayName 或 cwd 默认裸名。
-    const cliDefault = (modelsList || []).find(m => (typeof m === 'string' ? m : m?.value) === 'default');
-    const cliDefaultLabel = cliDefault && typeof cliDefault === 'object'
-      ? (cliDefault.displayName || 'Default (recommended)')
-      : null;
-    const modelPillText = displayOverride || resolveModelPillText({
-      model,
-      gatewaySuffix: currentGatewaySuffix,
-      modelsList,
-      cwdDefaultModel,
-      cliDefaultLabel,
-    });
-    if (pillModelText) pillModelText.textContent = modelPillText;
-    if (customModelGrid) {
-      // 空选中时高亮 CLI 的 default 项（与终端 /model 列表一致），不靠 data-model="" 伪项
-      const activeVal = model || (cliDefault ? 'default' : '');
-      customModelGrid.querySelectorAll('.model-tile').forEach(tile => {
-        const tileVal = tile.dataset.model;
-        const isCurrent = tileVal === activeVal || (!!model && tileVal === model);
-        const title = tile.querySelector('.text-xs');
-        if (isCurrent) {
-          tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
-          if (title) {
-            title.classList.add('text-accent');
-            title.classList.remove('text-ink');
-          }
-        } else {
-          tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
-          if (title) {
-            title.classList.remove('text-accent');
-            title.classList.add('text-ink');
-          }
-        }
-      });
-    }
-    // compose 页默认档摘要与底栏同源；模型段变了就地刷 title
-    syncDefaultsPillTitle();
-    if (_composeReady) refreshComposeDefaultsSummary();
-  }
-
-  function rebuildCustomModelGrid(models) {
-    if (!customModelGrid) return;
-    customModelGrid.innerHTML = '';
-    // 终端等价：只渲染 CLI/SDK supportedModels 列表，不自造「默认模型」空磁贴。
-    // CLI 列表自带 value:"default" / "Default (recommended)"；空首页未选时高亮该项。
-    const list = models || [];
-    const hasCliDefault = list.some(m => (typeof m === 'string' ? m : m?.value) === 'default');
-    // 选中规则：已有具体 currentModel → 精确/别名命中；否则 FRESH 高亮 CLI default 项
-    const selectedVal = currentModel
-      || (modelInput?.value || '')
-      || (hasCliDefault ? 'default' : '');
-
-    // 条数 = SDK 列表；标题 = 真实 wire id（resolvedModel），value 仍用 SDK 档位 id
-    const tiles = resolveModelTileDisplay(list);
-    const wireOf = (v) => {
-      if (!v || v === 'default') return v || '';
-      return resolveGatewayModelName(v, list) || String(v);
-    };
-    tiles.forEach(({ value: val, title, subtitle }) => {
-      const display = title;
-      const active = val === selectedVal
-        || (!!currentModel && val === currentModel)
-        || (!!currentModel && wireOf(currentModel) && wireOf(currentModel) === wireOf(val))
-        || (!!selectedVal && selectedVal !== 'default' && wireOf(selectedVal) === wireOf(val))
-        || (!currentModel && val === 'default' && (selectedVal === 'default' || !selectedVal));
-      const using = active ? t(' · 使用中') : '';
-      const card = el(`
-        <div data-model="${esc(val)}" class="model-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
-          <div class="text-xs font-semibold truncate ${active ? 'text-accent' : 'text-ink'}">${esc(display)}${using ? `<span class="text-[11px] font-normal opacity-80">${esc(using)}</span>` : ''}</div>
-          <div class="text-xs text-ink-soft truncate mt-0.5">${esc(subtitle || val)}</div>
-        </div>
-      `);
-      card.onclick = () => {
-        if (mirrorReadonlySid) { addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
-        haptic('tap');
-        // value 保持 SDK 条目 id；发送时 resolveSendModel 再 pin wire
-        modelInput.value = val === 'default' ? '' : val;
-        delete modelInput.dataset.fullModel;
-        if (val !== 'default') ensureModelOption(val);
-        syncModelUI(val === 'default' ? '' : val);
-        rebuildEffortOptions(val === 'default' ? (cwdDefaultModel || currentModel) : val);
-      };
-      customModelGrid.appendChild(card);
-    });
-    syncModelGridEmptyHint();
-  }
-
-  // 「✨ 模型」标题恒显，网格却可能一张卡都没有（该 cwd 无 models 缓存时服务端不推、等 scout；
-  // scout 起不来则一直空着）——空白＝又一个孤儿标题。这里按【实际渲染出的磁贴数】判，而不是按
-  // models 列表长度：磁贴有两个来源（本函数上方的候选列表 + ensureModelOption 追加的「当前加载
-  // 模型」），只看列表会一边说没清单一边摆着一张卡。故两个产出点都要调用本函数收口。
-  function syncModelGridEmptyHint() {
-    const emptyEl = $('modelGridEmpty');
-    if (!emptyEl || !customModelGrid) return;
-    const hint = modelGridEmptyHint({ tileCount: customModelGrid.querySelectorAll('.model-tile').length });
-    emptyEl.textContent = hint || '';
-    emptyEl.classList.toggle('hidden', !hint);
-  }
-
-  function updateModelAndSuffix(rawModel) {
-    if (!rawModel) {
-      currentModel = '';
-      currentGatewaySuffix = '';
-      syncModelUI('');
-      return '';
-    }
-    const match = rawModel.match(/\[[^\]]+\]$/);
-    if (match) {
-      currentGatewaySuffix = match[0];
-      currentModel = rawModel.replace(/\[[^\]]+\]$/, '');
-    } else {
-      currentGatewaySuffix = '';
-      currentModel = rawModel;
-    }
-    syncModelUI(currentModel);
-    return currentModel;
-  }
   let modelsList = [];                   // 最近一次 models 事件的原始候选（含 SDK 的 supportedEffortLevels），驱动 effort 下拉
   const streams = new Map();
   const thinkings = new Map();
@@ -654,12 +520,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 本端已答/已决提问 requestId（含整组 toolUseID）。乐观作答后 sync 竞态或缓冲回放时防重弹；
   // server eventsSince 已过滤已答项，此集合补作答→ack 窗口与 request_resolved 关窗标记。
   let currentPermMode = 'default';      // 当前权限档；onchange 取消时回退、避免重复 emit
-  let permModeSeen = false;             // 首次服务端同步只定基线不上屏（刷新/重连不冒「切换」假象）
   let currentEffort = null;             // 当前思考强度档（null=模型默认）；onchange 同值不重发
-  let effortSeen = false;               // 首次服务端同步只定基线不上屏（同 permModeSeen）
   let ultracodeArmed = false;           // ultracode 档（=xhigh+workflow）本地武装态：借道 xhigh 发 effort，
                                         // 由本标志驱动「发送时注入关键词」+ pill/磁贴显示 ultracode。不跨实例（CLI: never persist）
   let currentCwd = null;                // 当前查看 cwd 上下文（instances.viewingCwd），目录切换器高亮 + 新建会话选目录
+  // 新会话页上选中的驾驶轴目录（instances.composeCwd）：选择器里挑中一个 worktree 时 currentCwd 是它所属的仓库，
+  // 首条消息却要开在 worktree 里。只在新会话页上、且和 currentCwd 不同时才有。
+  let composeCwd = null;
   // 【驾驶轴 cwd】某个实例的 claude 实际在哪棵树里跑。托管 worktree 的会话工作区轴归父仓
   // （server 的 workspaceCwdOf），但文件改在、transcript 也落在 .claude/worktrees/<name> 下。
   // 凡是「按 cwd 去磁盘找这个会话的东西」都必须走这条，拿 currentCwd 去查必然扑空。
@@ -669,9 +536,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const drivingCwdOf = (instanceId) => resolveSessionCwd({ instances: instancesList, viewingInstanceId: instanceId, workspaceCwd: currentCwd });
   // 文件/改动面板跟的是「当前会话在哪个工作树」，不是 currentCwd（判据见 logic/panel-state.js）。
   const panelCwd = () => resolvePanelCwd({ instances: instancesList, viewingInstanceId, workspaceCwd: currentCwd });
+  // 按 cwd 找文件、读规则时用哪个目录。「无文件夹」那一节的键是 scratch 根——它只是新会话页的启动键，
+  // 服务端不让拿它找文件；看着一个会话时改用它自己的 scratch 目录。新会话页上仍是 scratch 根（还没有目录）。
+  const requestCwd = () => (projectsState.isNoFolder(currentCwd) && viewingInstanceId ? panelCwd() : currentCwd);
+  // 首条消息（含离线入队）投到哪个目录：新会话页上选中了 worktree 就是它，其余一律 currentCwd
+  const sendCwd = () => (!viewingInstanceId && composeCwd) || currentCwd;
+  // 进离线队列的消息记下目标实例此刻跑的会话（MSG-02），与 instanceId 同取自 instances 快照——不用 displayedSessionId，
+  // 切视图的窗口里两者可能分属两个实例。新会话页、会话还没开出来时为 null（服务端照旧只核对实例在不在）。
+  const sendSessionId = () => (viewingInstanceId && instancesList.find(x => x?.instanceId === viewingInstanceId)?.sessionId) || null;
   // panelCwd() 悄悄换成父仓时要说一句——两个 openWorkspacePanel 调用点共用这一条，判据在纯函数里。
   const worktreeGoneNotice = () => resolveWorktreeGoneNotice({ instances: instancesList, viewingInstanceId });
-  let availableDirs = [];               // WORK_DIRS 白名单，会话面板目录切换器候选
+  // 抽屉小节的键 = 项目键（已连接的文件夹、其下有会话的子文件夹、「无文件夹」；旧载荷回落 dirs）
+  let availableDirs = [];
+  const projectsState = createProjectsState(); // 项目清单与展示名（见 app/projects-state.js）
   let cwdSeen = false;                  // 首次服务端同步只定基线不切视图（刷新/重连不清空）
   let workdirStates = {};               // {[cwd]:'idle'|'busy'|'permission'|'done'} 目录切换器角标（台阶3 由 instances 按 cwd 聚合）
   // 台阶3：viewingInstanceId = 当前查看 tab 实例（前端分流锚点）；displayedInstanceId/Session =
@@ -703,31 +580,28 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 服务状态可见性（第一性原理重新设计，与上面 needsYouList 是不同轴——这条答"服务本身有没有出过岔子"）：
   // latestServiceHealth = 最近一次 instances 广播里的 service 字段。
   let latestServiceHealth = null;
+  // 服务告警的「忽略」（#301）：本机记住忽略到哪个指纹，状态在模块内，此处只持句柄。
+  const noticeDismissals = createNoticeDismissals();
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
-  // 用户点过「显示全部会话…」的目录。缓存里的 sessions 是"当下拿到的那一份"，记不住用户要看全量这个
-  // 意图——而 populateSubtree 每次都会无条件 revalidate，不带上 all 就会把展开态悄悄打回截断（P0-11x）。
-  const expandedAllDirs = new Set();
-  // session:list 附带的 CLI registry 快照：每个 cwd 的终端聚合态（'waiting' | 'busy'，无则不存键）。
-  // 与 Web workdirStates 独立保存并在抽屉显示层合并，避免 live idle/done 遮住终端运行态。
-  // 存单值而后端给两个布尔：目录行只有一个角标位，同 cwd 两态并存时取更要紧的那个（等人 > 在跑）。
-  const terminalStateByDir = new Map();
   const SESSION_PANEL_REVALIDATE_MS = 12_000;
-  let sessionPanelRevalidateTimer = null;
   // P3：面板"结构性"指纹（dirs 集合 + viewingInstanceId）；只有这两者变化才全量重建整个面板
   // （低频、全量更简单可靠）。纯状态变化、或只是某个目录下实例变化，都不再经它判定——见下方按目录分键。
   let _lastPanelStructKey = null;
+  // 纯换序（拖动排序广播回来的新顺序，集合不变）单独判——不算结构性变化，只挪 DOM 位置，不触发
+  // openSessionPanel 的 UX-007 强制展开（2026-10-26 回归：挪别的文件夹顺序，当前工作区被连带强制展开）。
+  let _lastDirOrderKey = null;
   // P3：按目录分键的实例签名（cwd → 签名片段，见 logic.js buildDirInstanceSignatures）+ diff 出的
   // "签名变了的目录"只重建那几个目录的 DOM 子树，其余目录保持原样（不撤离滚动位置/侧滑态等本地态）。
   let _lastDirSignatures = {};
   // dirRow/subtree 节点引用表（cwd → {dirRow, subtree}），供 rebuildDirSections 定位要替换的旧节点；
   // 每次 openSessionPanel() 全量重建时重新填充。
   let dirSectionNodes = new Map();
-  // 目录头「N 未读」角标 → 依次跳到下一条未读行。角标此前是纯展示：它准确报出「有 N 条未读」，
-  // 却答不了「在哪」——列表按时间排、未读判据逐条独立，一条未读完全可能在第 30 行（见模块头注）。
-  const drawerUnreadJump = createDrawerUnreadJump({
-    getSection: cwd => dirSectionNodes.get(cwd),
-    isExpanded: cwd => expandedDirs.has(cwd),
-    expandDir: cwd => dirSectionNodes.get(cwd)?.expand?.(),
+  // 设置页底部两档（#302）。建在 outbox 之前：persistOutbox 与 pagehide 回写都要先问 isResetting()。
+  // 依赖全是调用时才取（点按钮之前 socket、notifications、续发队列都已建好）。
+  const localReset = createLocalReset({
+    isSending: () => _offlineDrainInFlight || outboxAfterTurn.size() > 0,
+    beforeReset: () => { socket.io.reconnection(false); socket.disconnect(); },
+    unsubscribePush: () => notifications.unsubscribe(),
   });
   // 发送 outbox（在线 timeout/retryable + 离线共用）：内存队列 + localStorage 耐久。
   // bubbleEl 仅内存；落盘只写可序列化字段（见 dumpDurableOutbox）。PWA 杀进程后靠 clientMessageId 恢复重试。
@@ -735,10 +609,35 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   try {
     offlineQueue = parseDurableOutbox(localStorage.getItem(OUTBOX_STORAGE_KEY));
   } catch { offlineQueue = []; }
+  // 取出队列、还没有结论的条目，与 offlineQueue 一起落盘（见 app/outbox-in-flight.js）
+  const outboxInFlight = createOutboxInFlight();
   function persistOutbox() {
-    try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue)); } catch { /* quota */ }
+    if (localReset.isResetting()) return; // 重置中：内存里的旧队列不许写回刚清空的存储
+    try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue, outboxInFlight.items())); } catch { /* quota */ }
   }
+  // 登记即落盘：改投后的那份要在投递（await ack）之前写下去，等 ack 时被刷新，恢复的才是改投后的路由
+  function holdOutbox(item) {
+    outboxInFlight.hold(item);
+    persistOutbox();
+  }
+  function settleOutbox(item) {
+    outboxInFlight.settle(item);
+    persistOutbox();
+  }
+  // 永久拒收、此刻又没地方交还原文的条目：暂存（落盘），回到它的会话时交还（见模块头注、deliverOutboxDeadLetters）
+  const outboxDeadLetters = createOutboxDeadLetters({
+    storage: (() => { try { return localStorage; } catch { return null; } })(),
+    targetsViewing: outboxItemTargetsViewing,
+  });
+  // 离线重放撞上在途轮的条目：排队、本轮结束按序自动续发（O66，见 app/outbox-after-turn.js）
+  const outboxAfterTurn = createOutboxAfterTurn({ getInstances: () => instancesList });
   function enqueueOutbox(item) {
+    // 交给 outbox 的气泡记下它发往哪个会话：同一会话清屏重载时 clearView 据此保住它（shouldCarryOutboxBubbleOnClear）。
+    // 投递结论从 'queued' 起记（deliverOutboxItem 改写），历史重载时据此判能不能按文字认领（canTextClaimPendingBubble）。
+    if (item?.bubbleEl) {
+      if (item.sessionId) item.bubbleEl.dataset.outboxSessionId = item.sessionId;
+      item.bubbleEl.dataset.outboxOutcome = 'queued';
+    }
     const { queue, dropped } = planOutboxEnqueue(offlineQueue, item, { maxItems: OUTBOX_MAX_ITEMS });
     offlineQueue = queue;
     persistOutbox();
@@ -756,6 +655,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 复用 markSeen 而不是 markEntered：前者带「当前是手动未读态就跳过」的守卫——用户刚长按标了
   // 「稍后再看」就切后台，不能被这一笔当场清掉（markEntered 会连手动标记一起作废）。
   function markActiveSessionSeen() {
+    if (localReset.isResetting()) return;
     if (displayedSessionId) unread.markSeen(displayedSessionId);
   }
   window.addEventListener('pagehide', () => {
@@ -792,6 +692,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       btnAttach,
       fileInput,
       attachTray,
+      attachNotice: $('attachNotice'),
       attachPreviewModal,
       attachPreviewImg,
       attachPreviewName,
@@ -829,12 +730,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       btnAlertPreview: $('btnAlertPreview'),
       prefPushPreview: $('prefPushPreview'),
       prefLangGroup: $('prefLangGroup'),
+      prefThemeGroup: $('prefThemeGroup'),
       btnPush,
+      pushSubscribeResult: $('pushSubscribeResult'),
       taskProgressBanner,
       taskProgressText,
       taskBannerLabel,
       btnTaskStop,
       taskBannerToggle,
+      taskBannerChevron,
     },
     state: {},
     dependencies: {
@@ -852,7 +756,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       DOMPurify,
       Notification: window.Notification,
       fetch: window.fetch.bind(window),
-      alert: window.alert.bind(window),
       console,
     },
   });
@@ -880,17 +783,37 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     },
   });
   const logClientEvent = clientLogger.log;
+  // 同一份数据连同掉帧、点击响应攒批发给服务端，落成 ccm-server.log 的 [client-perf] 行（见 app/perf-report.js）。
+  // 维度：在会话里还是首页、这个会话是否正在跑
+  const perfReporter = createPerfReporter({
+    emit: payload => socket.emit('logs:clientPerf', payload),
+    isConnected: () => socket.connected,
+    dims: () => ({
+      view: displayedSessionId ? 'session' : 'home',
+      busy: shouldSeedBusyFromInstanceState(instancesList.find(x => x.instanceId === displayedInstanceId)?.state),
+    }),
+    persistStats: clientLogger.persistStats,
+  });
+  // 启动、打开会话、切回前台各段耗时写成 client_perf 行，机主在手机上导出（性能改造 Stage 0，见 app/perf-trace.js）
+  const perfTrace = createPerfTrace({ log: text => logClientEvent('perf', text), report: perfReporter.record });
+  perfTrace.mark('appjs');
   // 切后台/被 iOS 杀前把节流窗口内未落盘的日志尾巴强制写入。pagehide 在移动端比 unload 可靠；
   // visibilitychange→hidden 覆盖「切走但未卸载」。flush 幂等（force write）、双挂无害。
   // 同时上报 presence（PWA 后台推送修复）：服务端据此判定 approved 房间里是否还有"前台"连接，解锁
   // result 完成通知——否则 PWA 切后台后 socket 常常还没断（要等 OS 冻结页面才真正断连），会被误判为
   // "有人在看"而永久吞掉完成通知。fire-and-forget，无需 ack。
+  // 性能批同理：切走前把攒着的发出去；切回来开始记这一次「切回前台」
   window.addEventListener('pagehide', () => {
-    clientLogger.flush();
+    if (!localReset.isResetting()) clientLogger.flush();
+    perfReporter.flush();
     socket.emit('client:presence', { hidden: true }); // 页面即将冻结前兜底再同步一次，双保险
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') clientLogger.flush();
+    if (document.visibilityState === 'hidden' && !localReset.isResetting()) clientLogger.flush();
+    if (document.visibilityState === 'hidden') {
+      perfTrace.hide();
+      perfReporter.flush();
+    } else perfTrace.resumeBegin({ connected: socket.connected });
     socket.emit('client:presence', { hidden: document.hidden });
   });
   const alerts = createAlertController(appContext);
@@ -906,30 +829,41 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 故落在 haptic/el 就绪之后的最早位置。两个「等你答复」型弹窗以取值函数注入，模块本身不认识它们。
   const sheets = createSheetController(appContext, {
     $, haptic,
-    blockingSheets: () => [permModal, questionModal],
+    blockingSheets: () => [permModal, questionModal, $('elicitationModal')],
     onClosed: (elm) => {
-      // UX-003：关闭审批弹窗时清防误触 arming（计时器归审批模块所有）。
+      // UX-003 / #372：关闭审批 / 提问弹窗时清防误触 arming（计时器归审批模块所有）。
       if (elm === permModal) {
         elm.classList.remove('sheet-arming');
         appContext.state.approvals?.cancelPermArming();
       }
+      if (elm === questionModal) {
+        elm.classList.remove('sheet-arming');
+        appContext.state.approvals?.cancelQuestionArming();
+      }
     },
   });
-  const { openSheet, closeSheet, appConfirm } = sheets;
+  const { openSheet, closeSheet, appConfirm, setGestureDismiss } = sheets;
   const setStatus = messageRenderer.setStatus;
   const leaveStartScreen = () => {
     messageRenderer.leaveStartScreen();
     messagesEl?.querySelectorAll('.empty-session-guide').forEach(n => n.remove());
   };
   // 流内 live 活动行：ephemeral，busy 时挂在 #messages 末尾；不进 disk/history；sessionDomCache 前 strip。
+  // #379：不挂 aria-live / aria-busy——秒表每 1s 变；旧 polite+恒 busy 既刷屏又（按 WAI-ARIA）全程静默。
+  // 文案不 aria-hidden：它还承载「正在停止…」与 API 重试状态，读屏用户浏览到这一行时要读得到。
+  // 回合开始 / 结束的播报改由 #turnAnnouncer 各写一次（announceTurn）。
   let streamLiveStatusEl = null;
   function ensureStreamLiveStatus() {
     if (streamLiveStatusEl && streamLiveStatusEl.isConnected) return streamLiveStatusEl;
     streamLiveStatusEl = el(`
-      <div id="streamLiveStatus" class="stream-live-status msg-frame flex items-center justify-center px-3 py-1.5 text-xs" data-ephemeral="1" aria-live="polite" aria-busy="true">
+      <div id="streamLiveStatus" class="stream-live-status msg-frame flex items-center justify-center px-3 py-1.5 text-xs" data-ephemeral="1">
         <span id="streamLiveStatusText" class="font-medium truncate max-w-full"></span>
       </div>`);
     return streamLiveStatusEl;
+  }
+  const turnAnnouncer = $('turnAnnouncer');
+  function announceTurn(text) {
+    if (turnAnnouncer) turnAnnouncer.textContent = text || '';
   }
   function setStreamLiveStatusText(text) {
     // busy 期间保证挂在 #messages 末尾（仅 ensure 不 append 会留下断链节点）
@@ -1044,6 +978,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (ev?.replay) return;
     setBusy(true);
   }
+  // 子代理的流事件不能证明主轮在跑：后台子代理在主轮 result 之后还会一直推流，那段时间权威快照
+  // 说不在跑（bgActive、turnRunning=false），运行条归 task_progress 横幅管。不挡的话每条 delta 都
+  // 从 0s 重新点亮运行条，ticker 过了 30 秒宽限清掉，下一条又亮（真机 2026-11-02）。
+  // 查不到快照时照旧点亮；前台子代理期间 turnRunning 为真，不受影响。
+  // 守护：tests/e2e/specs/task-progress.spec.ts P0-17u
+  function setBusyFromSubagentEvent(ev) {
+    const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
+    if (resolveRunStateFromSnapshot(live)?.busy === false) return;
+    setBusyFromStreamEvent(ev);
+  }
   // 与上面对称：回放的轮次终止事件同样不写运行态。三处调用（result / error / system:interrupted）
   // 覆盖全部轮次终点；其余收尾动作（收口气泡与工具卡、状态条、滚动）照常执行——那是「补渲染内容」。
   //
@@ -1152,6 +1096,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     pinStreamLiveStatus();
     return bar;
   };
+  // 进程异常退出的提示按会话记住，清屏重载历史后补回（验收 O60，见 crash-notices.js）
+  const crashNotices = createCrashNotices({ addBar, hasNotice: () => Boolean(messagesEl.querySelector('[data-crash-notice]')) });
   // 消息流时间戳：跨天插日期分隔行、用户发言间隔超阈值插一次 HH:mm。只作用于主链 user/assistant
   // 气泡，工具卡/thinking/系统条一律不夹（那些在一个回合里密集刷屏，加时间戳是纯噪音）。
   const messageTimeline = createMessageTimeline({ createElement: el, appendMessage, messagesEl });
@@ -1264,12 +1210,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const onTaskNotification = taskStatus.onComplete;
 
   // ---- socket ----
+  // 没令牌、又会走令牌门时不在开页时握手（必然被拒且被记成一次鉴权失败，验收 O20），下面直接出令牌门；
+  // submitAuth 写入令牌后自己 socket.connect()。
+  const handshakeOnBoot = shouldHandshakeOnBoot({ token, lanOrLocal: isLanOrLocal(), cfAccessFlag: document.body.dataset.cfAccess });
   const socket = appContext.setSocket(io({
     auth: { token, deviceToken },
+    autoConnect: handshakeOnBoot,
     // 移动端常切后台/息屏，断开后想尽快回来：调小重连退避（默认 1000/5000ms 太久）
     reconnectionDelay: 500,
     reconnectionDelayMax: 2000,
   }));
+  // 先走 polling 再升级 websocket：升级落在启动哪个时刻、升没升上去（Stage 2c 据此决定改不改传输）
+  socket.io.on('open', () => socket.io.engine.once('upgrade', transport => perfTrace.mark('upgrade', { transport: transport?.name })));
 
   // 全局 JS 错误上报：手机浏览器无 devtools，运行期错误进本地日志抽屉（client_error）
   // 并经 logs:clientError 落服务端日志。只覆盖启动成功之后的错误——更早的解析/启动
@@ -1309,12 +1261,23 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         instanceId: item.instanceId,
         cwd: item.cwd,
         clientMessageId: item.clientMessageId,
+        ...(item.sessionId ? { sessionId: item.sessionId } : {}), // 服务端据它核对命中的实例还是不是那个会话（MSG-02）
         ...(item.useWorktree === true ? { useWorktree: true } : {}),
         ...(item.sourceBranch ? { sourceBranch: item.sourceBranch } : {}),
+        ...(item.composeId ? { composeId: item.composeId } : {}), // 新会话页入队的：开它自己的新会话（O107）
         // 告诉服务端「这是入队时刻的快照，不是眼下的意图」：缺 instanceId 时不得回退到服务端
         // 当前 viewing（断线期间可能已换工作区），见 instance-routing.js 的 allowViewingFallback。
         fromOutbox: true,
-      }, (err, ack) => resolve(presentOfflineResendAck(err, ack)));
+      }, (err, ack) => {
+        const decision = presentOfflineResendAck(err, ack);
+        // 气泡记下这次投递的结论；结局不明（超时、服务端让重试）的记一笔、粘住不撤——它可能已写进 transcript，
+        // 只是回执没到。历史重载时据这两样判能不能按文字认领（canTextClaimPendingBubble）。
+        if (item.bubbleEl) {
+          item.bubbleEl.dataset.outboxOutcome = decision.outcome;
+          if (decision.outcome === 'requeue') item.bubbleEl.dataset.outboxMaybeSent = '1';
+        }
+        resolve(decision);
+      });
     });
   }
 
@@ -1335,26 +1298,140 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     return null;
   }
 
-  function markOutboxBlocked(item, message, targetsViewing = false) {
+  // 离线重放撞上续接分叉闸的那一条，挪回输入框交给面板。只挪投给眼前这个会话、且输入框空着的——
+  // 否则不是覆盖了用户新打的字，就是把别的会话的话塞到这里。条目带着会话时按会话认：规则 5 置换、切 effort
+  // 之后同一会话换了实例号，服务端按会话改投（MSG-02），按实例号比就认不出它，「重发」会原地打转。
+  function moveOutboxItemToComposer(item) {
+    if (!item) return false;
+    const sameSession = typeof item.sessionId === 'string' && item.sessionId !== '' && item.sessionId === displayedSessionId;
+    if (item.instanceId !== displayedInstanceId && !sameSession) return false;
+    if (inputEl.value.trim() || attachments.items().length) return false;
+    dropPendingUserBubble(item.bubbleEl);
+    inputEl.value = item.text || '';
+    inputEl.dispatchEvent(new Event('input'));
+    if (Array.isArray(item.attachments) && item.attachments.length) attachments.setItems(item.attachments);
+    autosize();
+    updateSendButtonState();
+    return true;
+  }
+
+  // afterTurn（O66）：被在途轮挡下的离线条目——排队，本轮结束由 outboxAfterTurn 替用户点这里的「重发」；
+  // 手动点照样可以。续接分叉闸挡下的（divergence）不排队：那边没有在途轮，等多久都是同一道闸。
+  function markOutboxBlocked(item, message, targetsViewing = false, { afterTurn = false } = {}) {
+    // 有结论之前一直落盘：刷新之后下一次批处理还能重新投递它（见 app/outbox-in-flight.js）。
+    // 这里的 item 可能刚按懒开锚改投过（planOutboxBlockedTarget），立即落盘，不等整批结束。
+    holdOutbox(item);
     const host = outboxNoticeHost(item, targetsViewing, 'text-warning');
-    if (!host) return; // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条
+    // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条提示。但排队照样登记：它已经不在
+    // offlineQueue 里，不登记就既不续发、也没有手动「重发」，这条话就丢了（重载后恢复、发往后台会话的条目）。
+    if (!host) {
+      if (afterTurn) {
+        outboxAfterTurn.wait({ instanceId: item.instanceId ?? null, sessionId: item.sessionId ?? null }, {
+          resend: () => resendOutboxHeadless(item),
+          cancel: () => settleOutbox(item),
+        });
+      }
+      return;
+    }
     host.classList.remove('animate-pulse');
     host.textContent = '';
     const label = el(`<span></span>`);
-    label.textContent = `⏸ ${message || t('未发送 · 任务运行中')}`;
+    let queued = afterTurn;
+    const blockedText = msg => (queued ? `⏳ ${t('排队中 · 本轮结束后自动发送')}` : `⏸ ${msg || t('未发送 · 任务运行中')}`);
+    label.textContent = blockedText(message);
     host.appendChild(label);
     const btn = el(`<button type="button" class="ml-2 underline decoration-dotted" data-testid="outbox-resend">${t('重发')}</button>`);
-    btn.onclick = async () => {
+    let settled = false;
+    // 返回这次投递的结论（已送达或正在发时返回 null），outboxAfterTurn 据此决定出队还是接着等
+    const resend = async () => {
+      if (settled || btn.disabled) return null;
       btn.disabled = true;
       label.textContent = `🕐 ${t('正在发送...')}`;
+      // 真正发出时挪到消息流最后：它排在这一轮的回答之后，问答顺序才与发送顺序一致（O66）
+      if (item.bubbleEl?.parentElement === messagesEl) appendMessage(item.bubbleEl);
       const d = await deliverOutboxItem(item);
-      if (d.outcome === 'ok') { host.remove(); return; }
+      if (d.outcome === 'ok') { settled = true; host.remove(); settleOutbox(item); return d.outcome; }
+      // 续接会丢掉一段对话（SESSION-04）：再发一遍还是同一道闸。把这条挪回输入框，出在线路径同一块面板——
+      // 两个选项都作用于输入框里的话。挪不了（不是眼前这个会话的、输入框里已有新打的字）就留在这里。
+      if (d.divergence && moveOutboxItemToComposer(item)) {
+        settled = true;
+        host.remove();
+        settleOutbox(item);
+        resumeDivergencePrompt.prompt({ divergence: d.divergence, sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId) });
+        return d.outcome;
+      }
       btn.disabled = false;
-      label.textContent = d.outcome === 'blocked'
-        ? `⏸ ${d.message || t('未发送 · 任务运行中')}`
-        : `⚠️ ${d.message || t('发送失败')}`;
+      label.textContent = d.outcome === 'blocked' ? blockedText(d.message) : `⚠️ ${d.message || t('发送失败')}`;
+      return d.outcome;
     };
+    btn.onclick = () => { resend(); };
     host.appendChild(btn);
+    if (afterTurn) {
+      outboxAfterTurn.wait({ instanceId: item.instanceId ?? null, sessionId: item.sessionId ?? null }, {
+        resend,
+        // 按了停止就不再自动发，也不再落盘：留着的话，刷新后下一次批处理会替用户把它发出去（与停止的意思相反）
+        cancel: () => {
+          queued = false;
+          settleOutbox(item);
+          if (!settled && !btn.disabled) label.textContent = `⏸ ${t('未发送 · 本轮已停止，需要时点重发')}`;
+        },
+      });
+    }
+  }
+
+  // 没有提示落点的排队条目由 outboxAfterTurn 续发：送达或又撞上一轮（留在队首）照常返回；别的结局放回持久化队列，
+  // 交给下一次批处理按常规处置——不在这里替它决定是死信还是重试，也不能让它在内存里悄悄消失。
+  async function resendOutboxHeadless(item) {
+    const d = await deliverOutboxItem(item);
+    if (d.outcome === 'ok') { settleOutbox(item); return d.outcome; }
+    if (d.outcome === 'blocked' && !d.divergence) return d.outcome;
+    enqueueOutbox(item);
+    settleOutbox(item);
+    return 'requeue';
+  }
+
+  // 离线批处理眼里的「当前视图」：横幅、逐条 targetsViewing、批后 busy 三处归属判据共用这一份，少传一维就和另外两处分叉。
+  // 每次现取——drain 期间到达的 instances 广播（规则 5 置换、切 effort）会换掉视图的实例号。会话取 sendSessionId()：
+  // 当前查看实例此刻跑的会话，与 viewingInstanceId 同一份 instances 快照。
+  const outboxViewing = () => ({ viewingInstanceId, viewingCwd: currentCwd, viewingSessionId: sendSessionId() });
+
+  // 离线条目的拒收提示：眼前多半是起始类表面（「服务已重启」面板、首页、新会话页）。addBar 会先 leaveStartScreen
+  // 把整张表面清空——R7 截图里那片空白，就是服务端那行提示条冲掉了带「继续此会话」的重启面板（O126）；新会话页被冲掉时
+  // 「文件夹已断开、改在这里开」那句跟着没了，输入框里的原文再发就悄悄换了文件夹（O128）。挂在表面顶上，不清它。
+  function addOutboxRejectBar(text) {
+    if (!messagesEl.classList.contains('empty-start')) return addBar(text, 'text-danger');
+    const bar = el(`<div class="msg-frame text-center text-xs text-danger"></div>`);
+    bar.textContent = text;
+    messagesEl.insertBefore(bar, messagesEl.firstChild);
+    return bar;
+  }
+
+  // 进了死信暂存、眼前又没有会话（outboxParkedNotice 判过）：说一句，并给一个回到那个会话的入口——回去之后
+  // deliverOutboxDeadLetters 照常把原文放回输入框。切换的 ack / 4s 兜底同 dashboard 最近列表的 switchToSession。
+  function addOutboxParkedBar(text, item) {
+    const bar = addOutboxRejectBar(text);
+    if (!bar || !item.sessionId) return;
+    const btn = el(`<button type="button" class="ml-2 underline decoration-dotted" data-testid="outbox-parked-goto">${t('回到该会话')}</button>`);
+    btn.onclick = () => {
+      haptic('tap');
+      let acked = false;
+      const blocked = message => showSessionBlockedSurface({ sessionId: item.sessionId, cwd: item.cwd, message });
+      socket.emit('session:switch', { sessionId: item.sessionId, cwd: item.cwd }, res => {
+        acked = true;
+        if (!res?.ok) blocked(res?.error || t('切换失败'));
+        else dismissBlockedSurfaceIfTarget(item.sessionId, item.cwd);
+      });
+      setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
+    };
+    bar.appendChild(btn);
+  }
+
+  // 交还暂存的永久拒收条目：只交给它自己的会话；输入框空着就放回输入框，否则原文写进提示条（看得见、复制得到）。
+  function deliverOutboxDeadLetters() {
+    for (const d of outboxDeadLetters.takeFor(outboxViewing())) {
+      if (moveOutboxItemToComposer(d)) addBar(`${d.message}${t('，原文已放回输入框')}`, 'text-danger');
+      else addBar(`${d.message}${t('。原文：')}${d.text}`, 'text-danger');
+    }
   }
 
   async function processOfflineQueue() {
@@ -1365,19 +1442,37 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!socket.connected) return;
     _offlineDrainInFlight = true;
     const items = offlineQueue;
-    offlineQueue = []; // 本批取出；requeue 的再 enqueue
+    // 本批取出；requeue 的再 enqueue。取出的条目有结论之前照样落盘（outboxInFlight）：投递中途、排队等本轮结束时
+    // 被刷新或被系统回收标签页，下一次批处理还能把它们找回来。
+    for (const item of items) outboxInFlight.hold(item);
+    offlineQueue = [];
     persistOutbox();
     // 横幅贴的是当前会话消息流，但队列项的目标是入队时刻那个实例——不标注归属会读成
     // 「这条排队消息在本会话发了」（现场：在 Official 实例 看到 third-party 的重发提示）。
-    const notice = planOutboxDrainNotice({ items, viewingInstanceId, viewingCwd: currentCwd });
-    addBar(notice.text, 'text-info');
+    const notice = planOutboxDrainNotice({ items, ...outboxViewing() });
+    // 进行中的横幅，批处理结束就撤（验收 O65：此前不留引用，「正在重发 1 条…」重发完了还一直挂着）。
+    // 各条的结局（送达 / 未发送 + 重发 / 永久拒绝）都落在各自的气泡或提示条上，不靠这一条。
+    const drainBar = addBar(notice.text, 'text-info');
     logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息（其中 ${notice.foreign} 条发往其它会话）`);
     let hadViewingOk = false;
     // 本批里第一条「在新 worktree 里开」真正开出来的实例。后续同意图的条目改投它，不再各建一棵树。
-    let worktreeAnchorId = null;
+    // 同理，本批第一条「无文件夹」消息开出来的实例（否则一条建一个 scratch 目录、开一个会话）。
+    // 两种锚都按新会话页分（outboxComposeKey）：用户有意新开的另一页要各开各的。
+    const worktreeAnchors = new Map();
+    const scratchAnchors = new Map();
+    // 普通工作区新会话页上第一条懒开的实例（按页 + 目录分）：后面各条被它那一轮拒收时按它登记，本轮结束才认得出目标。
+    const lazyOpenAnchors = new Map();
+    const scratchRoot = projectsState.scratchRoot();
     try {
       for (const item of items) {
         const indicator = item.bubbleEl?.querySelector('.pending-indicator');
+        // REL-01：用入队时刻的 instanceId/cwd，不取当下 viewing。
+        // 例外是「在新 worktree 里开」「无文件夹」：同一个新会话页里各只该兑现一次（判据见 planOutboxWorktreeReuse），
+        // 否则每条各建一棵树 / 一个 scratch 目录、各开一个会话，同一个任务被拆进互不相干的上下文。
+        // 改投过的条目此后一律按改投后的走（重新入队、「重发」按钮都是）：拿原始条目再发，锚点已不在，又会另开一个。
+        const page = outboxComposeKey(item);
+        const planned = planOutboxScratchReuse(planOutboxWorktreeReuse(item, worktreeAnchors.get(page) ?? null), scratchAnchors.get(page) ?? null, scratchRoot);
+        holdOutbox(planned); // 落盘的是改投后的那份：刷新后再投不能又另建一棵树 / 一个 scratch 目录
         // 中途断线必须停手：socket.io 在未连接时把 emit 压进 sendBuffer，而断线回调 _clearAcks
         // 【显式跳过 buffered 包】（socket.io-client/build/cjs/socket.js 的 isBuffered 判断）⇒ 带
         // timeout 的 ack 不会被断线立刻拒掉，每条都要烧满 OFFLINE_RESEND_ACK_MS 才 settle。串行 drain
@@ -1385,48 +1480,81 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // processOfflineQueue() 直接早退空转，条目要拖到【再下一次】connect 才动。断了就整批留在队列里
         // 等 reconnect——那本来就是 outbox 的语义，不必替它在离线时空转。
         if (!socket.connected) {
-          enqueueOutbox(item);
+          enqueueOutbox(planned);
+          settleOutbox(planned);
           if (indicator) indicator.textContent = t('🕐 正在等待连接...');
           continue;
         }
         if (indicator) indicator.textContent = t('🕐 正在发送...');
         logClientEvent('send', `[WEB_SEND] 重发离线消息: "${String(item.text || '').slice(0, 100)}" (${String(item.text || '').length} 字符)`);
-        // REL-01：用入队时刻的 instanceId/cwd，不取当下 viewing。
-        // 例外是「在新 worktree 里开」：这一批里它只该兑现一次（判据见 planOutboxWorktreeReuse），
-        // 否则每条各建一棵树、各开一个会话，同一个任务被拆进互不相干的分支与上下文。
-        const decision = await deliverOutboxItem(planOutboxWorktreeReuse(item, worktreeAnchorId));
-        worktreeAnchorId = nextOutboxWorktreeAnchor(item, decision, worktreeAnchorId);
-        const targetsViewing = outboxItemTargetsViewing(item, { viewingInstanceId, viewingCwd: currentCwd });
+        const decision = await deliverOutboxItem(planned);
+        const worktreeAnchor = nextOutboxWorktreeAnchor(item, decision, worktreeAnchors.get(page) ?? null);
+        if (worktreeAnchor) worktreeAnchors.set(page, worktreeAnchor);
+        const scratchAnchor = nextOutboxScratchAnchor(item, decision, scratchAnchors.get(page) ?? null, scratchRoot);
+        if (scratchAnchor) scratchAnchors.set(page, scratchAnchor);
+        const lazyKey = `${page}\n${item.cwd ?? ''}`;
+        const lazyAnchor = nextOutboxLazyOpenAnchor(item, decision, lazyOpenAnchors.get(lazyKey) ?? null, scratchRoot);
+        if (lazyAnchor) lazyOpenAnchors.set(lazyKey, lazyAnchor);
+        const targetsViewing = outboxItemTargetsViewing(item, outboxViewing());
         if (decision.outcome === 'ok') {
+          settleOutbox(planned);
           if (indicator) indicator.remove();
           if (targetsViewing) hadViewingOk = true;
         } else if (decision.outcome === 'permanent') {
+          settleOutbox(planned); // 原文交还输入框或进死信暂存（它自己落盘），不再重投
           const permanentMsg = `⚠️ ${decision.message || t('发送失败')}${t('，已停止重试')}`;
-          // 同 markOutboxBlocked：走同一套落点判据，不能只看 indicator 取不取得到。
-          const permanentHost = outboxNoticeHost(item, targetsViewing, 'text-danger');
-          if (permanentHost) permanentHost.textContent = permanentMsg;
+          // 服务端永久拒收、outbox 已清，这条不会再发——原文得交还给用户（验收 O31：此前只剩一行提示，输入框是空的）。
+          // 投给眼前这个会话且输入框空着：放回输入框，气泡随之撤掉。否则提示落在气泡上（气泡里就是原文）；
+          // 连气泡都不在时把原文写进提示条，至少还看得见、复制得到。
+          if (moveOutboxItemToComposer(planned)) {
+            addOutboxRejectBar(`${permanentMsg}${t('，原文已放回输入框')}`);
+          } else {
+            // 同 markOutboxBlocked：走同一套落点判据，不能只看 indicator 取不取得到。
+            const permanentHost = outboxNoticeHost(item, targetsViewing, 'text-danger');
+            const inBubble = Boolean(permanentHost?.closest?.('[data-testid="user-message"]'));
+            if (permanentHost?.isConnected) permanentHost.textContent = inBubble ? permanentMsg : `${permanentMsg}${t('。原文：')}${item.text || ''}`;
+            // 眼前看不到的都暂存，回到它的会话时交还（PR #232 review）：重载后恢复的条目没有气泡（落点 'none'）；
+            // 气泡只在 DOM 缓存里（'stale'）也不能指望——断线期间 server 重启时那个实例已经没了，重开会话不再用那份缓存，
+            // 写在缓存气泡上的提示和原文一起丢（验收 O31 / AC-13-07）。气泡一并摘掉，交还时只剩输入框里那一份。
+            else {
+              dropPendingUserBubble(item.bubbleEl);
+              const parkedText = outboxParkedNotice({ viewingInstanceId, stale: decision.stale, message: decision.message, sessionId: planned.sessionId, text: planned.text });
+              // 交还不了的（升级前入队）：眼前没有会话时上面已把原文写出来，不再暂存；正在看某个会话时暂存，由这个视图落定时的
+              // deliverOutboxDeadLetters 交出来——不当场写，是因为首次 bindView 还没走完，写进去的会被它清掉（验收 O135）
+              const unreturnable = isUnreturnableDeadLetter({ stale: decision.stale, sessionId: planned.sessionId, instanceId: planned.instanceId });
+              if (!(unreturnable && parkedText)) {
+                outboxDeadLetters.park(planned, unreturnable ? outboxDeadLetterHead({ stale: decision.stale, message: decision.message }) : permanentMsg, { unreturnable });
+              }
+              if (parkedText) addOutboxParkedBar(parkedText, planned);
+            }
+          }
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else if (decision.outcome === 'blocked') {
-          // 队列首条发出去就开跑，其后各条必被拒——继续 requeue 会空转成客户端排队。
-          markOutboxBlocked(item, decision.message, targetsViewing);
+          // 队列首条发出去就开跑，其后各条必被拒。不 requeue 空转：交给 outboxAfterTurn 排队，本轮结束按序续发（O66）。
+          markOutboxBlocked(planOutboxBlockedTarget(planned, lazyOpenAnchors.get(lazyKey) ?? null), decision.message, targetsViewing, { afterTurn: !decision.divergence });
           // viewingInstanceId 非空才锁发送闸：首页没有「当前会话」可被别的轮次挡住，而按 cwd 归属
           // 的判据在首页会对 {instanceId:null, cwd:同目录} 返回 true（那对横幅文案是对的，对这里不是）。
           // 漏这个前提会在空首页把 compose 的发送钮禁掉，直到下一次 instances 广播才自愈。
-          if (viewingInstanceId != null && targetsViewing) _turnRunning = true;
-          logClientEvent('send', `[WEB_SEND] 离线消息撞上在途轮，落未发送终态待手动重发`);
+          // 续接分叉闸（divergence）也落 blocked，但那边没有在途轮：锁了发送闸，面板上的「仍然发送」就发不出去。
+          if (viewingInstanceId != null && targetsViewing && !decision.divergence) _turnRunning = true;
+          logClientEvent('send', decision.divergence
+            ? '[WEB_SEND] 离线消息撞上续接分叉闸，落未发送终态待手动重发'
+            : '[WEB_SEND] 离线消息撞上在途轮，落未发送终态待手动重发');
         } else {
           if (indicator) indicator.textContent = t('🕐 未确认送达，等待重连重试...');
-          enqueueOutbox(item);
+          enqueueOutbox(planned);
+          settleOutbox(planned);
           logClientEvent('send', `[WEB_SEND] 离线消息重发未确认，已重新排队`);
         }
       }
     } finally {
       _offlineDrainInFlight = false;
+      drainBar?.remove();
       persistOutbox();
+      outboxAfterTurn.tick(); // 批处理期间那一轮可能已经跑完（广播先到）：不等下一条广播
       // 批后 busy：仅 viewing 相关 in-flight/成功才抬；永久失败且无剩余 viewing 队列 → clear
       setBusy(shouldBusyAfterOfflineBatch({
-        viewingInstanceId,
-        viewingCwd: currentCwd,
+        ...outboxViewing(),
         remainingItems: offlineQueue,
         hadViewingOk,
       }));
@@ -1441,6 +1569,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 它的职责不是"快速失败"而是"保证回调一定会被调用一次"——裸 ack 在断线时会被静默丢弃，
   // 那正是 historyLoadGate 永久卡死的两个成因之一（见 history-load-gate.js 的看门狗注释）。
   const HISTORY_ACK_TIMEOUT_MS = 15000;
+  // 点开非活会话时和 session:switch 并行拉历史（见 history-prefetch.js），侧栏与首页最近列表共用。
+  // 已经开着的不拉：走 user:setViewing、服务端多半有回放（replayed>0 时不报 diskLen，预取必然作废）。
+  // 有 DOM 缓存的不拉：切回来多半走 keep，白下 1MB 级的历史，还和 sync:since 的回执挤同一条 WebSocket。
+  const historyPrefetch = createHistoryPrefetch({ socket, timeoutMs: HISTORY_ACK_TIMEOUT_MS, tail: HISTORY_TAIL_FIRST });
+  function prefetchHistory(open, sessionId, cwd) {
+    if (instancesList.some(x => x?.sessionId === sessionId)) return;
+    if (sessionDomCachePlan({ cached: sessionDomCache.get(sessionId) }).restore) return;
+    historyPrefetch.start({ open, sessionId, cwd });
+  }
   // sync:since 的 ack 超时（bindView 入场 + connect 重连补传两处共用，F3/2026-08-06）。职责同上：
   // 不是快速失败，是保证回调必被调用一次——裸 ack 断线时被 _clearAcks() 静默丢弃，而加载卡收场、
   // 历史加载、pending 快照对账全挂在回调里。server ack 前要先逐条重放环形缓冲，给同样宽松的窗。
@@ -1449,11 +1586,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function reloadCurrentFromHistory(onDone) {
     if (!displayedSessionId) return;
     hideUnreadPill(); // 即将清屏重载：旧胶囊指向的 DOM 节点马上失效，先清，onDone 到达后再按新数字重建
+    scrollToBottom.reset(); // 同上：回到最新钮的基线/可见态跟着旧 DOM 一起作废
     // 与 bindView reload 同理：clearView 前的 lastSeq/curEpoch 可能刚被 sync 回放推进；
     // 归零后若再 sync 会把环形缓冲整段再叠到磁盘历史上。恢复基线，仅丢未落盘的实时中间态。
     const keepSeq = lastSeq;
     const keepEpoch = curEpoch;
-    clearView(displayedSessionId, null);
+    clearView(displayedSessionId, null, { prevSessionId: displayedSessionId });
     lastSeq = keepSeq;
     curEpoch = keepEpoch;
     // clearView 内部只补乐观 busy（shouldRestoreOptimisticBusy），不含 state seed——
@@ -1467,21 +1605,28 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 状态对账：用 sync:since ack 带回的 pending 快照重建未决审批/提问卡片。走既有 handler（自带 requestId
   // 去重 + 弹窗/通知）。修「角标 ⚠️ 待审批但会话内无卡片」——原始事件可能被环形缓冲 trim 或切视图分流丢弃，
   // pendingPermissions/pendingQuestions 才是权威真相。视图稳定后调用（bindView / connect 两路径）。
-  function applyPendingSnapshot(pending) {
+  function applyPendingSnapshot(pending, instanceId) {
     if (!pending) return;
     // 走 sync:since ack 的 pending 字段重建卡片，不经过 dispatchAgentEvent，故不带 event.replay 标记；
     // 这里单独置位 isReplayBatch 防止环形缓冲被冲出窗口（gap）时，这条旁路漏静音重新弹响。
     // try/finally：handle.* 会动 DOM，若中途抛错也必须复位，否则 isReplayBatch 卡在 true 会静默吞掉后续所有实时提示音。
+    // instanceId：快照属于这次 sync 的实例；合成信封第二参，让 enqueue 存下所属实例（#388）。
+    const env = instanceId ? { instanceId } : undefined;
     appContext.state.isReplayBatch = true;
     try {
-      for (const p of pending.permissions || []) handle.permission_request(p);
-      for (const q of pending.questions || []) handle.question(q);
+      for (const p of pending.permissions || []) handle.permission_request(p, env);
+      for (const q of pending.questions || []) handle.question(q, env);
+      for (const e of pending.elicitations || []) handle.elicitation(e, env);
     } finally {
       appContext.state.isReplayBatch = false;
     }
   }
+  // 切回前台那一次（perf-trace）在这里收尾：同步回执怎么判、要不要重拉历史
   function requestSync({ probe }) {
-    if (!displayedInstanceId || !displayedSessionId) return;
+    if (!displayedInstanceId || !displayedSessionId) {
+      perfTrace.resumeEnd(displayedInstanceId ? 'keep' : 'home');
+      return;
+    }
     const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId; // WS-002：捕获发起时的视图目标（代次）
     const payload = { instanceId: reqInstanceId, sessionId: reqSessionId, lastSeq };
     // 回放缓冲句柄：probe/非 probe 分支各自 begin()（见下方），ack 到达后 act() 据判定结果 resolve()。
@@ -1493,6 +1638,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // discard——若服务端环窗已挤出这些 seq，它们永远不会再被回放（code review 确认的竞态丢事件）。
       if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) {
         replayBuffer.resolve(replayHandle, 'discard');
+        perfTrace.resumeEnd('superseded');
         return;
       }
       const a = syncAckAction(err, res, {
@@ -1504,7 +1650,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 整条连接都要重来：缓冲内容从未渲染过，纯丢弃、不推进续传基线——重连后新一轮 sync:since
         // 会用旧基线重新取，否则这批事件会被当成"已处理过"永久丢失（见 createReplayBuffer resolve 注释）。
         replayBuffer.resolve(replayHandle, 'discard');
-        if (socket.connected) socket.disconnect(); socket.connect(); return;
+        perfTrace.resumeStep('sync', { note: 'reconnect' });
+        // 只有还连着（ack 超时、连接可疑）才自己重连。没连着时这个回调多半是 socket.io-client 在 Manager.onclose 里
+        // 同步回调在途 ack 触发的——Manager 紧接着就会排自己的重连；此刻再 socket.connect() 会抢先发起一次不带回调
+        // 的 open，Manager 定时器那次 open(fn) 随后被吞，_reconnecting 永久停在 true：这次碰巧连上看不出毛病，之后
+        // 每次断线 reconnect() 第一行就返回，页面停在「自动重连中…」（验收 O49，对照 socket.io-client 4.8.4 源码）。
+        if (socket.connected && reconnectAllowed()) forceReconnect();
+        return;
       }
       if (res?.replayed > 0) logClientEvent('recv', `[WEB_RECV] 断线追平补发 ${res.replayed} 条`); // 对账断线期漏收
       // 回放缓冲二层判定（同 bindView）：a 已是 'reload' 时直接沿用；'none' 时再看缓冲攒了多少条 +
@@ -1519,7 +1671,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 丢弃缓冲队列 + 续传基线前移到队列尾（reloadCurrentFromHistory 内部的 keepSeq/keepEpoch
         // 快照-恢复由此拿到正确值，理由同 bindView 的 reload 分支）。
         replayBuffer.resolve(replayHandle, 'reload');
-        reloadCurrentFromHistory(() => showUnreadPillIfAny(unreadOnEntry));
+        perfTrace.resumeStep('sync', { note: 'reload' });
+        reloadCurrentFromHistory(() => {
+          showUnreadPillIfAny(unreadOnEntry);
+          perfTrace.resumeStep('history');
+          perfTrace.resumeEnd('reload');
+        });
       } else {
         // flush：缓冲队列（若有）按序正常派发，抑制中间滚动，派发完一次强制落底。
         replayBuffer.resolve(replayHandle, 'flush');
@@ -1528,10 +1685,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 才作为 replay 事件逐条补发，不强制补一次落底会停留在旧位置附近。flushQueue 已在缓冲非空时
         // 做过一次，这里是冗余但无害的兜底（replayed=0/缓冲为空时仍需要它独立生效）。
         if (shouldForceScrollAfterReplay({ action: a, replayed: res?.replayed })) scrollBottom(true);
+        perfTrace.resumeStep('sync', { note: 'keep' });
+        perfTrace.resumeEnd('keep');
       }
       // 状态对账：重连/probe 补传后用快照重建未决审批卡片（reload 的 clearView 已同步执行完、不被清）；
       // reconnect 已 return——它触发干净重连，届时新一轮 sync 会带新快照。
-      applyPendingSnapshot(res?.pending);
+      applyPendingSnapshot(res?.pending, reqInstanceId);
     };
     if (probe) {
       if (_probeInFlight) return;       // ack 异步，防 200ms debounce 外的并发探测
@@ -1573,6 +1732,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   });
   // io() 在本脚本同步执行流里已发起连接、中间无 await，故此处即「首连开始」的准确起点。
   connBanner.markConnecting();
+  if (!handshakeOnBoot) {
+    setStatus(t('需要访问令牌'));
+    showAuthGate(''); // 首访不是「令牌无效」，不带错误文案
+  }
 
   // ---- 额度墙「到点自动继续」横幅：数据 = instances 广播的 autoContinue，按钮 → user:autoContinue ----
   // 结果以服务端下一次广播为准；只有请求失败（超时 / 相位已变 / 设备未批准）才就地重画、解锁按钮。
@@ -1595,11 +1758,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     updateAttentionSignal();
     setStatus(t('已连接'));
     startRttLoop(); // 连上即开始测 RTT（立即一次 + 周期）
-    cliStatusWrapEl?.classList.remove('opacity-40'); // E16：重连恢复（折叠条整体：summary + ANSI 行，重放/刷新马上跟上）
+    cliStatusBarEl?.classList.remove('opacity-40'); // E16：重连恢复（折叠条整体：summary + ANSI 行，重放/刷新马上跟上）
     logClientEvent('conn', `连接成功！Socket ID = ${socket.id}。当前使用 token: ${token ? token.slice(0, 4) + '***' : '无（本机/公网）'}`);
+    perfTrace.mark('connect', { transport: socket.io.engine?.transport?.name });
+    perfTrace.resumeStep('connect');
     // 台阶3：首连由 instances 事件驱动加载当前查看实例（见 setInstances）；重连（非首连、已有绑定实例）
     // 续传该实例缓冲补齐断线期间漏掉的事件。
     if (!initialLoad && displayedInstanceId && displayedSessionId) requestSync({ probe: false });
+    else if (!displayedSessionId) perfTrace.resumeEnd(displayedInstanceId ? 'keep' : 'home');
     initialLoad = false;
     setupPush();
     initDeepLinkOnce();  // ②2c：深链入口（幂等，仅首次 connect 生效）
@@ -1624,12 +1790,24 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     setStatus(t('连接断开，自动重连中…'));
     stopRttLoop();
     clearRttDisplay();
-    cliStatusWrapEl?.classList.add('opacity-40'); // E16：置灰示陈旧（折叠条整体：summary + ANSI 行；内容含 🕐，不另发明离线文案）
+    cliStatusBarEl?.classList.add('opacity-40'); // E16：置灰示陈旧（折叠条整体：summary + ANSI 行；内容含 🕐，不另发明离线文案）
     logClientEvent('conn', `网络连接断开，原因: ${reason || '未知'}`);
   });
   socket.on('connect_error', async err => {
     logClientEvent('conn', `连接尝试失败: ${err.message || err}`);
     const handshake = describeHandshakeError(err);
+    if (handshake.kind === 'cooldown') {
+      // 验收 O83：同一来源刚有一次登录失败，服务端在退避短锁里，这次的令牌根本没校验——既不是令牌错，
+      // 也不是尝试过多。说清在等，到点用同一份凭据再握一次手。冷却期内服务端不计数，这次重试不会加锁。
+      // 不另存计时器：到点时 socket 已在握手（active）就跳过，连撞几次锁也只会有一次握手在途。
+      setStatus(handshake.text);
+      if (authGate && !authGate.classList.contains('hidden') && authError) {
+        authError.textContent = handshake.text;
+        authError.classList.remove('hidden');
+      }
+      setTimeout(() => { if (!socket.active && !localReset.isResetting()) socket.connect(); }, handshake.retryAfterMs + 50);
+      return;
+    }
     if (handshake.kind === 'rate_limited') {
       // 被防暴破限速挡下：说清还要等多久。此前这里落到下面的 else，屏幕上是
       // 「连接失败：rate_limited」——用户看不懂，也不知道要等，于是反复重连撞在刚上的那把锁上。
@@ -1638,9 +1816,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // IPv6 按 /64 归桶，同网段另一台设备连错到阈值会连累这台——把一个令牌完全正确的已登录用户
       // 踢回登录门，既答非所问又会诱导他去改本来没问题的令牌。只在登录门本来就开着时把话放进去。
       if (authGate && !authGate.classList.contains('hidden')) showAuthGate(handshake.text);
-      else if (authSubmit?.disabled) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
+      else {
+        if (authSubmit?.disabled) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
+        // 令牌门没开：话说在连接横幅上（setStatus 写的 #statusLine 恒隐藏，此前用户只看得到「连接中…」，验收 O22）
+        connBanner.markRateLimited(handshake.text);
+      }
       return;
     }
+    connBanner.clearRateLimited(); // 这一轮不是被锁挡下的，别再挂着上一轮的「等 N 分钟」
     if (err.message === 'unauthorized') {
       if (authFailurePath({ lanOrLocal: isLanOrLocal(), cfAccessFlag: document.body.dataset.cfAccess }) === 'token-gate') {
         setStatus(t('需要访问令牌'));
@@ -1668,17 +1851,30 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // opts.persisted 只有 pageshow 传（true=真·bfcache 恢复）。门控判定见 logic 的 shouldAttemptReconnect：
   // 凭据门开着、或 pageshow 的普通加载分支，一律不发起——那种重连必然失败，唯一效果是把服务端的
   // 退避锁越推越长，正是「只错一次却被告知登录尝试过多」的触发源（2026-09-02）。
+  // 强制干净重连：disconnect() 经 Manager._destroy → _close 清掉 _reconnecting 与残留的重连定时器、关掉挂住的 engine，
+  // 再 connect() 重新握手。只调 socket.connect() 不够——Manager 正在（或卡在）重连中时它什么都不做，而服务暂停又恢复时
+  // 那次握手可能挂着要等满 20s 连接超时，「立即重试」点了没反应（验收 O49）。
+  function forceReconnect() {
+    socket.disconnect();
+    socket.connect();
+  }
+  const reconnectAllowed = (opts = {}) => shouldAttemptReconnect({
+    authGateOpen: !!authGate && !authGate.classList.contains('hidden'),
+    accessReloginOpen: !!accessRelogin && !accessRelogin.classList.contains('hidden'),
+    deviceDeniedOpen: gateIsOpen(deviceDenied),
+    persisted: opts?.persisted ?? null,
+  });
   function reconnectIfNeeded(opts = {}) {
-    if (!shouldAttemptReconnect({
-      authGateOpen: !!authGate && !authGate.classList.contains('hidden'),
-      accessReloginOpen: !!accessRelogin && !accessRelogin.classList.contains('hidden'),
-      persisted: opts?.persisted ?? null,
-    })) return;
+    if (localReset.isResetting() || !reconnectAllowed(opts)) return;
     clearTimeout(_reconnectTimer);
     _reconnectTimer = setTimeout(() => {
+      // 排上之后门可能才关上：拒绝（device_status: denied）赶在这 200ms 之内到达，连接随即被服务端断开——
+      // 走到这里照样握手，设备就重新进了待审（#226 review）。执行前再问一次。
+      // 重置也一样：确认前排上的这一次活过了 beforeReset，等退订期间握上手就会把要丢弃的 outbox 发出去（#352 review）
+      if (localReset.isResetting() || !reconnectAllowed()) return;
       // 半开连接下 socket.connected 会撒谎为 true（见 logic.js foregroundReconnectAction）：connected →
       // probe（带 timeout 的 sync:since 探活+补发，超时即强制干净重连），未连 → connect（connect handler 会 sync）。
-      if (foregroundReconnectAction(socket.connected) === 'connect') socket.connect();
+      if (foregroundReconnectAction(socket.connected) === 'connect') forceReconnect();
       else {
         requestSync({ probe: true });
         measureRtt(); // 前台唤醒立即刷新延迟（不依赖 5s 周期）
@@ -1693,49 +1889,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // persisted 透出去让门控分辨，否则每次打开页面都会紧贴着 io() 的首次握手再补一枪。
   window.addEventListener('pageshow', e => reconnectIfNeeded({ persisted: !!e?.persisted }));
 
-  // iOS Safari 键盘弹起时 visualViewport 变化、layout viewport 不动，需补 footer padding 让输入区避开键盘。
-  // 决策（含负/错配/Android 不补 + 失焦回落）抽到 logic.js keyboardInsetPadding，此处只取值/接线。
-  // 失焦必复位是关键：点附件按钮唤起系统选择器会让输入框失焦、viewport 瞬时错配，旧实现会把一个大 inset
-  // 写死进 padding 留出半屏空白且无人复位（E17 附件回流 bug）；改为按焦点门控 + focusout 后重算自愈。
-  let scheduleInsetResettle = () => {}; // 附件选择器返回后主动重算键盘 inset（无 visualViewport 时为 no-op）
-  if (window.visualViewport) {
-    const footer = document.querySelector('footer');
-    const vv = window.visualViewport;
-    const baseBottom = footer ? (parseFloat(getComputedStyle(footer).paddingBottom) || 0) : 0;
-    const applyInset = () => {
-      if (!footer) return;
-      const ae = document.activeElement;
-      const inputFocused = !!ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT');
-      const pad = keyboardInsetPadding({
-        innerHeight: window.innerHeight,
-        viewportHeight: vv.height,
-        viewportOffsetTop: vv.offsetTop,
-        inputFocused,
-        baseBottom,
-      });
-      // 诊断 tap（localStorage.ccm_debug_inset='1' 开启）：排查「附件回来后下半屏白屏」——
-      // 读 innerHeight/vv.height/offsetTop/scrollY/focused/pad 定位是 viewport 未恢复(H1) 还是 scroll 卡滞(H2)。
-      if (localStorage.getItem('ccm_debug_inset') === '1') {
-        const line = `[inset] innerH=${window.innerHeight} vvH=${Math.round(vv.height)} offTop=${Math.round(vv.offsetTop)} scrollY=${window.scrollY} focused=${inputFocused} pad=${Math.round(pad)} base=${baseBottom}`;
-        console.log(line);
-        logClientEvent('conn', line); // client_conn 恒显，手机端可在日志抽屉直接看数值
-      }
-      footer.style.paddingBottom = pad + 'px';
-      if (pad - baseBottom > 60) scrollBottom(); // 键盘明显占位才滚动到底，保证输入区可见
-    };
-    scheduleInsetResettle = () => {
-      // 附件选择器返回后 iOS 常不再补发 viewport resize，残留的键盘 inset 无人复位 → 半屏白屏（E17 回归）。
-      // 主动在 viewport 恢复窗口内多次重算：此时键盘已被 picker 取代而消失，applyInset 读到真实 viewport → 回落 baseBottom。
-      setTimeout(applyInset, 300);
-      setTimeout(applyInset, 700);
-    };
-    vv.addEventListener('resize', applyInset);
-    vv.addEventListener('scroll', applyInset);
-    // 焦点变化（尤其附件选择器抢/还焦点）后重算：键盘收起即回落 baseBottom，消除残留空白。
-    // focusout 延后一帧再算——等 activeElement / viewport 落定，避免读到过渡态。
-    window.addEventListener('focusout', () => setTimeout(applyInset, 50));
-    window.addEventListener('focusin', applyInset);
-  }
+  // iOS Safari 键盘弹起时给 footer 补 padding 避开键盘（app/keyboard-inset.js）
+  const keyboardInset = createKeyboardInset({ logClientEvent, scrollBottom });
 
   // 当前是否走公网（非 localhost/局域网/隧道内）——公网由 Cloudflare Access 把守、无 token 可输。
   function isLanOrLocal() {
@@ -1783,280 +1938,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   if (accessHelpClose) accessHelpClose.onclick = hideAccessHelp;
   if (accessHelpOpen) accessHelpOpen.onclick = showAccessHelp;
 
-  // ④ UI 安全体检：点击 → doctor:run（鉴权 socket）→ 渲染逐项 pass/warn/fail + 危险白名单 + 就绪度横幅。
-  function renderDoctor(rep, box) {
-    box.replaceChildren();
-    if (!rep || !Array.isArray(rep.checks)) {
-      const e = el(`<div class="text-danger"></div>`); e.textContent = t('体检失败或无响应'); box.appendChild(e); return;
-    }
-    const R = { ready: ['✅', 'text-success'], caution: ['⚠️', 'text-warning'], blocked: ['🚫', 'text-danger'] };
-    const [ricon, rcls] = R[rep.readiness?.level] || ['', 'text-ink'];
-    const banner = el(`<div class="font-semibold mb-1.5"></div>`);
-    banner.className = `font-semibold mb-1.5 ${rcls}`;
-    banner.textContent = `${ricon} ${rep.readiness?.summary || ''}`;
-    box.appendChild(banner);
-    const SI = { ok: '✓', warn: '⚠', fail: '✗' }, SC = { ok: 'text-success', warn: 'text-warning', fail: 'text-danger' };
-    for (const c of rep.checks) {
-      const row = el(`<div class="flex items-start gap-2 py-1 border-b border-line-soft"><span></span><div class="flex-1 min-w-0"><div class="font-mono text-ink"></div><div class="text-ink-faint break-words"></div></div></div>`);
-      const sp = row.querySelector('span');
-      const [idDiv, detDiv] = row.querySelectorAll('.flex-1 > div');
-      sp.textContent = SI[c.status] || '·'; sp.className = SC[c.status] || 'text-ink-faint';
-      idDiv.textContent = c.id; detDiv.textContent = c.detail || '';
-      box.appendChild(row);
-      if (c.id === 'WHITELIST' && c.safe?.dangerous?.length) {  // 危险规则明细：显规则串 + scope（让用户知道改哪个文件）
-        for (const d of c.safe.dangerous) {
-          const dr = el(`<div class="text-danger pl-6 break-words"></div>`);
-          dr.textContent = `⚠ ${d.rule} —— ${d.reason}（${d.scope || '?'}）`;
-          box.appendChild(dr);
-        }
-      }
-    }
-  }
-  // 会话设置标题行右侧 ↻（常驻）；新会话页摘要旁那个同源入口在 showComposeSurface 里接线。
-  // spinEl 取不到时回落按钮本身——|| 而非默认参数：querySelector 返回 null 不会触发默认值。
-  const cfgRefreshBtn = $('btnConfigRefresh');
-  wireConfigRefreshButton(cfgRefreshBtn, cfgRefreshBtn?.querySelector('[data-spin]') || cfgRefreshBtn);
-
-  // 展开/收起共用同一个入口：报告是十几行的长列表（还带 WHITELIST 明细），只给"展开"就没有回程
-  // 路径——诊断区另两个入口是 bottom sheet 自带 ✕，唯独这块是内联展开，展开后把设置列表顶出屏幕。
-  // 尾部再挂一个同源收起行：长报告看完停在底部，不必滚回按钮。
-  const btnSecurityCheck = $('btnSecurityCheck'), doctorBox = $('doctorReport');
-  function setDoctorOpen(open) {
-    doctorBox.classList.toggle('hidden', !open);
-    if (!open) doctorBox.replaceChildren(); // 收起即清空：下次展开必重跑，不留过期快照
-    btnSecurityCheck.textContent = open ? t('🔍 安全体检 · 收起结果 ▲') : t('🔍 安全体检 · 公网暴露前自查 →');
-    btnSecurityCheck.setAttribute('aria-expanded', String(open));
-  }
-  if (btnSecurityCheck && doctorBox) btnSecurityCheck.onclick = () => {
-    if (!doctorBox.classList.contains('hidden')) { setDoctorOpen(false); return; }
-    setDoctorOpen(true);
-    const loading = el(`<div class="text-ink-faint"></div>`); loading.textContent = t('🔍 体检中…'); doctorBox.appendChild(loading);
-    socket.emit('doctor:run', {}, rep => {
-      if (doctorBox.classList.contains('hidden')) return; // 体检期间被收起：丢弃迟到的 ack，别把面板重新撑开
-      renderDoctor(rep, doctorBox);
-      const foot = el(`<button type="button" class="w-full mt-2 py-1.5 rounded-lg border border-line text-ink-soft active:bg-sunk"></button>`);
-      foot.textContent = t('▲ 收起体检结果');
-      foot.onclick = () => setDoctorOpen(false);
-      doctorBox.appendChild(foot);
-    });
-  };
-
-  // ---- 服务状态面板 ----
-  // 设置「访问与设备」组入口 → 底部 sheet 两段渲染：基础(时长/版本/连接/日志开关) + 异常告警（判定化：
-  // 裸计数器段已撤——对人无参照系不可解读，原始计数留 /metrics 巡检端点；有信号项升格为带时效窗告警）。
-  // 数据走鉴权 service:status ack（doctor:run 同构）；打开即拉、开着时 5s 重拉（后台 tab 跳过）、关闭即停。
-  const serviceStatusModal = $('serviceStatusModal'), serviceStatusBody = $('serviceStatusBody');
-  let serviceStatusTimer = null;
-  function renderServiceStatus(res, auditRecords) {
-    if (!serviceStatusBody) return;
-    const now = Date.now();
-    const section = (title, titleSuffix) => {
-      const s = el(`<div><div class="text-xs font-semibold text-ink-soft mb-2"></div><div class="rounded-xl border border-line bg-surface"></div></div>`);
-      s.firstChild.textContent = title;
-      if (titleSuffix) {
-        const soft = el(`<span class="font-normal text-ink-faint"></span>`);
-        soft.textContent = ` ${titleSuffix}`;
-        s.firstChild.appendChild(soft);
-      }
-      return s;
-    };
-    const addRow = (card, label, value, valueClass) => {
-      const row = el(`<div class="flex items-center justify-between gap-3 px-3 py-2.5 text-xs border-t border-line-soft first:border-t-0"><span class="text-ink-soft font-medium shrink-0"></span><span class="text-ink text-right tabular-nums"></span></div>`);
-      row.firstChild.textContent = label;
-      row.lastChild.textContent = value;
-      if (valueClass) row.lastChild.classList.add(valueClass);
-      card.appendChild(row);
-    };
-    serviceStatusBody.replaceChildren();
-    // 段1 基础：连接状态取自本 socket 与 RTT 监视器（不另发 ping）
-    const basic = section(t('基础'));
-    for (const r of serviceStatusBasicRows({ startedAt: res.startedAt, versions: res.versions, connected: socket.connected, rttMs: rttMonitor.last(), now, logging: res.logging })) {
-      addRow(basic.lastChild, r.label, r.value, r.alert ? 'text-warning' : null); // 日志开关：SDK 调试开着标黄（忘关观测点）
-    }
-    serviceStatusBody.appendChild(basic);
-    // 段2 异常告警：与抽屉「服务」小节同一纯函数（文案一致）。
-    // 服务端已按时效窗判定（超窗自动退场），此处只渲染。
-    const noticesSection = section(t('异常告警'));
-    const notices = formatServiceNotices({
-      service: {
-        deliveryFailure: res.deliveryFailure,
-        rateLimitLockout: res.rateLimitLockout,
-        clientError: res.clientError,
-        proxyFronted: res.proxyFronted,
-      },
-      now,
-    });
-    if (!notices.length) {
-      const okRow = el(`<div class="px-3 py-2.5 text-xs text-success"></div>`);
-      okRow.textContent = t('✓ 无异常');
-      noticesSection.lastChild.appendChild(okRow);
-    } else {
-      for (const line of notices) {
-        const row = el(`<div class="px-3 py-2.5 text-xs border-t border-line-soft first:border-t-0"></div>`);
-        // 判色按告警类别：投递失败(🔔)/限速锁定(⛔)红——错过审批与安全事件；重启(🔄)/前端错误(🐞)黄
-        row.classList.add(line.startsWith('🔔') || line.startsWith('⛔') ? 'text-danger' : 'text-warning');
-        row.textContent = line;
-        noticesSection.lastChild.appendChild(row);
-      }
-    }
-    serviceStatusBody.appendChild(noticesSection);
-    // 段3 安全日志：上面那段告警的下钻。告警说「发生了什么」（限速锁定过、推送失败过），
-    // 这一段回答「是谁、几次、从哪来」——审计记录自始就在写，此前 web 端没有任何读取面。
-    const auditSection = section(t('安全日志'), t('（最近 20 条）'));
-    auditSection.id = 'serviceAuditSection'; // 「排查」页那条入口的深链落点（openServiceStatus 的 anchor）
-    if (!Array.isArray(auditRecords)) {
-      const row = el(`<div class="px-3 py-2.5 text-xs text-ink-faint"></div>`);
-      row.textContent = t('暂时读取不到（服务端未响应）');
-      auditSection.lastChild.appendChild(row);
-    } else if (!auditRecords.length) {
-      const row = el(`<div class="px-3 py-2.5 text-xs text-ink-faint"></div>`);
-      row.textContent = t('暂无记录');
-      auditSection.lastChild.appendChild(row);
-    } else {
-      // 不复用 addRow：那是「标签 : 数值」的两栏行（右栏 text-right tabular-nums），审计文案
-      // 是长句子，右对齐 + 等宽数字在窄屏上会折成难读的阶梯。这里用「时间靠左、文案满宽」的布局。
-      for (const rec of auditRecords) {
-        const entry = formatAuditEntry(rec);
-        const tone = entry.severity === 'danger' ? 'text-danger' : entry.severity === 'warning' ? 'text-warning' : 'text-ink';
-        const row = el(`<div class="flex items-baseline gap-2 px-3 py-2 text-xs border-t border-line-soft first:border-t-0"><span class="text-ink-faint shrink-0 tabular-nums"></span><span class="flex-1 break-words"></span></div>`);
-        row.firstChild.textContent = formatAgoShort(now - entry.ts);
-        row.lastChild.textContent = entry.text;
-        row.lastChild.classList.add(tone);
-        auditSection.lastChild.appendChild(row);
-      }
-    }
-    serviceStatusBody.appendChild(auditSection);
-    // 段4 重启记录：谁在什么时候重启过。launchd 只留「最后一次退出码」那个瞬时值，
-    // 而那回答不了「这正常吗」—— 每天一次是路由器换 IP，一小时内三次才是真出事。
-    const restartSection = section(t('重启记录'));
-    const restartView = formatRestartRows({ restarts: res.restarts, now });
-    if (restartView.empty) {
-      const row = el(`<div class="px-3 py-2.5 text-xs text-ink-faint"></div>`);
-      row.textContent = t('暂无记录（服务启动后开始采样）');
-      restartSection.lastChild.appendChild(row);
-    } else {
-      for (const item of restartView.summary) {
-        addRow(restartSection.lastChild, item.label, item.text, item.alert ? 'text-warning' : null);
-      }
-      for (const item of restartView.timeline) {
-        addRow(restartSection.lastChild, item.label, item.text, 'text-ink-faint');
-      }
-    }
-    serviceStatusBody.appendChild(restartSection);
-    const hint = el(`<div class="text-[10px] text-ink-faint"></div>`);
-    hint.textContent = t('数据每 5 秒自动刷新 · 告警超 24 小时自动退场 · 原始计数见 /metrics');
-    serviceStatusBody.appendChild(hint);
-  }
-  // 一键安装/卸载 hooks 桥。安装要写用户全局 ~/.claude/settings.json，所以先明确确认——
-  // 这是 server 唯一会动那个文件的路径，必须让用户知道自己在批准什么。
-  // 报告直接回显安装器输出（含四种结局文案），不在前端另写一套话术。
-  // 同 runHooksSetup：装/卸都要二次确认——它改的是用户全局 ~/.claude/settings.json。
-  async function runStatuslineSetup(action, btn) {
-    const installing = action === 'install';
-    const okConfirm = await appConfirm({
-      title: installing ? t('开启终端状态栏同步？') : t('关闭终端状态栏同步？'),
-      body: installing
-        ? t('会接管 ~/.claude/settings.json 里的 statusLine 命令，并原样透传你原来的输出（原命令会先备份）。已在跑的终端会话需重开才生效。')
-        : t('会把 statusLine 命令恢复成你原来的那条，备份记录随之删除。'),
-      okText: installing ? t('开启') : t('关闭'),
-      tone: installing ? 'default' : 'warn',
-    });
-    if (!okConfirm) return;
-    btn.disabled = true;
-    btn.textContent = t('处理中…');
-    socket.timeout(25000).emit('statusline:setup', { action }, (err, res) => {
-      btn.disabled = false;
-      // 同 hooks 侧：用 ack 自带的 state 立刻回填再重渲，不把按钮的解锁押在广播上
-      if (res?.state && latestServiceHealth?.statuslineBridge) latestServiceHealth.statuslineBridge.state = res.state;
-      renderStatuslineBridgeSection();
-      if (err || !res) { addBar(t('操作超时，请重试'), 'text-danger'); loadServiceStatus(); return; }
-      addBar(res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok ? 'text-ink-faint' : 'text-danger');
-      loadServiceStatus();
-    });
-  }
-
-  async function runHooksSetup(action, btn) {
-    const installing = action === 'install';
-    const okConfirm = await appConfirm({
-      title: installing ? t('开启终端会话推送？') : t('关闭终端会话推送？'),
-      body: installing
-        ? t('会往 ~/.claude/settings.json 追加两个 hook（你已有的配置原样保留）。已在跑的终端会话需重开才生效。')
-        : t('会移除本项目添加的那两个 hook 条目，你已有的 hooks 不受影响。'),
-      okText: installing ? t('开启') : t('关闭'),
-      tone: installing ? 'default' : 'warn',
-    });
-    if (!okConfirm) return;
-    btn.disabled = true;
-    btn.textContent = t('处理中…');
-    socket.timeout(25000).emit('hooks:setup', { action }, (err, res) => {
-      btn.disabled = false;
-      // 用 ack 自带的 state 立刻回填再重渲：只等 instances 广播的话，按钮会一直卡在「处理中…」
-      // （广播若没来或迟到，这段就再也不会重画）。广播随后到达只是二次确认，不是唯一依赖。
-      if (res?.state && latestServiceHealth?.hooksBridge) latestServiceHealth.hooksBridge.state = res.state;
-      renderHooksBridgeSection();
-      if (err || !res) { addBar(t('操作超时，请重试'), 'text-danger'); loadServiceStatus(); return; }
-      addBar(res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok ? 'text-ink-faint' : 'text-danger');
-      loadServiceStatus(); // 服务状态页开着时顺带刷新
-    });
-  }
-
-  // 服务状态与安全日志是两个 ack，但必须凑齐了画一次：renderServiceStatus 是 replaceChildren
-  // 全量重绘，各自到达各自渲染会互相冲掉（先到的那段被后到的整体替换掉）。
-  const emitServiceAck = (event, payload) => new Promise(resolve => {
-    socket.timeout(3000).emit(event, payload, (err, res) => resolve(err ? null : res));
+  const serviceStatus = createServiceStatus(appContext, {
+    $, addBar, appConfirm, closeSheet, el, isLanOrLocal, localReset, notifications, openSheet,
+    outboxDeadLetters, outboxInFlight, reopenGeneralAt, requestCwd, rttMonitor, setGestureDismiss, socket,
+    wireConfigRefreshButton, getGeneral: () => general, getGeneralNav: () => generalNav,
+    getLatestServiceHealth: () => latestServiceHealth, getOfflineQueue: () => offlineQueue,
+    setGeneralPushSubscribed: v => { generalPushSubscribed = v; },
   });
-  async function loadServiceStatus() {
-    if (!serviceStatusModal || !serviceStatusModal.classList.contains('sheet-open')) return;
-    const [status, auditRes] = await Promise.all([
-      emitServiceAck('service:status', {}),
-      // 20 条：手机上一屏能扫完的量。环形上限是 5000，全量回传是白发几百 KB。
-      emitServiceAck('audit:get', { limit: 20 }),
-    ]);
-    if (!status || status.ok !== true) return; // 断线/未审批设备无 ack：面板留旧值，不挂 spinner
-    // WS-019 同款迟到 ack 守卫：回包时面板已关则丢弃，防对着 hidden DOM 白渲染
-    if (!serviceStatusModal.classList.contains('sheet-open')) return;
-    // null（拿不到）与 []（拿到了、确实没有记录）是两件事，渲染时说法不同
-    renderServiceStatus(status, auditRes?.ok === true ? (auditRes.records || []) : null);
-  }
-  // 点 ← 与点遮罩都走这里：同一张面板两种关法落到两个不同的地方，正是用户会再踩一次的坑。
-  // 来源页是变量而不是写死的 'host'：这张面板现在有两个入口（🖥 宿主机的「服务状态」、
-  // 🩺 排查的「安全日志」），写死会把从排查进来的人退回另一页——同二层面板退出语义那条老坑。
-  let serviceStatusFrom = 'host';
-  // 每次打开递增。loadServiceStatus 的迟到守卫只问「面板现在开着吗」，答不了「是哪一次打开」——
-  // 慢 ack 下：从「排查」深链进来（带 anchor）→ 返回 → 从「宿主机」重开，第一次的 await 这时
-  // 才恢复，守卫看到面板确实开着就放行，于是把审计段的落点应用到了后开的那一次上，
-  // 用户会看到 host 入口进来的面板莫名其妙自己滚到安全日志。
-  let serviceStatusOpenSeq = 0;
-  function closeServiceStatus() {
-    if (serviceStatusTimer) { clearInterval(serviceStatusTimer); serviceStatusTimer = null; }
-    serviceStatusOpenSeq++; // 关了就作废：在途的那次 await 恢复后不得再滚
-    if (serviceStatusModal) closeSheet(serviceStatusModal);
-    reopenGeneralAt(serviceStatusFrom);
-  }
-  async function openServiceStatus({ from = 'host', anchor = null } = {}) {
-    if (!serviceStatusModal) return;
-    const seq = ++serviceStatusOpenSeq;
-    serviceStatusFrom = from;
-    general.close(); // 从通用设置切入：先收设置 sheet 再弹状态 sheet（两者同 z-40，叠着互相拦点击）
-    openSheet(serviceStatusModal);
-    if (serviceStatusTimer) clearInterval(serviceStatusTimer);
-    serviceStatusTimer = setInterval(() => {
-      if (document.visibilityState === 'hidden') return;
-      loadServiceStatus();
-    }, 5000);
-    await loadServiceStatus();
-    if (seq !== serviceStatusOpenSeq) return; // 期间被关过或重开过：这个 anchor 属于上一次打开
-    // 深链滚动必须等首帧渲染完：段落全是 renderServiceStatus 现建的，await 之前 bounding box 是 0。
-    // 只滚这一次——5s 重拉会整段 replaceChildren，每次都滚会把用户按住不动的手指一起拽走。
-    if (anchor) requestAnimationFrame(() => $(anchor)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
-  }
-  if ($('btnServiceStatus')) $('btnServiceStatus').onclick = () => void openServiceStatus({ from: 'host' });
-  if ($('serviceStatusBack')) $('serviceStatusBack').onclick = closeServiceStatus;
-  // 「排查」页的安全日志入口：同一张面板，落点直接滚到审计那一段。此前这一段只有"先开服务状态、
-  // 再往下翻三屏"这一条路，而 L1 副标题一直列着「安全日志」。
-  if ($('btnDiagSecurityLog')) {
-    $('btnDiagSecurityLog').onclick = () => void openServiceStatus({ from: 'diag', anchor: 'serviceAuditSection' });
-  }
+  const { emitServiceAck, hideQr, loadPermissionRules, renderHooksBridgeSection, renderPushStatusRow, renderStatuslineBridgeSection } = serviceStatus;
 
   // 服务与配置面板。表单结构全部由服务端 env:get 下发（src/ops/env-schema.js 是单一事实源）——
   // 前端一个配置项名都不硬编码，加一项只改那一个文件。pickText 按当前语言从 {zh,en} 里挑：
@@ -2065,12 +1954,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     $, socket, openSheet, closeSheet, appConfirm,
     pickText: (pair) => (getLang() === 'en' ? (pair.en || pair.zh) : pair.zh),
     beforeOpen: () => general.close(), // 先收通用设置，否则它会拦掉本面板上的点击
-    afterClose: () => reopenGeneralAt('behavior'), // 退出＝退回来源页，不是关到首页（同服务状态面板）
+    // 退出＝退回来源页，不是关到首页（同服务状态面板）。从抽屉告警的「管理工作区」进来的（#301）就直接关掉
+    afterClose: from => { if (from !== 'drawer') reopenGeneralAt('behavior'); },
     canRestart: () => _canRestart,
     onSaved: () => {},
   });
   envConfigPanel.bind();
-  if (serviceStatusModal) serviceStatusModal.onclick = e => { if (e.target === serviceStatusModal) closeServiceStatus(); };
+  // #399：把手下拉走 envConfigPanel.close（afterClose 退回设置）
+  setGestureDismiss($('envConfigModal'), () => envConfigPanel.close());
 
   if (authHelpLink) authHelpLink.onclick = showAccessHelp;
 
@@ -2099,13 +1990,22 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       tone: 'danger',
     }))) return;
     haptic('warning');
-    addBar(t('⟳ 正在重启服务…页面将自动重连'), 'text-warning');
+    // 服务端答应了才说「正在重启」——被拒时先写的那行会和「重启被拒」一起留在消息流里，前后矛盾（O87）。
+    // 新进程连上来（startedAt 变了）时由 setInstances 撤掉这一行。
     socket.emit('dev:restart', {}, res => {
-      if (res && res.ok === false) addBar(`${t('重启被拒：')}${res.error || t('未知')}`, 'text-danger');
+      if (res && res.ok === false) {
+        addBar(`${t('重启被拒：')}${res.error || t('未知')}`, 'text-danger');
+        return;
+      }
+      const bar = addBar(t('⟳ 正在重启服务…页面将自动重连'), 'text-warning');
+      if (bar) bar.dataset.restartPending = '1';
     });
   };
 
-  function showDeniedOverlay() { deviceDenied?.classList.remove('hidden'); }
+  function showDeniedOverlay() {
+    deviceDenied?.classList.remove('hidden');
+    clearTimeout(_reconnectTimer); // 已经排上的前台重连作废：只有「重新请求接入」该发起握手
+  }
   if (deviceDeniedHelp) deviceDeniedHelp.onclick = showAccessHelp;
   if (deviceDeniedRetry) deviceDeniedRetry.onclick = () => {
     deviceDenied?.classList.add('hidden');
@@ -2235,9 +2135,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       note.classList.toggle('text-warning', accessBypassActive);
       note.classList.toggle('text-ink-faint', !accessBypassActive);
     }
-    // 空列表也不显示整段：一台都没有意味着这台 server 只被本机/CF Access 访问过，
-    // 摆一个空框只会让人以为坏了。
-    if (!devices.length) { section.classList.add('hidden'); return; }
+    // 空列表：没开 CF Access 旁路时不显示整段——一台都没有意味着这台 server 只被本机访问过，摆一个空框只会让人
+    // 以为坏了。旁路开着时照样显示（验收 O89）：新部署的 Access 实例正好一台都没有，这时更要看到「这张表管不到
+    // 隧道进来的连接」，给一句空态代替空框。
+    if (!devices.length) {
+      section.classList.toggle('hidden', !accessBypassActive);
+      if (accessBypassActive) {
+        const empty = document.createElement('div');
+        empty.className = 'text-[11px] text-ink-faint px-1';
+        empty.setAttribute('data-testid', 'trusted-devices-empty');
+        empty.textContent = t('还没有已信任的设备：局域网 / 本机直连批准过的设备会列在这里。');
+        list.appendChild(empty);
+      }
+      return;
+    }
     section.classList.remove('hidden');
     for (const d of devices) {
       const row = document.createElement('div');
@@ -2279,19 +2190,28 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         input.className = 'min-w-0 w-32 px-2 py-1 rounded-lg border border-accent bg-surface text-ink text-xs font-normal';
         input.value = d.alias || '';
         input.placeholder = autoName;
-        input.maxLength = 24; // 与后端 MAX_DEVICE_ALIAS 一致；后端仍会再归一一次（这里只是省一次往返）
+        // 限长与后端 MAX_DEVICE_ALIAS 同一口径：按【码点】24 个（后端仍会再归一一次，这里只是省一次往返）。
+        // 不用 maxLength：它按 UTF-16 单元计，emoji 占两个，纯 emoji 别名只写得下 12 个（验收 O106）。
+        // 输入法组字途中不截——截了会把正在拼的那个字打断，等 compositionend 再截。
+        const clampAlias = () => {
+          const points = [...input.value];
+          if (points.length > 24) input.value = points.slice(0, 24).join('');
+        };
+        input.addEventListener('input', (e) => { if (!e.isComposing) clampAlias(); });
+        input.addEventListener('compositionend', clampAlias);
         input.setAttribute('data-testid', 'trusted-device-alias-input');
         let done = false;
         const commit = (save) => {
           if (done) return;
           done = true;
-          if (save) socket.emit('user:renameTrustedDevice', { shortId: d.shortId, alias: input.value });
+          if (save) { clampAlias(); socket.emit('user:renameTrustedDevice', { shortId: d.shortId, alias: input.value }); }
           // 不手动还原 DOM：提交后服务端会重播 trusted_devices，整段重渲染；
           // 取消时也重渲染一次，省掉一条只在这里用的回滚路径。
           renderTrustedDevices(lastTrustedDevices, lastTrustedBypass);
         };
         input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+          // 输入法组字中的 Enter 是「确认候选词」，不是提交（#320 review）：同 2036 行令牌门的双检
+          if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); commit(true); }
           else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
         });
         input.addEventListener('blur', () => commit(true));
@@ -2350,12 +2270,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }),
     outOfBand: {
       task_notification: onTaskNotification,
+      // 前台任务集合（#459）：按实例存、只画当前查看的那个，所以不经视图过滤
+      foreground_tasks: (ev) => foregroundTasks.onEvent(ev),
       // 回退已生效（可能来自本机，也可能来自另一台设备）。走 outOfBand 而非普通 handler：
       // 它是【跨会话】通知，普通分支会因 event.sessionId ≠ currentSessionId 触发 onSessionId
       // 把当前会话身份改掉——用户正看着 A 会话，B 会话的回退不该改写 A 的状态。
       rewind_applied: (ev) => {
         const p = ev?.payload || {};
-        // 只有正看着这个会话时才需要动 UI：对话树被截断、文件也变了，本地这两份都过期。
+        // 只有正看着这个会话时才需要说一声。
         if (!ev?.sessionId || ev.sessionId !== displayedSessionId) return;
         const n = Array.isArray(p.filesChanged) ? p.filesChanged.length : 0;
         // 三个模式的成功形态不同，不能只看 forkedSessionId 在不在：
@@ -2369,8 +2291,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         } else {
           addBar(t('已回退 {n} 个文件，并分叉出回到那一刻的新会话（原会话保留）').replace('{n}', n), 'text-ink-faint');
         }
+        // 【不重拉这个会话的历史】三个模式都不改它的对话：分叉是复制到新会话（原会话一个字节不动，
+        // 见 sessions/rewind-plan.js 头注），只恢复代码根本不碰 transcript。这里原先调 loadHistory 是
+        // 原地截断时代留下的，而 loadHistory 只追加不清屏，整段对话会在下面再出现一遍（P0-REWINDo）。
+        // 新会话由 instances 广播切过去时照常加载。
         // 不必失效文件预览：附件/文件预览走 browse:read 按需拉取，前端不留缓存（已核实）。
-        loadHistory(ev.sessionId, p.cwd || drivingCwdOf(displayedInstanceId));
       },
       // outOfBand 不经 handled 分支，相关进度/重试仍刷新 lastEventAt（说明 turn 还活着）
       task_progress: (ev) => {
@@ -2429,6 +2354,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     },
     onEpochReset() {
       approvals.clearAll();
+      elicitationSheet.clearAll();
     },
     onSessionId(sessionId) {
       localStorage.setItem('current_session', sessionId);
@@ -2647,6 +2573,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     effort_mode(p) {
       // 没指定时 CLI 实际生效的档（只进文案）；缺字段的旧回执一律当未知
       appContext.state.effortEffective = p.effective ?? null;
+      // 档位来源：'cli-settings' 按「没指定」显示（O15）；缺字段的旧回执按用户自选显示，与改动前一致
+      appContext.state.effortSource = p.source ?? null;
       if (mirrorReadonlySid) {
         if (mirrorWebPanelSnapshot) mirrorWebPanelSnapshot.effort = p.level ?? null;
         renderCliPanelState();
@@ -2658,16 +2586,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       setInstances(p);
     },
     session_log(p) {
-      if (consoleModal && consoleModal.classList.contains('sheet-open') && consoleFilter !== 'diag') {
-        appendLogEntry(p);
-      }
+      appendSessionLog(p);
     },
-    // 诊断时间线（镜像/排队/停止）实时推送：与 session_log 同款 seq:0/epoch:'server' 旁路广播，
-    // 抽屉开着且未把过滤切到"仅交互"时才追加——切到"诊断"/"全部"都应看见。
+    // 诊断时间线（镜像/排队/停止）实时推送：与 session_log 同款 seq:0/epoch:'server' 旁路广播
     diag_log(p) {
-      if (consoleModal && consoleModal.classList.contains('sheet-open') && consoleFilter !== 'interaction') {
-        appendLogEntry(formatDiagLogEntry(p));
-      }
+      appendDiagLog(p);
     },
     // 可用模型列表由 init 后 fire-and-forget supportedModels() 推送（含重连/重启后的服务端重放）。
     // 原样透传（2026-06-15 / 2026-07-14）：只渲染 CLI/SDK 列表（含 value=default 的 Default recommended），
@@ -2677,6 +2600,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       rebuildEffortOptions(currentModel || cwdDefaultModel); // 列表到达 → 按当前/默认模型刷新 effort
       rebuildCustomModelGrid(modelsList);                    // 刷新自定义设置面板中的模型选择
       if (!modelInput) return;
+      // 待发模型必须在清空 options 之前读：清空重建后 select.value 已是新列表首项，
+      // 用户点了磁贴、还没发出去的选择会被静默换掉（磁贴只写 value，不写 dataset.fullModel）。
+      const pendingSend = (modelInput.dataset.fullModel || modelInput.value || '').trim();
       modelInput.innerHTML = '';
       (p.models || []).forEach(m => {
         const opt = document.createElement('option');
@@ -2686,15 +2612,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         modelInput.appendChild(opt);
       });
       // 预选：若用户已选「下一条才生效」的待发模型，保留 modelInput（H2）；
-      // 否则 currentModel → CLI default → 空。
-      const pendingSend = (modelInput.dataset.fullModel || modelInput.value || '').trim();
-      const pendingIsIntentional = !!(pendingSend && pendingSend !== 'default' && pendingSend !== (currentModel || ''));
+      // 否则 currentModel → CLI default → 空。「是不是用户选的」以 modelIntent 为准（与 resolveOutgoingModel 同一判据）：
+      // 没点过时 select 里可能只是落后于 init 的旧在跑模型（网关场景 init 先把 currentModel 换成 opus），不是待发选择。
+      const pendingIsIntentional = modelIntent.isPicked() && !!(pendingSend && pendingSend !== 'default' && pendingSend !== (currentModel || ''));
       if (pendingIsIntentional) {
         ensureModelOption(pendingSend);
         modelInput.value = pendingSend;
         rebuildCustomModelGrid(modelsList);
       } else if (currentModel) {
-        ensureModelOption(currentModel);
+        // 在跑的 wire 已落在某张磁贴上就不再补一张「当前加载模型」（验收 O53）
+        if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel);
         modelInput.value = currentModel;
         syncModelUI(currentModel);
       } else if ([...modelInput.options].some(o => o.value === 'default')) {
@@ -2716,7 +2643,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         s.raw += p.text;
         s.textNode.appendData(p.text);
         scrollBottom();
-        setBusyFromStreamEvent(ev);
+        setBusyFromSubagentEvent(ev);
         return;
       }
       const s = getStream(p.messageId, ev?.ts);
@@ -2743,7 +2670,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
         getSubagentThinking(sa, p.messageId).body.appendData(p.text);
         scrollBottom();
-        setBusyFromStreamEvent(ev);
+        setBusyFromSubagentEvent(ev);
         // 子 agent thinking 不计主线 thinking 时长（内容已折叠进子卡，live 行保留主线状态）
         return;
       }
@@ -2773,6 +2700,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         </details>`);
       setStatusIcon(card.querySelector('.t-status'), 'pending');
       card.dataset.toolName = p.name || ''; // tool_result 无 name，结果特化渲染从卡上取
+      // 会话 DOM 缓存放回的卡不进 toolCards，要按 id 找卡的（「后台运行」按钮）靠这个属性，见 getToolCard
+      if (p.toolUseId) card.dataset.toolUseId = p.toolUseId;
       const inCode = card.querySelector('.t-in code');
       if (inCode) {
         // 空对象输入展开也只有「{}」噪音 → 整块藏掉（CLI 对空输入零渲染）
@@ -2780,6 +2709,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           card.querySelector('.t-in')?.classList.add('hidden');
         } else {
           inCode.textContent = formatToolSummary(p.inputSummary || '');
+          inCode.className = toolInputHighlightClass(inCode.textContent);
           try { hljs.highlightElement(inCode); } catch { /* 高亮失败不影响显示 */ }
         }
       }
@@ -2848,14 +2778,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // Workflow 是有意的例外：它不预建聚合卡（预建会留「🤖 workflow 已完成」空壳），
       // 等首条子流事件才懒建，此刻通用卡已 append 进流、再摘要动已插入的时间分隔行，故不合。
       const isMergedSpawn = !isSubagentPayload(p) && isSpawnToolName(p.name) && p.name !== 'Workflow';
+      // show_widget 的图紧跟在工具卡后面；render 返回 null = 退回只有一行工具调用
+      const widgetNode = p.widget ? widgets.render(p.widget) : null;
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
         sa.body.appendChild(card);
+        if (widgetNode) sa.body.appendChild(widgetNode);
       } else if (!isMergedSpawn) {
         appendMessage(card);
+        if (widgetNode) appendMessage(widgetNode);
       }
       scrollBottom();
-      setBusyFromStreamEvent(ev);
+      if (isSubagentPayload(p)) setBusyFromSubagentEvent(ev); else setBusyFromStreamEvent(ev);
       // 子代理/Workflow 活动横幅（主会话 spawn 工具；嵌套内部 Agent 不再叠横幅）
       // Agent/Task：预建空卡占位。Workflow 多数阶段只走 task_progress、常无 parent 子流——
       // 预建会留下「🤖 workflow 已完成」空壳（实测观感怪），故等首条 parentToolUseId 事件再建卡。
@@ -2873,21 +2807,24 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         renderLiveLine();
       }
     },
-    tool_result(p) {
+    tool_result(p, ev) {
       // 主会话 Agent/Task 完成 → 对应子 agent 卡标题改「已完成」（键 = toolUseId = 子事件的 parentToolUseId）
       if (!isSubagentPayload(p) && subagentCards.has(p.toolUseId)) {
         markSubagentCardDone(p.toolUseId);
       }
       // 机制 4 错误显性化：子工具真错误累进聚合卡标题的 ❌ 计数。折叠态下嵌套卡的红图标看不见，
       // 而移动端多数时候就是折叠着的——不往上报一层，子代理内部报错在手机上等于隐瞒。
-      // 【只数真错误】denyKind 的三档（已回答/已拒绝/已取消）是用户自己的动作，他知道，不是异常。
+      // 【只数真错误】denyKind 的两档（已拒绝/已取消）是用户自己的动作，他知道，不是异常。
       // 【不染聚合卡的状态图标】那个图标表达的是 Agent 工具【自身】的结果（下方 tool_result 在管）：
       // 一次失败的 Read 不该让整张卡看起来失败了——子代理完全可能照常得出结论。
       if (isSubagentPayload(p) && p.ok === false && !p.denyKind) {
         const sa = subagentCards.get(p.parentToolUseId);
         if (sa) { sa.failures = (sa.failures || 0) + 1; renderSubagentTitle(sa); }
       }
-      const card = toolCards.get(p.toolUseId);
+      // 历史里配不上结果的卡，结果可能随后才实时到达（重载期间那一轮跑完了）：live 表里没有就到历史表里找，
+      // 否则它会一直停在「进行中」或被收尾判成「已中止」（PR #233 review）。历史卡与 live 卡同构（.t-status / .t-out）。
+      const card = toolCards.get(p.toolUseId) || histToolCards.get(p.toolUseId);
+      histToolCards.delete(p.toolUseId);
       if (!card) {
         // 无工具卡时仍处理 Agent 横幅（预建了子 agent 卡但 tool 卡可能被清过）
         if (agentToolIds.has(p.toolUseId)) {
@@ -2895,29 +2832,36 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
         return;
       }
-      // deny+message 通道结果被 SDK 标 is_error（ok:false），但真实语义由 denyKind 决定（agent.js）：
-      // answered=已回答 ☑️ / denied=已拒绝 🚫 / cancelled=已取消 🚫——均非工具报错；无 denyKind 才按 ok 显 ✅/❌。
+      // 审批的 deny+message 通道结果被 SDK 标 is_error（ok:false），真实语义由 denyKind 决定（agent.js）：
+      // denied=已拒绝 🚫 / cancelled=已取消 🚫——均非工具报错。AskUserQuestion 的作答 #455 起走 allow，结果本身就是
+      // 成功的，按 CLI 文案分已回答 / 没回答（askQuestionResultView，与历史回放同一个判法）；其余按 ok 显 ✅/❌。
       // UI-007：结果态 SVG
-      const statusKind = p.denyKind === 'answered' ? 'answered'
+      const askView = !p.denyKind && card.dataset.toolName === 'AskUserQuestion'
+        ? askQuestionResultView({ ok: p.ok, text: p.outputSummary }) : null;
+      const statusKind = askView ? askView.kind
         : (p.denyKind === 'denied' || p.denyKind === 'cancelled') ? 'denied'
         : (p.ok ? 'ok' : 'error');
       setStatusIcon(card.querySelector('.t-status'), statusKind); // 语义色随 kind 一起落，见 setStatusIcon
       if (p.outputSummary) {
         const out = card.querySelector('.t-out');
         // deny 通道正文带 SDK 加的 "Error:" 前缀（非真错误），剥掉只留语义文本
-        const raw = p.denyKind ? p.outputSummary.replace(/^Error:\s*/i, '') : p.outputSummary;
+        const raw = askView ? askView.text : p.denyKind ? p.outputSummary.replace(/^Error:\s*/i, '') : p.outputSummary;
         const code = out.querySelector('code') || out;
         // Task 清单工具结果 → ☐/◐/☒ 清单文本（deny/报错走通用路径保留原文）
         const taskText = (!p.denyKind && p.ok) ? renderTaskToolResultText(card.dataset.toolName, raw) : null;
-        code.textContent = taskText ?? formatToolSummary(raw);
-        try { if (!taskText && code !== out) hljs.highlightElement(code); } catch { /* 高亮失败不影响显示 */ }
+        code.textContent = taskText ?? formatToolSummary(raw, { truncated: p.truncated });
+        if (!taskText && code !== out) highlightToolOutput(code);
         if (taskText) card.open = true; // 清单即结果本体，收起就白渲染了（对齐 CLI 面板可见性）
         out.classList.remove('hidden');
         // 截断时挂「展开全文」——点后走 tool:full 取 agent 缓存的完整输出
+        // 会话坐标有就带：实例内存里的全文 10 分钟过期，之后服务端回落去 transcript 取（同历史卡片）
         if (isToolSummaryTruncated(raw, { truncated: p.truncated }) && p.toolUseId) {
-          attachToolFullExpand(card, p.toolUseId);
+          attachToolFullExpand(card, p.toolUseId, ev?.sessionId && ev?.cwd ? { sessionId: ev.sessionId, cwd: ev.cwd } : null);
         }
       }
+      // 截图：只带引用，卡片展开、格子进入可视区才取图。坐标取信封（发出它的那个实例与会话）
+      const shots = transcriptImages.render(p.images, { sessionId: ev?.sessionId, cwd: ev?.cwd, instanceId: ev?.instanceId });
+      if (shots) (card.querySelector('.t-out')?.parentElement || card).appendChild(shots);
       toolCards.delete(p.toolUseId);
       // 子代理/Workflow 完成时隐藏活动横幅（仅当所有并行 Agent 都完成才隐藏）
       if (agentToolIds.has(p.toolUseId)) {
@@ -2927,6 +2871,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // F3：user_message 事件渲染右侧气泡（已入缓冲，多设备/重载均可回放）
     // E17：p.attachments=[{name,mimeType,size,thumb?}]——图片显 thumb（data URI，CSP img-src data: 已许），其他显 📎 chip
     user_message(p, ev) {
+      crashNotices.clear(ev?.sessionId); // 崩溃后在这个会话里接着聊了：那条提示翻篇，重载历史不再补
       // 这条消息可能已经由历史全量重载渲染成【正式气泡】了：settleCarriedPendingBubbles 认领时
       // 把 clientMessageId 从乐观气泡移交了过去（见那里的 ★ 注释）。此时屏幕上已经有它，直接收工——
       // 既不能再建一颗（那是第三颗），也不该走下面的转正流程：它早已是确认态，settleAt 会重复打戳。
@@ -2969,18 +2914,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // → 之后每条都被判成时间倒流，连日期行都永久消失）。这个分支直接 return、不走 append，
         // 故须在此单独收口；settleAt 会把 marker 插在这条气泡【前面】而不是容器尾部。
         messageTimeline.settleAt(matchedBubble, ev?.ts, 'user');
-        // FE-005：离线占位曾是纯 textContent——确认时升级为与历史一致的 markdown 渲染（保留附件区）
-        if (p.text && !matchedBubble.classList.contains('um')) {
-          const attWrap = matchedBubble.querySelector('.flex.flex-wrap');
-          matchedBubble.innerHTML = render(p.text);
-          matchedBubble.classList.add('msg-body', 'um');
-          if (attWrap) matchedBubble.appendChild(attWrap);
-          matchedBubble.querySelectorAll('pre code').forEach(b => {
-            try { hljs.highlightElement(b); } catch { /* ignore */ }
-          });
-          injectCodeCopyButtons(matchedBubble);
-          foldLongUserBubble(matchedBubble, p.text);
-        }
+        // 占位本来就是纯文本（appendUserText），确认时只换成已确认气泡的字体，不再重渲染（验收 O25）
+        if (p.text) matchedBubble.classList.add('msg-body', 'um');
 
         // 追加任何可能附带的附件
         if (Array.isArray(p.attachments) && p.attachments.length) {
@@ -2999,10 +2934,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (p.text && !matchedBubble.querySelector('[data-copy-action]')) {
           appendCopyAction(matchedBubble, () => p.text, 'right');
         }
-        // Rewind 锚点：占位转正时补上服务端权威 uuid，并补绑长按（占位创建时还没有 uuid）。
+        // 占位转正时补上服务端权威 uuid（占位创建时还没有 uuid）。
         if (p.uuid && !matchedBubble.dataset.uuid) {
           matchedBubble.dataset.uuid = p.uuid;
-          bindBubbleLongPress(matchedBubble, 'user');
         }
         scrollBottom(true);
         return; // 匹配成功，直接返回，避免生成重复聊天气泡
@@ -3012,48 +2946,49 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用：user_message 在线新建分支（离线占位分支在 send() 创建时已挂，这里走 matchedBubble 复用不重复创建）
       // 排队撤回/标记转正都按 clientMessageId 定位气泡（离线占位分支已挂，此处补齐在线新建分支）
       if (p.clientMessageId) bubble.dataset.clientMessageId = p.clientMessageId;
-      // Rewind 锚点：live 气泡从这一刻起就带 uuid，用户不必刷新页面就能回退「刚才那一轮」。
-      // 这个 uuid 与 transcript 落盘值逐字相同（2026-09-10 实测），所以刷新前后行为一致。
+      // live 气泡从这一刻起就带 uuid。这个 uuid 与 transcript 落盘值逐字相同（2026-09-10 实测），所以刷新前后行为一致。
       if (p.uuid) bubble.dataset.uuid = p.uuid;
       if (p.text) {
-        // FE-005：与历史路径一致——marked + DOMPurify，避免「发出去纯文本 / 回来看变 markdown」观感分裂。
-        bubble.innerHTML = render(p.text);
+        // 与乐观占位、历史路径同一个构建器：纯文本（验收 O25）
         bubble.classList.add('msg-body', 'um');
-        bubble.querySelectorAll('pre code').forEach(b => {
-          try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ }
-        });
-        injectCodeCopyButtons(bubble);
-        foldLongUserBubble(bubble, p.text);
+        appendUserText(bubble, p.text);
       }
       if (Array.isArray(p.attachments) && p.attachments.length) {
         bubble.appendChild(buildAttachmentWrap(p.attachments, Boolean(p.text)));
       }
       if (p.text) appendCopyAction(bubble, () => p.text, 'right');
       if (p.origin === 'auto-continuation') tagAutoContinueBubble(bubble); // 额度墙到点续跑发的，不是用户打的
-      if (p.uuid) bindBubbleLongPress(bubble, 'user');
       messageTimeline.appendWithTime(bubble, ev?.ts, 'user');
       scrollBottom(true);
     },
-    permission_request(p) {
+    permission_request(p, ev) {
       // 幂等：sync:since 切入补发的 pending 快照可能与 buffer 回放的原始事件同 requestId → 只保留一份
       if (approvals.isDuplicatePermission(p.requestId)) return;
       alertCue('need');
-      approvals.enqueuePermission(p);
+      // 信封 instanceId 随队列条目存下，作答路由到所属实例（#388；dispatch 契约第二参）
+      approvals.enqueuePermission(p, ev?.instanceId);
       // FE-NEW-002：JSON.stringify(undefined) 为 undefined，.slice 抛错会中断 handler（verify 也不跑）
       // sensitive：正文是工具入参原文（Bash 的 command、Write 的 file_path/content 头部）。
       // 预览开关关闭时 notify 只保留标题，与 Web Push / ntfy 两条通道的隐私口径对齐。
       notify(t('⚠️ 等待审批'), `${p.name}：${safeJsonPreview(p.input, 80)}`, { sensitive: true });
       approvals.verifyPermIntegrity(p); // 异步、不阻塞渲染——完整性协议步骤4，核验结果稍后到达时若仍是当前卡片才提示
     },
-    question(p) {
+    question(p, ev) {
       // 幂等：同上（快照补发 vs buffer 回放去重），按 requestId
       // 含「已本地作答/已收 request_resolved」判定：忽略重放（切会话、probe、整页刷新后的 sync）
       if (approvals.isDuplicateQuestion(p.requestId)) return;
       alertCue('need');
-      approvals.enqueueQuestion(p);
+      approvals.enqueueQuestion(p, ev?.instanceId);
       // FE-003：text 可能缺失/非字符串（畸形 AskUserQuestion / SDK 漂移），slice 会抛并中断 handler。
       const qPreview = typeof p.text === 'string' ? p.text : (p.text == null ? '' : String(p.text));
       notify(t('❓ 需要选择'), qPreview.slice(0, 80), { sensitive: true }); // 问题正文同属预览开关管辖
+    },
+    // MCP 服务器要表单输入或 URL 授权（#460）。去重同提问：快照补发与 buffer 回放可能同 requestId，已结算的不再弹
+    elicitation(p, ev) {
+      if (elicitationSheet.isDuplicate(p.requestId)) return;
+      alertCue('need');
+      elicitationSheet.enqueue(p, ev?.instanceId);
+      notify(t('🔐 MCP 需要你'), String(p.message ?? '').slice(0, 80), { sensitive: true }); // message 是第三方正文，同属预览开关管辖
     },
     // M4：审批/选题完成后广播，多设备或重放缓冲时关闭陈旧弹窗
     request_resolved(p) {
@@ -3065,10 +3000,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (p.outcome === 'integrity_mismatch') {
           addBar(t('⚠️ 完整性校验未通过，该操作已被服务端拒绝执行（并非您的选择生效）'), 'text-danger');
         }
+        // 等到 TTL 到期：服务端已按拒绝回给 CLI。此前只是悄悄关卡，用户回来只看到卡片没了，不知道那个操作其实
+        // 没执行（验收 O30）。
+        if (p.outcome === 'expired') addBar(t('⏱ 这条审批等太久已过期，操作没有执行'), 'text-warning');
         approvals.resolvePermission(requestId);
         updateSendButtonState();
       } else if (kind === 'question') {
+        // 同上。多题提问会逐题各发一条（requestId 带 #序号）再发整体那条，只在整体那条上说一次
+        if (p.outcome === 'expired' && !String(requestId).includes('#')) addBar(t('⏱ 这个提问等太久已过期，没有作答'), 'text-warning');
         approvals.resolveQuestion(requestId);
+        updateSendButtonState();
+      } else if (kind === 'elicitation') {
+        if (p.outcome === 'expired') addBar(t('⏱ 这个 MCP 请求等太久已过期，已按取消处理'), 'text-warning');
+        elicitationSheet.resolve(requestId, p.outcome);
         updateSendButtonState();
       }
     },
@@ -3094,6 +3038,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
       alertCue(ui.haptic); // success / warning / error：音+震（各自开关门控）
       addBar(ui.statusBar.text, ui.statusBar.cls);
+      announceTurn(ui.statusBar.text); // 读屏的回合结束端点（#379）：与状态条同一句
       if (ui.errorBar) addBar(ui.errorBar.text, ui.errorBar.cls);
       notify(ui.notify.title, ui.notify.body, { force: alerts.preferences().foregroundComplete });
       // P0：回合末锚定——有文件汇总卡则滚到卡（手机扫结果）；否则落底
@@ -3105,6 +3050,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
       // 防御性清理当前 tab 的挂起提问和审批
       approvals.clearAll();
+      elicitationSheet.clearAll();
       updateSendButtonState();
     },
     error(p, ev) {
@@ -3122,7 +3068,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       failPendingToolCards(p.message);
       alertCue('error');
       hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
-      addBar(`⚠️ ${p.message}`, 'text-danger');
+      const errBar = addBar(`⚠️ ${p.message}`, 'text-danger');
+      announceTurn(`${t('出错：')}${p.message}`); // 读屏的回合结束端点（#379）
+      if (p.processExited) {
+        crashNotices.record(ev?.sessionId, p.message, errBar);
+        crashNotices.noteInstance(ev?.instanceId, p.message);
+      }
       clearBusyFromTurnEndEvent(ev, { unlockSendGate: false });
       if (resolveTurnEndScroll({ hasFileChangesCard: Boolean(errFileCard) }) === 'file-changes' && errFileCard?.isConnected) {
         try { errFileCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { scrollBottom(true); }
@@ -3130,6 +3081,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
       // 防御性清理当前 tab 的挂起提问和审批
       approvals.clearAll();
+      elicitationSheet.clearAll();
       updateSendButtonState();
     },
     // M7：改用 kind 字段判断中断，不靠字符串匹配（字符串会随 i18n 变化）
@@ -3149,11 +3101,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     },
     system(p, ev) {
       addBar(p.message, systemBarClass(p));
+      if (p.kind === 'elicitation_complete') elicitationSheet.complete(p.elicitationId);
       // 中止成功 / 「无可中断任务」失败回执：都必须清 interruptPending（限流重试中点停止的卡死修复）
       if (shouldClearInterruptPendingOnSystem(p)) {
         clearInterruptPending(viewingInstanceId, { keepLiveOverride: p.kind === 'interrupted' });
       }
       if (p.kind === 'interrupted') {
+        announceTurn(t('已中止')); // 读屏的回合结束端点（#379）：interrupted 走这里，不发 result
         finalizeStreams();
         // E3：interrupt 成功/settleForce 走 system interrupted 时没有 result，须收口工具卡与子 agent 卡
         failPendingToolCards(t('已中止'));
@@ -3173,238 +3127,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // E16：web 自有结构化状态（非 ANSI）。摘要去 emoji，展开分段构建 DOM（createElement+textContent，
     // 不经 innerHTML/DOMPurify，天然 XSS 安全）；服务端未启用则此事件不来，容器恒 hidden
     status_line(p) {
-      if (!p || typeof p !== 'object') return;
-      // 守护：如果 payload 里的 instanceId 与前端当前的 viewingInstanceId 不一致，则丢弃渲染（防止旧 tab 覆盖）
-      if (p.instanceId && viewingInstanceId && p.instanceId !== viewingInstanceId) return;
-      // 兼容陈旧重放：老 payload 可能没有 instanceId，但仍带 cwd；用 cwd 兜底防止别的工作区状态线覆盖当前视图。
-      if (!p.instanceId && p.cwd && currentCwd && p.cwd !== currentCwd) return;
-      // 顶栏 pill 改动角标：复用上面两道同源守护（防跨工作区串号），但**必须在下面两处早退之前**更新
-      // ——`!cliStatusEl`（statusline 容器缺失）与 `empty-start`（空启动页）都与角标无关，角标挂在顶栏
-      // 而非状态栏里，不该被状态栏的存在与否绑架。
-      updateWorkspaceChangeBadge(p.git);
-      if (!cliStatusEl) return;
-      // per-turn 权威秒表/token（agent.turnStartedAt/turnOutputTokens）：刷新/切实例回来后 live 行恢复真值
-      if (p.turn && liveLine) {
-        liveLine.serverTurnStartedAt = Number(p.turn.startedAt) || null;
-        liveLine.outTokens = Number(p.turn.outTokens) || null;
-        renderLiveLine();
-      }
-      // 空首页采用极简底部：模型/权限/思考 chips 即可。compose 页例外——工作区已定，git 段照渲
-      // （判据与两侧理由见 logic/statusline.js shouldRenderStatusline）。
-      //
-      // 第二个参数问 DOM 而不是读 _composeReady：那个标志在「会话已中断」表面上会是陈旧的 true
-      // （bindView 的 destroyed 分支先于 leaveComposeReady 提前 return），拿它当判据会把上一个实例的
-      // ctx/模型渲染到中断表面上。当前渲染着什么表面，只有 DOM 说了算。
-      if (!shouldRenderStatusline({
-        emptyStart: messagesEl.classList.contains('empty-start'),
-        composeSurface: Boolean(messagesEl.querySelector('[data-testid="compose-surface"]')),
-      })) return;
-      // 与 statuslineFmtTok 同边界：round 到 k 后 ≥1000 抬 m，避免 1000k
-      const fmtTok = n => {
-        if (n >= 1e6) return (n / 1e6).toFixed(1) + 'm';
-        if (n >= 1e3) { const k = Math.round(n / 1e3); return k >= 1000 ? (k / 1000).toFixed(1) + 'm' : k + 'k'; }
-        return String(n);
-      };
-      const fmtMs = ms => { const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return h ? `${h}h${String(m).padStart(2, '0')}m` : m ? `${m}m${String(x).padStart(2, '0')}s` : `${x}s`; };
-      // F2：带 1 位小数；≥1000.0k 抬 m，避免 1000.0k
-      const fmtTokF = n => {
-        if (n >= 1e6) return (n / 1e6).toFixed(1) + 'm';
-        if (n >= 1e3) {
-          const k = n / 1e3;
-          if (k >= 1000) return (k / 1000).toFixed(1) + 'm';
-          return k.toFixed(1) + 'k';
-        }
-        return String(n);
-      };
-      // 额度重置倒计时：ISO resets_at → 相对时长（对齐 CLI statusline `reset 2h05m`）
-      const fmtReset = iso => {
-        if (!iso) return '';
-        const parsed = Date.parse(iso);
-        if (!Number.isFinite(parsed)) return '';
-        const rem = Math.max(0, parsed - Date.now());
-        if (rem <= 0) return 'now';
-        const totalMins = Math.ceil(rem / 60_000);
-        const days = Math.floor(totalMins / 1440), hours = Math.floor((totalMins % 1440) / 60), mins = totalMins % 60;
-        if (days > 0) return `${days}d${hours}h${String(mins).padStart(2, '0')}m`;
-        if (hours > 0) return `${hours}h${String(mins).padStart(2, '0')}m`;
-        return `${mins}m`;
-      };
-      // 折叠摘要：git · ctx（模型/effort 已在底栏 pill）；展开仍有 CLI 全量
-      lastStatusLinePayload = p;
-      if (cliSummaryEl) cliSummaryEl.textContent = formatStatuslineCollapsedSummary(p);
-      // 展开详情：CLI 密集风、分段着色、纯 DOM 构建。seg = {text,cls} 或 {node}。配色用项目语义色 token
-      // （随明/暗主题），不硬塞 CLI 的 Catppuccin。每个非首段把分隔符 │ 与内容打包成一个不可拆的 cell，
-      // 这样窄屏 flex-wrap 折行时 │ 永远跟着它后面的值走、不会被孤零零甩到行尾。
-      const span = (text, cls) => { const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = text; return s; };
-      const row = segs => {
-        const segsF = segs.filter(Boolean);
-        if (!segsF.length) return null;
-        const line = document.createElement('div');
-        line.className = 'flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5';
-        segsF.forEach((seg, i) => {
-          const content = seg.node || span(seg.text, seg.cls);
-          if (!i) { line.appendChild(content); return; }
-          const cell = document.createElement('span');
-          cell.className = 'inline-flex items-baseline gap-x-1.5'; // │ + 内容打包，防分隔符落行尾
-          cell.appendChild(span('│', 'text-ink-faint opacity-40'));
-          cell.appendChild(content);
-          line.appendChild(cell);
-        });
-        return line;
-      };
-      // 额度段公共构建（对齐 CLI）：5h X% [reset …] │ 7d Y% [reset …]。抽成函数供两处复用——
-      // 正常态尾段（行B，下方）与 cli-unavailable 分支（账号级回落值展示）共享同一份文案/配色
-      // 规则，避免后续只改一处、漏改另一处。
-      const buildRateSegs = rate => {
-        const segs = [];
-        if (rate?.fiveHour && Number.isFinite(rate.fiveHour.usedPercent)) {
-          const pc = rate.fiveHour.usedPercent;
-          let label = `5h ${Math.round(pc)}%`;
-          const r = fmtReset(rate.fiveHour.resetsAt);
-          if (r) label += ` reset ${r}`;
-          segs.push({ text: label, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
-        }
-        if (rate?.sevenDay && Number.isFinite(rate.sevenDay.usedPercent)) {
-          const pc = rate.sevenDay.usedPercent;
-          let label = `7d ${Math.round(pc)}%`;
-          const r = fmtReset(rate.sevenDay.resetsAt);
-          if (r) label += ` reset ${r}`;
-          segs.push({ text: label, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
-        }
-        return segs;
-      };
-      // 额度新鲜度标注：三条来源（本轮实时 / 节流窗内复用的缓存 / 账号级快照回落）在 payload 里
-      // 形状完全相同，这一段是用户唯一的分辨依据。阈值判定留在后端（statusline.js
-      // applyRateFreshness / RATE_STALE_AFTER_MS）——跨前后端各存一份常量必然漂移。
-      const rateFreshnessSeg = () => {
-        if (!p.rateFromSnapshot && !p.rateStale) return null;
-        const label = p.rateFromSnapshot ? t('(账号级旧值，非实时)') : t('(非实时)');
-        const age = Number.isFinite(p.rateAgeMs) ? ` · ${formatAgoShort(p.rateAgeMs)}` : '';
-        return { text: `${label}${age}`, cls: 'text-ink-faint' };
-      };
-      const linesArr = [];
-
-      if (p.source?.kind === 'cli-unavailable') {
-        cliStatusEl.textContent = '';
-        const unavailable = document.createElement('div');
-        unavailable.className = 'flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5';
-        unavailable.appendChild(span(t('CLI 状态暂不可用'), 'text-warning font-medium'));
-        if (p.source.reason) unavailable.appendChild(span(`(${p.source.reason})`, 'text-ink-faint'));
-        cliStatusEl.appendChild(unavailable);
-        // 额度是唯一例外：仅当 rateFromSnapshot 显式标记为账号级快照回落值时才展示，且必须清楚
-        // 标注"非实时"——不能让用户误以为 CLI 状态本身是好的。其余字段（model/git/ctx/token/cache
-        // 等）仍严格遵守下面 return 处的注释、绝不混入陈旧字段，此处不因为顺手展示额度而放宽。
-        const staleRateSegs = (p.rate && p.rateFromSnapshot) ? buildRateSegs(p.rate) : [];
-        if (staleRateSegs.length) {
-          const fresh = rateFreshnessSeg();
-          if (fresh) staleRateSegs.push(fresh);
-          const staleRateRow = row(staleRateSegs);
-          if (staleRateRow) cliStatusEl.appendChild(staleRateRow);
-        }
-        lastStatusLinePayload = p;
-        if (cliSummaryEl) cliSummaryEl.textContent = staleRateSegs.length ? t('statusline · CLI 暂不可用（额度沿用旧值）') : t('statusline · CLI 暂不可用');
-        cliStatusWrapEl?.classList.remove('hidden');
-        return; // CLI owner 缺/陈旧时明确空缺，绝不把上一份 SDK/CLI 字段混进来（额度回落值是唯一例外，见上）
-      }
-
-      // git 段（分支 +暂存 !改动 ?未跟踪 ↑ahead ↓behind）。三分对齐 CLI；陈旧 payload 无三分时回退 ✱changed。
-      // 不含 git 工作区 +ins/−del（web 独有口径已删；会话工具改行走 lines +/−）。
-      let gitNode = null;
-      if (p.git?.branch) {
-        let b = p.git.branch;
-        if (p.git.staged || p.git.modified || p.git.untracked) {
-          if (p.git.staged) b += ` +${p.git.staged}`;
-          if (p.git.modified) b += ` !${p.git.modified}`;
-          if (p.git.untracked) b += ` ?${p.git.untracked}`;
-        } else if (p.git.changed) {
-          b += ` ✱${p.git.changed}`;
-        }
-        if (p.git.ahead) b += ` ↑${p.git.ahead}`;
-        if (p.git.behind) b += ` ↓${p.git.behind}`;
-        gitNode = span(b, 'text-accent font-medium');
-      }
-      // ctx 段：有 usedPercent → 'ctx X% · left Y/Z'（Y=剩余 Z=窗口总量，对齐本机 CLI statusline.sh 里
-      // elif 分支已用的 '/' 记法，这里扩展到有百分比的分支）；否则退回绝对 token 数（认不出 model 的窗口）。
-      // left 走 formatStatuslineCtxLeft：优先 totalTokens（与 usedPercent 同源），避免 lastUsage=0 假 1.0m/1.0m。
-      let ctxSeg = null;
-      if (p.ctx && Number.isFinite(p.ctx.usedPercent)) {
-        let txt = `ctx ${p.ctx.usedPercent}%`;
-        const left = formatStatuslineCtxLeft(p.ctx);
-        if (left) txt += ` · ${left}`;
-        const pc = p.ctx.usedPercent; // 蓝(健康)→橙(≥70)→红(≥90) 三段警示
-        ctxSeg = { text: txt, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-ink-soft' }; // UI-011 数据色非链接蓝
-      } else if (p.ctx && Number.isFinite(p.ctx.tokens)) {
-        ctxSeg = { text: `ctx ${fmtTok(p.ctx.tokens)}`, cls: 'text-ink-soft' };
-      }
-      // 行A（headline，对齐 CLI 首行）：model │ effort │ location │ git │ ctx │ 版本
-      // location = project（cwd 末段）或 git.repo 短名；model 作标题、与 CLI 首段一致；底部 pill 仍是选择器。
-      const modelText = p.model ? (p.model.length > 26 ? p.model.slice(0, 25) + '…' : p.model) : '';
-      const location = p.project || (p.git?.repo ? p.git.repo.split('/').pop() : '');
-      linesArr.push(row([
-        modelText && { text: modelText, cls: 'text-ink font-medium' },
-        p.effort && { text: `effort ${p.effort}`, cls: 'text-warning' },
-        typeof p.thinking?.enabled === 'boolean' && { text: `think ${p.thinking.enabled ? 'on' : 'off'}`, cls: 'text-ink-soft' },
-        location && { text: location, cls: 'text-info' },
-        gitNode && { node: gitNode },
-        ctxSeg,
-        p.version && { text: `v${p.version}`, cls: 'text-ink-faint' }
-      ]));
-
-      // token 明细段（对齐 CLI）：uncached <未缓存输入> response <输出>
-      let tokenNode = null;
-      if (p.ctx && Number.isFinite(p.ctx.in)) {
-        tokenNode = span(`uncached ${fmtTokF(p.ctx.in)} response ${fmtTokF(p.ctx.out || 0)}`, 'text-ink-soft');
-      }
-      // cache 明细段（对齐 CLI）：cache <命中率>.XX% write <cache写> read <cache读>；命中率按 r/tokens 重算 2 位小数
-      let cacheNode = null;
-      if (p.ctx && Number.isFinite(p.ctx.w) && Number.isFinite(p.ctx.r)) {
-        const rate = formatCachePercent(p.ctx.tokens > 0 ? (p.ctx.r / p.ctx.tokens) : 0);
-        cacheNode = document.createElement('span');
-        cacheNode.appendChild(span(`cache ${rate}`, 'text-ink-soft'));
-        cacheNode.appendChild(document.createTextNode(' '));
-        cacheNode.appendChild(span(`write ${fmtTokF(p.ctx.w)} read ${fmtTokF(p.ctx.r)}`, 'text-ink-faint'));
-      }
-      // 额度段（对齐 CLI）：5h X% [reset …] │ 7d Y% [reset …]。构建逻辑见上方 buildRateSegs
-      // （与 cli-unavailable 分支共用，避免重复实现两遍）。
-      // rateFromSnapshot：正常路径也必须标注"非实时"——否则 SDK/CLI 回落值会看起来像活数据
-      // （code review：此前只在 cli-unavailable 分支加了 disclaimer，正常行漏标）。
-      const rateSegs = buildRateSegs(p.rate);
-      if (rateSegs.length) {
-        const fresh = rateFreshnessSeg();
-        if (fresh) rateSegs.push(fresh);
-      }
-      // 行B（遥测，对齐 CLI 次行）：5h/7d │ uncached/response │ cache%+write/read
-      linesArr.push(row([
-        ...rateSegs,
-        tokenNode && { node: tokenNode },
-        cacheNode && { node: cacheNode }
-      ]));
-
-      // 行C（成本/耗时/改行，对齐 CLI）：est $成本 │ total 墙钟 │ api 耗时 │ lines +A/-R
-      linesArr.push(row([
-        Number.isFinite(p.cost) && { text: `est $${p.cost.toFixed(2)}`, cls: 'text-success' },
-        p.duration && p.duration.wallMs && { text: `total ${fmtMs(p.duration.wallMs)}`, cls: 'text-ink-faint' },
-        p.duration && p.duration.apiMs && { text: `api ${fmtMs(p.duration.apiMs)}`, cls: 'text-ink-faint' },
-        p.lines && (p.lines.added || p.lines.removed) && { text: `lines +${p.lines.added || 0}/-${p.lines.removed || 0}`, cls: 'text-success' }
-      ]));
-      // 行D（会话身份/元数据，弱化为 faint）：repo │ sid
-      // 不含时钟（web 独有已删）；不含 pid/transcript/PR/wt（CLI 独有、SDK 路径不产出或不接）。
-      linesArr.push(row([
-        p.git?.repo && { text: p.git.repo, cls: 'text-ink-faint' },
-        p.session?.id && { text: `sid ${p.session.id.slice(0, 8)}`, cls: 'text-ink-faint' },
-        p.source?.kind === 'cli' && { text: 'source CLI', cls: 'text-info' },
-        p.source?.kind === 'sdk' && { text: 'source Web SDK', cls: 'text-ink-faint' }
-      ]));
-
-      // 一次性替换：清空旧节点 + append 非空行（row 对空行返回 null）
-      cliStatusEl.textContent = '';
-      linesArr.filter(Boolean).forEach(l => cliStatusEl.appendChild(l));
-      cliStatusWrapEl?.classList.remove('hidden'); // 揭示折叠包裹（默认折叠为 summary 摘要）
+      renderStatusLine(p);
     }
   };
 
-  // 工具卡「展开全文」：live 路径 agent 缓存截断前全文；成功后替换 .t-out 并去掉按钮。
-  function attachToolFullExpand(card, toolUseId) {
+  // 工具输出代码块：先按内容定高亮 class（JSON 才高亮，见 toolOutputHighlightClass），再交给 hljs
+  function highlightToolOutput(code) {
+    code.className = toolOutputHighlightClass(code.textContent);
+    delete code.dataset.highlighted; // 「展开全文」换了内容要重新判，hljs 对已高亮过的元素会跳过
+    try { hljs.highlightElement(code); } catch { /* 高亮失败不影响显示 */ }
+  }
+
+  // 工具卡「展开全文」：成功后替换 .t-out 并去掉按钮。全文来源由服务端定：live 卡片先查实例内存；带上会话坐标
+  // （history = { sessionId, cwd, agentToolUseId? }）时内存没有就回落去 transcript 取——历史卡片只能走这条（验收 O55）。
+  function attachToolFullExpand(card, toolUseId, history = null) {
     if (!card || !toolUseId || card.querySelector('[data-testid="tool-expand-full"]')) return;
     // 聚合卡里 .sa-body 也带 space-y-1 且排在结果槽之前，裸 querySelector 会把「展开全文」
     // 塞进子代理流水中间。给结果槽标了 .t-full-host 的卡优先用它；通用工具卡没有这个 class，
@@ -3415,7 +3151,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     btn.onclick = () => {
       btn.disabled = true;
       btn.textContent = t('加载中…');
-      socket.timeout(8000).emit('tool:full', { instanceId: inst, toolUseId }, (err, res) => {
+      socket.timeout(8000).emit('tool:full', { instanceId: inst, toolUseId, ...(history || {}) }, (err, res) => {
         if (err || !res?.ok) {
           btn.textContent = err ? t('请求超时，请重试') : (res?.error || t('全文不可用'));
           btn.disabled = false;
@@ -3424,11 +3160,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         const out = card.querySelector('.t-out');
         const code = out?.querySelector('code') || out;
         if (code) {
-          code.textContent = formatToolSummary(res.text || '');
-          try { if (code !== out) hljs.highlightElement(code); } catch { /* noop */ }
+          code.textContent = formatToolSummary(res.text || '', { truncated: false }); // 全文不带服务端尾巴：超长另有提示条
+          if (code !== out) highlightToolOutput(code);
           out?.classList.remove('hidden');
         }
-        btn.remove();
+        if (res.truncated) {
+          // 全文超过服务端上限时只回了开头：不说清楚就像已经完整了（PR #250 review）
+          const note = el(`<div class="text-ink-faint text-[11px]" data-testid="tool-full-truncated"></div>`);
+          note.textContent = `${t('全文过长，只显示了开头')}（${res.totalLength ?? '?'} ${t('字符')}）`;
+          btn.replaceWith(note);
+        } else {
+          btn.remove();
+        }
       });
     };
     host.appendChild(btn);
@@ -3451,7 +3194,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     let s = streams.get(key);
     if (!s) {
       // UX-004：直接 msg-body 容器，流式走 innerHTML=render，不再用纯文本 textNode 裸显 markdown
-      const wrap = el(`<div class="msg-frame msg-body px-0.5" data-testid="assistant-message" aria-live="polite"></div>`);
+      // #379：流式气泡不挂 aria-live——每 ~80ms 全量 innerHTML 重写会让读屏反复重读生长中的消息；定稿后用户可自行浏览。
+      const wrap = el(`<div class="msg-frame msg-body px-0.5" data-testid="assistant-message"></div>`);
       wrap.dataset.topLevel = '1'; // 未读角标锚点定位用：仅主链 assistant 流式气泡（子agent走 getSubagentStream，不经过这里）
       messageTimeline.appendWithTime(wrap, ts, 'assistant');
       s = { el: wrap, raw: '', done: false };
@@ -3465,15 +3209,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (s.done) continue;
       if (s._mdTimer) { clearTimeout(s._mdTimer); s._mdTimer = null; }
       s.done = true;
+      // 正文同步写进气泡，rAF 只管那一下淡入（验收 O59）。上面刚清掉的预览定时器可能一次都没触发过——本地
+      // slash 命令（/context、/cost）的输出就是一条增量紧跟着 result——而浏览器对后台标签页暂停 rAF：
+      // 正文若也放进 rAF，同一会话开在另一个标签页里的那一端气泡一直是空的，刷新才从磁盘补上。
+      s.el.innerHTML = render(s.raw);
+      // try 与全文件其余 hljs 调用点一致（2026-08-03 F5）：高亮抛错不该打断复制按钮注入——高亮失败只该丢高亮。
+      s.el.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
+      injectCodeCopyButtons(s.el);
+      appendCopyAction(s.el, () => s.raw, 'left');
       s.el.style.transition = 'opacity .1s';
       s.el.style.opacity = '0.4';
       requestAnimationFrame(() => {
-        s.el.innerHTML = render(s.raw);
-        // try 与全文件其余 hljs 调用点一致（2026-08-03 F5）：rAF 回调里抛错会中断后续
-        // 复制按钮注入与 opacity 恢复，气泡永久停在半透明——高亮失败只该丢高亮。
-        s.el.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
-        injectCodeCopyButtons(s.el);
-        appendCopyAction(s.el, () => s.raw, 'left');
         s.el.style.opacity = '1';
         setTimeout(() => s.el.style.transition = '', 120);
       });
@@ -3601,6 +3347,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function adoptSpawnCard(sa, p) {
     const wrap = sa.el;
     wrap.dataset.toolName = p.name || ''; // tool_result 无 name，清单工具特化渲染从卡上取（同通用卡）
+    if (p.toolUseId) wrap.dataset.toolUseId = p.toolUseId; // 同通用卡
     setStatusIcon(wrap.querySelector('.t-status'), 'pending');
     // 【只显 description，不铺原始输入】通用工具卡在这个槽里放的是整个 input 的 pretty JSON，
     // 合卡后它就挡在展开区门口——含用户刚打的整段 prompt（2026-09-10 真机撞到）。CLI 在同一
@@ -3697,7 +3444,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     for (const f of summary.files) {
       const row = el(`
         <div class="tfc-row" data-testid="turn-file-row">
-          <button type="button" class="tfc-row-btn w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-sunk/60 active:bg-sunk transition-colors">
+          <button type="button" class="tfc-row-btn w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-sunk/60 active:bg-sunk transition-colors" aria-expanded="false">
+            <span class="tfc-chevron text-[10px] text-ink-faint shrink-0" aria-hidden="true">▸</span>
             <span class="tfc-name flex-1 min-w-0 truncate text-xs text-ink font-medium"></span>
             <span class="tfc-file-stats shrink-0 text-[11px] tabular-nums"><span class="text-success"></span> <span class="text-danger"></span></span>
           </button>
@@ -3710,9 +3458,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       fs.children[1].textContent = `-${f.removed}`;
       const btn = row.querySelector('.tfc-row-btn');
       const preview = row.querySelector('.tfc-preview');
+      const chevron = row.querySelector('.tfc-chevron');
       let loaded = false;
       btn.onclick = () => {
         preview.classList.toggle('hidden');
+        const open = !preview.classList.contains('hidden');
+        btn.setAttribute('aria-expanded', String(open));
+        if (chevron) chevron.textContent = open ? '▾' : '▸';
         if (loaded || !f.toolUseId) return;
         loaded = true;
         socket.timeout(8000).emit('tool:preview', { instanceId: inst, toolUseId: f.toolUseId }, (err, res) => {
@@ -3755,6 +3507,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     openSheet, closeSheet, requestInterrupt, updateSendButtonState,
     getViewingInstanceId: () => viewingInstanceId,
   });
+  // MCP 表单 / URL 授权（#460），见 app/elicitation-sheet.js
+  const elicitationSheet = createElicitationSheet(appContext, { $, socket, openSheet, closeSheet });
 
   // ---- 发送 / 停止 ----
 
@@ -3772,12 +3526,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (outgoingAttachments?.length) {
       bubble.dataset.attNames = outgoingAttachments.map(a => a?.name).filter(Boolean).sort().join('\0');
     }
-    if (text) {
-      const textNode = el(`<div class="whitespace-pre-wrap"></div>`);
-      textNode.textContent = text;
-      foldLongUserText(textNode, text); // 长指令发出去那刻就折，与已确认气泡一致
-      bubble.appendChild(textNode);
-    }
+    if (text) appendUserText(bubble, text); // 长指令发出去那刻就折，与已确认气泡一致
     // 待发附件缩略 chip/图片预览：controller items 含完整 data → 点击直开本地预览（无需服务端）
     if (outgoingAttachments?.length) {
       bubble.appendChild(buildAttachmentWrap(attachments.items(), Boolean(text)));
@@ -3807,7 +3556,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
   }
 
-  function send() {
+  // ackDivergence：续接分叉面板上选了「仍然发送」时带上（确认的是哪一段，见 app/resume-divergence.js）
+  function send({ ackDivergence } = {}) {
     ensureAlertAudio(); // 发送=用户手势：解锁 WebAudio，本轮完成后提示音才能响
     if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点发送位「续接 CLI 会话」）
       showMirrorComposerHint();
@@ -3827,7 +3577,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       addBar(t('当前任务运行中，完成后可发送'), 'text-info');
       return;
     }
-    if (approvals.hasPending()) {
+    if (approvals.hasPending() || elicitationSheet.hasPending()) {
       addBar(t('请先处理当前审批或选择，再发送新消息'), 'text-info');
       return;
     }
@@ -3839,16 +3589,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传。
     // /rewind 前端拦截——同 /model：TUI 命令不可透传（SDK 非交互，出不来那两步选择界面）。
     // 映射到本地的两步面板，最终仍落在 session:rewind:preview / confirm 上。
-    if (/^\/rewind(\s|$)/.test(rawText) && !(window.availableSkills || []).includes('rewind')) {
+    if (/^\/rewind(\s|$)/.test(rawText) && !hasSlashCommand(window.availableSkills, 'rewind')) {
       if (!displayedSessionId) { addBar(t('还没有会话可回退'), 'text-info'); return; }
       inputEl.value = '';
       inputEl.dispatchEvent(new Event('input'));
       autosize();
       updateSendButtonState();
-      rewindCommand.openPanel(displayedSessionId, currentCwd);
+      rewindCommand.openPanel(displayedSessionId, drivingCwdOf(displayedInstanceId)); // 驾驶轴，同 requestSessionFork
       return;
     }
-    if (/^\/model(\s|$)/.test(rawText) && !(window.availableSkills || []).includes('model')) {
+    if (/^\/model(\s|$)/.test(rawText) && !hasSlashCommand(window.availableSkills, 'model')) {
       const arg = rawText.slice(6).trim();
       if (arg) {
         let nakedArg = arg;
@@ -3863,6 +3613,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
         // value=default 是 CLI /model 「不 pin」语义：对齐 tile 点击路径，select 置空，
         // 不把字面 'default' 写进 select（否则发消息会带 model:'default' 让后端误 setModel 字面值）。
+        modelIntent.markPicked(); // /model 是显式选择，与点磁贴同属发送意图
         if (nakedArg === 'default') {
           currentGatewaySuffix = '';
           delete modelInput.dataset.fullModel;
@@ -3885,17 +3636,21 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       autosize();
       return;
     }
-    // 原样转发 select；空/default → undefined（CLI 不 pin）
-    let model = resolveSendModel({
+    // 运行中的会话用户没点过模型：原样带回在跑模型，不从磁贴重建（会丢网关后缀，验收 O53 / O26）。
+    // 点过或新会话：resolveSendModel pin wire，再按 S5 回贴网关后缀——仅对「不在 supportedModels 候选里的
+    // 自设名」(如 /model 手设并剥离了后缀的)；判据同时认 value 与 resolvedModel，只比 value 会让守卫恒失效、
+    // 每次选模型都送出 grok-4.5[1m][1m]。
+    // 外部会话记录只做展示：renderCliPanelState 已把 currentModel 换成外部模型，带它会让服务端 setModel 切过去
+    const viewedInst = instancesList.find(x => x.instanceId === viewingInstanceId);
+    const model = resolveOutgoingModel({
+      running: Boolean(viewingInstanceId),
+      picked: modelIntent.isPicked(),
+      loadedModel: viewedInst?.externalObserved ? (viewedInst.model || '') : (currentModel ? currentModel + currentGatewaySuffix : ''),
       selectValue: modelInput.value,
       fullModel: modelInput.dataset.fullModel || '',
+      gatewaySuffix: currentGatewaySuffix,
       modelsList,
     });
-    // S5：仅对「不在 supportedModels 候选里的自设名」(如 /model 手设并剥离了后缀的) 回贴网关后缀。
-    // 候选内的值本就是网关合法完整名(裸别名 opus/sonnet 或显式 deepseek-v4-pro[1m])，原样发送。
-    // 判据必须同时认 value 与 resolvedModel：resolveSendModel 自 7febabc 起返回的是 **wire**
-    // （entry.resolvedModel），只比 value 会让守卫恒失效、每次选模型都送出 grok-4.5[1m][1m]。
-    model = applyGatewaySuffix(model, currentGatewaySuffix, modelsList);
     // E17：剥掉本地 _id（非契约字段），data=完整 base64、thumb=小缩略图随消息上传
     const outgoingAttachments = attachments.items().length
       ? attachments.payload()
@@ -3910,6 +3665,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 放到在线分支里会让离线入队撞 TDZ——而 ESLint 的 no-undef 查不出这个，症状是离线路径整条炸掉
     // （2026-09-11 实测：三条离线队列 E2E 一起红，而 lint 全绿）。
     const worktreeArgs = viewingInstanceId ? {} : newSessionWorktree.newSessionArgs();
+    // 新会话页的标记，在线与离线重放都带：服务端据它开新会话、不回退全局 viewing（验收 O107），
+    // 同一页的后续消息按它落回这一页开出的实例；离线队列也靠它分开两个新会话页（见 outboxComposeKey）
+    const composeArgs = viewingInstanceId ? {} : { composeId: composePage.id() };
 
     // BE-002：长度预检必须在离线入队【之前】——否则离线时超长消息也会进 offlineQueue，重连重发被服务端拒，
     // 反复无法送达。提前拦下，超长消息根本不入队（在线分支原来的重复校验已随之移到这里）。
@@ -3936,10 +3694,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // REL-01：保存入队时刻的目标，重发时须用这个而非"当下"的 viewingInstanceId/currentCwd——
         // 否则用户离线期间切换了查看的会话，消息会被错发到现在正看着的会话，而非当初想发的那个。
         instanceId: viewingInstanceId,
-        cwd: currentCwd,
+        cwd: sendCwd(),
+        sessionId: sendSessionId(),
         // worktree 意图与 text 同属"入队时刻的快照"：离线期间用户可能取消勾选，
         // 但这条消息当初就是要发往新 worktree 的。序列化白名单见 logic/outbox-send.js。
         ...worktreeArgs,
+        ...composeArgs,
       });
 
       inputEl.value = '';
@@ -3969,8 +3729,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 会话/实例，届时 setBusy/addBar/草稿回填这些「作用于当前视图」的副作用不该套到无关会话上。
     // 按会话登记在途态（而非裸全局布尔）：切到另一会话发消息不该被这条送出的等待窗口阻塞。
     const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId;
-    const reqCwd = currentCwd;
+    const reqCwd = sendCwd();
     const reqViewingInstanceId = viewingInstanceId;
+    // 驾驶轴 cwd 要在发出这一刻取：拒收若在规则 5 置换之后到达，旧实例已不在 instancesList 里，那时现算会回落到
+    // 工作区轴（父仓），worktree 会话的分叉就找不到 transcript（reqCwd 是 sendCwd()，看着实例时同样是工作区轴，不能用它）。
+    const reqDrivingCwd = drivingCwdOf(reqViewingInstanceId);
     _sendInFlightSessionIds.add(reqSessionId);
     const clearSendInFlight = () => {
       if (!_sendInFlightSessionIds.has(reqSessionId)) return;
@@ -3996,17 +3759,22 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       clientMessageId,
       instanceId: reqViewingInstanceId,
       cwd: reqCwd,
+      sessionId: sendSessionId(), // 与 reqViewingInstanceId 同一刻取：本对象在 emit 之前同步建好
       // 交给 outbox 接管这颗气泡：重发期间 processOfflineQueue 会改它的待发文案、撞上在途轮时
       // markOutboxBlocked 会在它上面挂「未发送 + 重发」按钮。不传的话在线 requeue 的消息在屏幕上
       // 就是一颗永远转圈的气泡，用户既看不出它在排队、也没有手动重发的入口。
       bubbleEl: pendingBubble,
+      // worktree 意图与 text 同属「发出那一刻的快照」（离线入队那条同理）。漏了它，在线没被确认、
+      // 转进 outbox 重发的第一条消息会开在父仓里——勾的「新 worktree」静默失效。
+      ...worktreeArgs,
+      ...composeArgs,
     };
     const sendInFlightTimer = setTimeout(clearSendInFlight, SEND_ACK_FALLBACK_MS); // 兜底：ack 真丢了也不永久卡死
     // 在线也走 timeout：half-open / 中途断连时 err 回调 → 入 outbox，不再静默丢字。
     // 窗口用 SEND_ACK_TRANSPORT_MS 而非上面那个 UI 兜底：见其声明处的注释（服务端慢路径 ≫ 5s）。
     socket.timeout(SEND_ACK_TRANSPORT_MS).emit(
       'user:message',
-      { text, model, attachments: outgoingAttachments, instanceId: reqViewingInstanceId, cwd: reqCwd, clientMessageId, ...worktreeArgs },
+      { text, model, attachments: outgoingAttachments, instanceId: reqViewingInstanceId, cwd: reqCwd, clientMessageId, ...worktreeArgs, ...composeArgs, ...(ackDivergence ? { ackDivergence } : {}) },
       (err, ack) => {
       clearSendInFlight();
       const decision = presentOnlineSendTransport(err, ack);
@@ -4030,6 +3798,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 迎面一颗永远转圈的假消息。
       if (decision.dropBubble) dropPendingUserBubble(pendingBubble);
       if (decision.requeue) {
+        // 这次在线投递结局不明（超时，或服务端让重试），同 deliverOutboxItem 的 requeue 记一笔
+        pendingBubble.dataset.outboxMaybeSent = '1';
         enqueueOutbox(outboxPayload);
         // 视图仍在本会话时提示已排队；切走则静默入队
         if (displayedInstanceId === reqInstanceId && displayedSessionId === reqSessionId) {
@@ -4042,7 +3812,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
       // WS-003：迟到负 ack 守卫——发起后若已切到别的会话/实例，本次发送的失败反馈不该出现在当前视图上
       // （错误提示会贴到无关会话、setBusy(false) 会打断无关会话真实在跑的轮次、草稿会覆盖无关会话的输入）。
-      if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) return;
+      // 续接分叉的拒收只比会话：它常在规则 5 置换之后到达（server 先 dispose 旧实例、resume 新实例并广播，再过闸），
+      // 同一会话此时已换了新 instanceId。按实例比对会当成「已切走」——话被撤掉却不回填、面板不出、busy 也不清。
+      const sameSurface = decision.divergence
+        ? displayedSessionId === reqSessionId
+        : displayedInstanceId === reqInstanceId && displayedSessionId === reqSessionId;
+      if (!sameSurface) return;
       if (decision.clearBusy) setBusy(false);
       // busy 拒收：服务端说那边有轮在跑——同步锁上发送闸（本端 _turnRunning 可能因广播未到而滞后）
       if (decision.busy) {
@@ -4050,7 +3825,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         updateSendButtonState();
       }
       if (decision.message) addBar(decision.message, decision.busy ? 'text-info' : 'text-danger');
+      let restored = false;
       if (decision.restoreDraft && inputEl && !inputEl.value.trim() && attachments.items().length === 0) {
+        restored = true;
         if (restoreDraftOnFail.text) {
           inputEl.value = restoreDraftOnFail.text;
           inputEl.dispatchEvent(new Event('input'));
@@ -4060,6 +3837,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
         autosize();
         updateSendButtonState();
+      }
+      // 续接会丢掉一段对话（SESSION-04）：话已回到输入框，面板问怎么续。输入框里已有用户新打的字时不弹——
+      // 两个选项作用的都是输入框里的话，那不是被拒的这一条。
+      if (decision.divergence) {
+        if (restored) {
+          resumeDivergencePrompt.prompt({ divergence: decision.divergence, sessionId: reqSessionId, cwd: reqDrivingCwd });
+        } else {
+          addBar(t('续接会丢掉一段对话，这条没有发出去'), 'text-danger');
+        }
       }
     });
     updateSendButtonState(); // 立即反映在途态，不等下一次外部驱动的刷新
@@ -4094,9 +3880,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     send();
   };
   // 移动端回车发送截断修复（2026-07-13 排查）：触屏软键盘没有 Shift+Enter 这个换行
-  // 逃生舱，回车恒当发送键会把长消息在换行处截断。触摸设备下回车走 textarea 默认换行，发送收窄为
+  // 逃生舱，回车恒当发送键会把长消息在换行处截断。软键盘主设备下回车走 textarea 默认换行，发送收窄为
   // 仅走发送按钮；enterkeyhint 同步改 'enter'，避免部分输入法把回车当 action 直接派发而非插入换行符。
-  const isTouchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+  // #386：勿 OR maxTouchPoints——触屏笔记本有触摸硬件但主指针是 fine，物理 Enter 应发送。
+  const isTouchDevice = isSoftKeyboardPrimaryDevice({
+    pointerCoarse: matchMedia('(pointer: coarse)').matches,
+  });
   inputEl.enterKeyHint = isTouchDevice ? 'enter' : 'send';
   // 中文输入法：e.isComposing + keyCode 229 双检已覆盖绝大多数现代浏览器，
   // composition 状态追踪作为旧浏览器（Safari <14、部分 Android WebView）的后备兜底
@@ -4107,106 +3896,32 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     composing = false;
     checkAtMention();
   });
-  inputEl.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !composing && shouldSendOnEnter({ shiftKey: e.shiftKey, isTouchDevice })) {
-      e.preventDefault();
-      send();
-    }
-    // ESC 关候选浮层（排队撤回已随排队功能一并移除，ESC 不再有第三个语义）
-    if (e.key === 'Escape') {
-      if (atMentionList && !atMentionList.classList.contains('hidden')) { hideAtMentionList(); return; }
-      const cmdHintsEl = document.getElementById('cmdHints');
-      if (cmdHintsEl && !cmdHintsEl.classList.contains('hidden')) { cmdHintsEl.classList.add('hidden'); return; }
-    }
+  const composerControls = createComposerControls(appContext, {
+    $, addBar, addModeBar, appConfirm, autosize, btnSessions,
+    closeLeftSidebar: (...args) => closeLeftSidebar(...args), customEffortGrid, customEffortGroup,
+    customModelGrid, customPermGrid, effortOwnerModel, effortOwnerWrap, effortRow, effortSelect,
+    effortUnsupported, el, ensureModelOption, haptic, hidePromptSuggestion, inputEl, isTouchDevice,
+    leftSidebar, modelInput, modelIntent, permModeSelect, pillDefaults, pillEffort, pillEffortText,
+    pillModelText, pillPermText, projectsState,
+    refreshComposeDefaultsSummary: (...args) => refreshComposeDefaultsSummary(...args), requestCwd, send,
+    socket, topContextPill, updateSendButtonState, getComposeReady: () => _composeReady,
+    getComposing: () => composing, getCurrentEffort: () => currentEffort,
+    getCurrentGatewaySuffix: () => currentGatewaySuffix, getCurrentModel: () => currentModel,
+    getCurrentPermMode: () => currentPermMode, getCwdDefaultModel: () => cwdDefaultModel,
+    getPanelIsExternal: () => Boolean(instancesList.find(i => i.instanceId === viewingInstanceId)?.externalObserved),
+    getMirrorReadonlySid: () => mirrorReadonlySid, getModelsList: () => modelsList,
+    getUltracodeArmed: () => ultracodeArmed, getViewingInstanceId: () => viewingInstanceId,
+    setCurrentEffort: v => { currentEffort = v; },
+    setCurrentGatewaySuffix: v => { currentGatewaySuffix = v; }, setCurrentModel: v => { currentModel = v; },
+    setCurrentPermMode: v => { currentPermMode = v; },
+    setCurrentSessionIdForCopy: v => { currentSessionIdForCopy = v; },
+    setUltracodeArmed: v => { ultracodeArmed = v; },
   });
-
-  // ---- @ 文件引用：与 / 斜杠同款纵向浮层（absolute bottom-full），不再横滑 chips ----
-  // 语义只插相对路径文本，agent 自己 Read；移动端纯触摸点选。
-  // 面板挂在 input 父级（与 #cmdHints 同层），见下方 slash 提示初始化。
-  let atMentionList = null; // 延迟到 slash hints 同批创建
-  let atMentionState = null; // { matchStart } —— 当前触发态；null=未触发
-  let atMentionReqId = 0;    // 每次触发/取消自增；files:search ack 里比对，迟到结果直接丢弃
-  let atMentionDebounceTimer = null;
-
-  function hideAtMentionList() {
-    atMentionState = null;
-    atMentionReqId++;
-    if (atMentionDebounceTimer) { clearTimeout(atMentionDebounceTimer); atMentionDebounceTimer = null; }
-    if (atMentionList) { atMentionList.classList.add('hidden'); atMentionList.innerHTML = ''; }
-  }
-  // hideAtMentionList 即关闭 @ 候选（Escape / 选中后）；不再保留未使用的 hideAtMentionChips 别名
-
-  function pickAtMention(path) {
-    if (!atMentionState) return;
-    const cursor = inputEl.selectionStart ?? inputEl.value.length;
-    const { text, cursorPos } = applyAtMentionPick(inputEl.value, { matchStart: atMentionState.matchStart, cursorPos: cursor, path });
-    inputEl.value = text;
-    hideAtMentionList();
-    inputEl.focus();
-    inputEl.setSelectionRange(cursorPos, cursorPos);
-    autosize();
-    updateSendButtonState();
-  }
-
-  function renderAtMentionList(paths, { emptyHint = '' } = {}) {
-    if (!atMentionList) return;
-    // 与 / 互斥：出文件列表时收起斜杠提示（hints 在下方初始化，调用时已就绪）
-    document.getElementById('cmdHints')?.classList.add('hidden');
-    atMentionList.innerHTML = '';
-    if (!paths?.length) {
-      if (emptyHint) {
-        atMentionList.innerHTML = `<div class="px-3 py-2 text-xs text-ink-faint" data-testid="at-mention-empty">${esc(emptyHint)}</div>`;
-        atMentionList.classList.remove('hidden');
-      } else {
-        atMentionList.classList.add('hidden');
-      }
-      return;
-    }
-    atMentionList.innerHTML = paths.map(p => {
-      const safe = esc(p);
-      return `<div class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm font-mono truncate" data-testid="at-mention-chip" data-path="${safe}" title="${safe}">${safe}</div>`;
-    }).join('');
-    atMentionList.classList.remove('hidden');
-  }
-
-  function renderAtMentionLoading() {
-    if (!atMentionList) return;
-    document.getElementById('cmdHints')?.classList.add('hidden');
-    atMentionList.innerHTML = `<div class="px-3 py-2 text-xs text-ink-faint" data-testid="at-mention-loading">${esc(t('查找文件…'))}</div>`;
-    atMentionList.classList.remove('hidden');
-  }
-
-  function checkAtMention() {
-    // IME 组字中不触发（避免中文输入半成品误搜）；compositionend 再跑一次
-    if (composing) return;
-    const cursor = inputEl.selectionStart ?? inputEl.value.length;
-    const hit = detectAtMentionQuery(inputEl.value.slice(0, cursor));
-    if (!hit) { if (atMentionState) hideAtMentionList(); return; }
-    atMentionState = { matchStart: hit.matchStart };
-    if (atMentionDebounceTimer) clearTimeout(atMentionDebounceTimer);
-    const reqId = ++atMentionReqId;
-    // 立刻给反馈，避免「打 @ 像没反应」（空 query 也会出候选列表）
-    renderAtMentionLoading();
-    atMentionDebounceTimer = setTimeout(() => {
-      if (!socket?.connected) {
-        if (reqId === atMentionReqId) renderAtMentionList([], { emptyHint: t('未连接，无法搜索文件') });
-        return;
-      }
-      socket.emit('files:search', { cwd: currentCwd, query: hit.query }, res => {
-        if (reqId !== atMentionReqId) return; // 迟到 ack：期间已改 query / 取消触发，丢弃
-        if (!res?.ok) {
-          renderAtMentionList([], { emptyHint: res?.error || t('文件搜索失败') });
-          return;
-        }
-        const paths = Array.isArray(res.paths) ? res.paths : [];
-        renderAtMentionList(paths, {
-          emptyHint: paths.length ? '' : t('无匹配文件'),
-        });
-      });
-    }, 150);
-  }
-  inputEl.addEventListener('input', checkAtMention);
-  inputEl.addEventListener('blur', hideAtMentionList);
+  const {
+    checkAtMention, clearCliUnknownPermissionOption, hints, rebuildCustomModelGrid, rebuildEffortOptions,
+    rebuildPermissionModeUi, setEffortMode, setPermMode, syncDefaultsPillTitle, syncModelGridEmptyHint,
+    syncModelUI, updateModelAndSuffix, updatePillSession,
+  } = composerControls;
 
   // ---- 输入与附件：状态、读取、预览和 DOM 绑定由独立 controller 管理 ----
   const attachments = createAttachmentController(appContext, {
@@ -4214,17 +3929,27 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     createElement: el,
     haptic,
     onChange: updateSendButtonState,
-    scheduleInsetResettle: () => scheduleInsetResettle(),
+    scheduleInsetResettle: () => keyboardInset.scheduleResettle(),
     // CLI 驾驶只读：拒加附件（否则进 tray 却发不出去）；说明走 showMirrorComposerHint。
     canAdd: () => {
       if (!mirrorReadonlySid) return true;
       showMirrorComposerHint();
       return false;
     },
+    isStartScreen: () => messagesEl.classList.contains('empty-start'),
   });
   // E18：气泡附件按需预览——live/历史点击经 browse:read 拉原图，复用托盘灯箱
   const storedPreview = createStoredPreviewLoader(appContext, {
     addBar,
+    openPreviewUrl: (name, url) => attachments.openPreviewUrl(name, url),
+  });
+  // 会话里的图片（工具截图、用户贴图）：引用 → 缩略图，经 image:get 按需取，点开复用同一个灯箱
+  const transcriptImages = createTranscriptImages(appContext, {
+    createElement: el,
+    openPreviewUrl: (name, url) => attachments.openPreviewUrl(name, url),
+  });
+  // 桌面端 show_widget 图表：SVG 当图片插在工具卡后面，点开复用同一个灯箱（live / 历史两路共用）
+  const widgets = createWidgetRenderer({
     openPreviewUrl: (name, url) => attachments.openPreviewUrl(name, url),
   });
 
@@ -4256,62 +3981,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     for (const a of atts) wrap.appendChild(buildAttachmentNode(a));
     return wrap;
   }
-  // ---- 斜杠命令提示 + @ 文件引用列表（同款纵向浮层，互斥显示）----
-  const hints = el(`<div id="cmdHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)" data-testid="cmd-hints"></div>`);
-  atMentionList = el(`<div id="atMentionHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)" data-testid="at-mention-chips"></div>`);
-  inputEl.parentElement.style.position = 'relative';
-  inputEl.parentElement.appendChild(hints);
-  inputEl.parentElement.appendChild(atMentionList);
-  // mousedown 防 blur 清空列表（点选行时 input 不失焦）
-  atMentionList.addEventListener('mousedown', e => e.preventDefault());
-  atMentionList.addEventListener('click', e => {
-    const row = e.target.closest?.('[data-path]');
-    if (row?.dataset?.path) pickAtMention(row.dataset.path);
-  });
-  // 前端本地拦截命令（不透传后端），并入提示列表
-  const LOCAL_COMMANDS = ['model', 'rewind'];
-
-  inputEl.addEventListener('input', () => {
-    const val = inputEl.value;
-    if (val) hidePromptSuggestion(); // 用户已经在写自己的了，建议就该让位
-    if (val.startsWith('/')) {
-      hideAtMentionList(); // 与 @ 互斥
-      // terminal 绑定命令（/color /statusline 这类）不进手机补全菜单——判据由 SDK 下发，
-      // 不是本地黑名单。只隐藏菜单项，手输仍照常透传给 CLI（见 buildSlashCommandHints 头注）。
-      const matches = buildSlashCommandHints({
-        commands: window.availableSkills || [],
-        terminalCommands: window.terminalSlashCommands || [],
-        localCommands: LOCAL_COMMANDS,
-        prefix: val.slice(1),
-      });
-      if (matches.length > 0) {
-        hints.innerHTML = matches.map(cmd => {
-          const safe = esc(cmd);
-          return `<div class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm font-mono" data-cmd="/${safe}">/${safe}</div>`;
-        }).join('');
-        hints.classList.remove('hidden');
-      } else {
-        hints.classList.add('hidden');
-      }
-    } else {
-      hints.classList.add('hidden');
-    }
-    autosize();
-  });
-
-  hints.addEventListener('click', e => {
-    const cmd = e.target.dataset.cmd;
-    if (cmd) { inputEl.value = cmd + ' '; inputEl.focus(); hints.classList.add('hidden'); autosize(); }
-  });
-  document.addEventListener('click', e => {
-    if (!hints.contains(e.target) && e.target !== inputEl) hints.classList.add('hidden');
-    if (atMentionList && !atMentionList.contains(e.target) && e.target !== inputEl) hideAtMentionList();
-    // 点抽屉外面任意处 = 收抽屉。通用确认 sheet（z-50，盖在抽屉之上）不算「外面」：从抽屉里发起的
-    // 确认（长按标为未读 / 🗑 删除）答完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。
-    const insideConfirmSheet = Boolean(e.target.closest?.('#confirmModal'));
-    if (!leftSidebar.classList.contains('-translate-x-full') && !leftSidebar.contains(e.target) && !btnSessions.contains(e.target) && !(topContextPill && topContextPill.contains(e.target)) && !insideConfirmSheet && e.target.isConnected)
-      closeLeftSidebar();
-  });
   const SEND_ICON_HTML = `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>`;
   const STOP_ICON_HTML = `<span class="btn-send-stop-icon" aria-hidden="true"></span>`;
   let _btnSendMode = null; // 仅 mode 变化时换图标，避免按键 thrash
@@ -4328,7 +3997,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       turnRunning: _turnRunning,
       hasContent,
       interruptPending: interruptPendingByInstance.has(viewingInstanceId),
-      blockedByUserRequest: approvals.hasPending(),
+      blockedByUserRequest: approvals.hasPending() || elicitationSheet.hasPending(),
       blockedByDisabledInput: inputEl.disabled,
       blockedBySendInFlight: socket.connected && _sendInFlightSessionIds.has(displayedSessionId),
       mirrorReadonly: Boolean(mirrorReadonlySid),
@@ -4399,6 +4068,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       mirrorReadonly: Boolean(mirrorReadonlySid),
     });
     hint.classList.toggle('hidden', !show);
+    // 视觉 "/ · @" 仍 aria-hidden（碎读无益）；空聚焦时把可发现性写进 textarea aria-description（#370）。
+    // 不走 aria-live：聚焦/失焦各改一次即可，避免与 #379 的刷屏顾虑冲突。
+    hint.setAttribute('aria-hidden', 'true');
+    const desc = resolveComposerDiscoverAriaDescription({ show });
+    if (desc) inputEl.setAttribute('aria-description', desc);
+    else inputEl.removeAttribute('aria-description');
   }
 
   // 下一步建议条：每轮收尾后 server 推来一条（prompt_suggestion），点一下把整句填进输入框。
@@ -4481,302 +4156,24 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (!interruptPendingByInstance.has(instanceId)) return;
       clearInterruptPending(instanceId);
       // 只在仍看着这个会话时提示——若已切走，超时是别的（此刻无关）会话的事，不该冒到当前视图上
-      if (instanceId === viewingInstanceId) addBar(t('停止请求超时，可再试一次'), 'text-ink-faint');
+      if (instanceId === viewingInstanceId) {
+        const msg = t('停止请求超时，可再试一次');
+        addBar(msg, 'text-ink-faint');
+        // #371：审批/提问浮层开着时，超时原因写进浮层（addBar 会被 z-40 挡住）
+        approvals.surfaceError(msg);
+      }
     }, INTERRUPT_PENDING_TIMEOUT_MS);
     socket.emit('user:interrupt', { instanceId }); // 台阶3：中断当前查看 tab 的在途任务
+    // 停止 = 不想接着跑：这个会话排着的离线条目不再自动发，退回手动「重发」（O66）
+    outboxAfterTurn.cancelTarget({ instanceId, sessionId: instancesList.find(x => x.instanceId === instanceId)?.sessionId ?? null });
   }
 
   if (btnStop) btnStop.onclick = requestInterrupt;
 
-  // ---- 权限档切换：清单 = SDK PermissionMode（SDK_PERMISSION_MODES / 后端 CCM_PERMISSION_MODES）----
-  // 磁贴与 hidden select 均由 rebuildPermissionModeUi 动态填充，禁止 HTML 写死档位。
-  // 文案 = CLI/桌面英文原名（Manual / Accept edits / …），不走 t()/i18n——与终端等价。
-  // setPermMode 仅由 init/permission_mode 服务端事件驱动（权威回执，函数声明有提升），onchange 不再
-  // 乐观调用——故上屏的系统条 = 服务端已确认切换。程序设 select.value 不触发 onchange，无回声循环。
-  const _permTileSpecs = permissionModeTileSpecs();
-  const PERM_LABEL = Object.fromEntries(_permTileSpecs.map(s => [s.id, s.bar]));
-  const PERM_PILL_LABEL = Object.fromEntries(_permTileSpecs.map(s => [s.id, s.pill]));
-
-  function rebuildPermissionModeUi() {
-    const specs = permissionModeTileSpecs();
-    if (permModeSelect) {
-      const prev = permModeSelect.value;
-      permModeSelect.innerHTML = '';
-      for (const s of specs) {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = s.selectLabel; // CLI 原名，不 t()
-        permModeSelect.appendChild(opt);
-      }
-      if (prev && specs.some(s => s.id === prev)) permModeSelect.value = prev;
-      else if (specs[0]) permModeSelect.value = specs[0].id;
-    }
-    if (customPermGrid) {
-      customPermGrid.innerHTML = '';
-      for (const s of specs) {
-        const dangerCls = s.danger ? ' text-danger' : '';
-        const titleCls = s.danger ? 'text-danger' : 'text-ink';
-        const descCls = s.danger ? 'text-red-500/80' : 'text-ink-soft';
-        // 元素是 <button> 而不是套了 class 的 <div>：这六张里有一张是 Bypass permissions
-        // （绕过全部权限检查），而 div 版本 Tab 走不到、辅助技术不认得是控件、也读不出当前选的是哪档
-        // （2026-08-26 探索性测试 VC-D4-03 实测：role/tabindex/aria-pressed 全为 null）。
-        // 用原生 button 而不是 div+role+tabindex+键盘处理：焦点、Enter/Space 激活、焦点环全部白送，
-        // 且下面那个 click 委托（closest('.perm-tile')）一行都不用改。
-        // aria-pressed 是这组按钮的「选中态」——单选语义靠它播报，样式那圈 ring 只有看得见的人能用。
-        const card = el(`
-          <button type="button" data-mode="${esc(s.id)}" aria-pressed="false" class="perm-tile w-full text-left p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all${dangerCls}">
-            <div class="text-xs font-semibold ${titleCls} leading-snug">${esc(s.title)}</div>
-            <div class="text-[11px] ${descCls} mt-0.5 leading-snug line-clamp-2">${esc(s.desc)}</div>
-          </button>
-        `);
-        customPermGrid.appendChild(card);
-      }
-      // 重建后按当前档重画选中框
-      if (currentPermMode) setPermMode(currentPermMode, true);
-    }
-  }
-  rebuildPermissionModeUi();
-
-  function clearCliUnknownPermissionOption() {
-    permModeSelect?.querySelector('option[data-cli-observed-unknown]')?.remove();
-  }
-  // ---- 底栏会话档摘要 chip title（与 compose 页 formatComposeDefaultsSummary 同源）----
-  // 三段文案由 setPermMode / setEffortMode / syncModelUI 各自维护 pillXxxText；title 只拼不另算，
-  // 避免 CLI 镜像 / 网关别名边上两套文案漂移。
-  function syncDefaultsPillTitle() {
-    if (!pillDefaults) return;
-    const summary = formatComposeDefaultsSummary({
-      modelLabel: (pillModelText?.textContent || '').trim(),
-      modeLabel: (pillPermText?.textContent || '').trim(),
-      effortLabel: pillEffort?.classList.contains('hidden')
-        ? ''
-        : (pillEffortText?.textContent || '').trim(),
-    });
-    pillDefaults.title = summary || t('会话设置');
-  }
-
-  function setPermMode(mode, silent = false) {
-    if (!permModeSelect || !mode) return;
-    clearCliUnknownPermissionOption();
-    if (!silent && permModeSeen && mode !== currentPermMode) {
-      // UX-019：空态不打条（胶囊高亮）；有消息后保留「权限档 → X」留痕
-      addModeBar(`${t('权限档 →')} ${PERM_LABEL[mode] || mode}`,
-        mode === 'bypassPermissions' ? 'text-danger' : 'text-ink-faint');
-    }
-    permModeSeen = true;
-    currentPermMode = mode;
-    permModeSelect.value = mode;
-    const danger = mode === 'bypassPermissions';
-    permModeSelect.classList.toggle('ring-1', danger);
-    permModeSelect.classList.toggle('ring-danger', danger);
-    permModeSelect.classList.toggle('text-danger', danger);
-
-    // Sync Pill Display Text（CLI 英文档名；Bypass 仅权限段标红，非整颗 chip）
-    if (pillPermText) {
-      pillPermText.textContent = PERM_PILL_LABEL[mode] || mode;
-      const tone = pillPermTone(mode);
-      pillPermText.classList.toggle('text-danger', tone === 'danger');
-      pillPermText.classList.toggle('pill-perm-plan', tone === 'plan');
-    }
-
-    // Sync Custom Perm Tiles Selection Styling
-    if (customPermGrid) {
-      customPermGrid.querySelectorAll('.perm-tile').forEach(tile => {
-        const isCurrent = tile.dataset.mode === mode;
-        // 选中态有两条通道，必须一起更新：ring 那圈给看得见的人，aria-pressed 给读屏。
-        // 只改样式的话，辅助技术用户读到的是六个一模一样的按钮、无从知道当前在哪一档。
-        tile.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
-        if (isCurrent) {
-          tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
-          const title = tile.querySelector('.text-xs');
-          if (title) title.classList.add('text-accent');
-        } else {
-          tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
-          const title = tile.querySelector('.text-xs');
-          if (title) title.classList.remove('text-accent');
-        }
-      });
-    }
-    syncDefaultsPillTitle();
-    if (_composeReady) refreshComposeDefaultsSummary();
-  }
-  permModeSelect.onchange = async () => {
-    // 单驾驶员：终端驾驶中（只读锁）设置一并冻结——权限档实际只作用于 web 自己的实例、碰不到终端进程，
-    // 此刻切档只会造成「我切了怎么终端没变」的误解；接管后再调。拨回 select 防 UI 与实际档漂移。
-    if (mirrorReadonlySid) { permModeSelect.value = currentPermMode; addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
-    const mode = permModeSelect.value;
-    if (mode === currentPermMode) return;
-    // bypass 二次危险确认（终端等价：终端首次 bypass 亦需确认）；取消则回退 select
-    if (mode === 'bypassPermissions' &&
-        !(await appConfirm({
-          title: t('⚠️ 切到 bypass（跳过所有审批）'),
-          body: t('claude 将无需确认即可改文件、跑命令；一次提示注入即可波及整台机器。'),
-          okText: t('开启 bypass'),
-          tone: 'danger',
-        }))) {
-      permModeSelect.value = currentPermMode;
-      return;
-    }
-    socket.emit('user:setPermissionMode', { mode });
-    // 不乐观更新：等 server 广播 permission_mode（成功回执，毫秒级）驱动 setPermMode 拨档 + 上屏；
-    // 失败则 agent 发 error 红条且不广播，下轮 init 拨回 select
-  };
-
-  // ---- 思考强度切换（CLI /effort：五档 + ultracode + auto；切档=实例置换、下条消息生效）----
-  // setEffortMode 仅由 effort_mode 服务端事件驱动（成功回执广播 / 拒切拨回单发），onchange 不乐观更新。
-  // 后端可直接回 level=ultracode（Settings.ultracode 会话 flag），不再靠本地「只武装不重建」偷换。
-  function setEffortMode(level, silent = false) {
-    if (!effortSelect) return;
-    const val = level || null; // 空串/undefined 归一为 null（没指定：CLI 按 settings / 模型默认继承）
-    ultracodeArmed = val === 'ultracode';
-    if (!silent && effortSeen && val !== currentEffort) {
-      addModeBar(`${t('思考强度 →')} ${val || t('CLI 默认')}${t('（下一条消息生效）')}`, 'text-ink-faint');
-    }
-    effortSeen = true;
-    currentEffort = val;
-    effortSelect.value = val || '';
-
-    if (pillEffortText) {
-      pillEffortText.textContent = effortUiState(val, [], {
-        mirrorReadonly: Boolean(mirrorReadonlySid),
-        effective: appContext.state.effortEffective,
-      }).label;
-    }
-
-    if (customEffortGrid) {
-      const activeLevel = val || '';
-      customEffortGrid.querySelectorAll('.effort-tile').forEach(tile => {
-        const tileVal = tile.dataset.level || '';
-        const isCurrent = activeLevel === tileVal;
-        if (isCurrent) {
-          tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
-          const title = tile.querySelector('.text-xs') || tile;
-          title.classList.add('text-accent');
-        } else {
-          tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
-          const title = tile.querySelector('.text-xs') || tile;
-          title.classList.remove('text-accent');
-        }
-      });
-    }
-    syncDefaultsPillTitle();
-    if (_composeReady) refreshComposeDefaultsSummary();
-  }
-  // 把当前模型（init.model 规范名）桥接到 models 候选项（取其 supportedEffortLevels）。
-  // 先精确 value 命中；否则 alias↔规范名桥接：剥 [Nm] 上下文后缀，候选别名作为 family 子串落在规范名里、
-  // 且后缀一致（如 claude-opus-4-8[1m] ↔ opus[1m]）。纯从 SDK 列表派生，不硬编码任何模型名。
-  // effort 档位按当前模型动态渲染（CLI/SDK 透传，不硬编码）：决策在 logic.js 的 effortLevelsFor，此处只渲染。
-  // opts.silentClear：仅刷新面板显示、不得触发网络副作用——adoptPanelState 切 tab 查看别的（空闲）实例时传
-  // true。根因：effort 只能在开实例时设定，之后随消息切模型不会跟着清空，二者可脱节而持久化仍非空；
-  // 若在这里无脑 emit user:setEffort(null)，仅仅切一下 tab 查看就会让 server 判定档位不匹配、
-  // 把一个空闲实例用户选好的档位清回 auto，只有真正的模型切换（onchange/tile 点击/`/model`）才该触发它。
-  function rebuildEffortOptions(modelValue, opts) {
-    if (!effortSelect) return;
-    const silentClear = Boolean(opts?.silentClear);
-    const { hidden, levels: baseLevels } = effortLevelsFor(modelValue, modelsList);
-    // xhigh-capable 模型上追加 ultracode 最高档，末位再追加 auto（= 模型默认），顺序同 CLI /effort
-    const show = withAutoTier(withUltracodeTier(baseLevels));
-    // 强度是所选模型的下级：标题挂上模型名，档位才有归属。用 displayName 而非裸 value，
-    // 与模型磁贴主标题同源。空 modelValue（CLI「不 pin」）回落到 cwd 默认/当前模型——部分调用点
-    // 已自带这个回落，这里统一兜一次，免得某条路径漏了就显示成无主的档位。
-    const ownerLabel = modelLabelFor(modelValue || cwdDefaultModel || currentModel, modelsList);
-    if (effortOwnerModel) effortOwnerModel.textContent = ownerLabel;
-    effortOwnerWrap?.classList.toggle('hidden', !ownerLabel);
-    effortOwnerWrap?.classList.toggle('inline-flex', Boolean(ownerLabel));
-    if (hidden) {
-      // 候选明确声明该模型不支持 effort（区别于“当前 CLI 档未知”）：Web 驾驶时把实例档清回
-      // model-default，等服务端 effort_mode 回执再更新 currentEffort；CLI 镜像只读态绝不写回。
-      if (!silentClear && !mirrorReadonlySid && currentEffort !== null) socket.emit('user:setEffort', { level: null });
-      // 连 option 一起清：只置 value 的话，上个模型的候选还留着，随后到达的 effort_mode 回执经
-      // setEffortMode 能把 value 设回其中一档——不支持调档的模型上凭空冒出一个档（CI 上撞过）。
-      effortSelect.innerHTML = '';
-      if (customEffortGrid) customEffortGrid.innerHTML = '';
-      effortRow?.classList.add('hidden');
-      pillEffort?.classList.add('hidden');
-      // 整段不再消失——凭空少一栏用户只会以为界面坏了。就地说明「这个模型没有这档可调」，
-      // 底栏 pill 仍隐藏（确实没有档位可显示，留个空 chip 反而是噪音）。
-      customEffortGroup?.classList.remove('hidden');
-      if (effortUnsupported) {
-        effortUnsupported.textContent = ownerLabel
-          ? `${ownerLabel}${t(' 不支持调节思考强度，按模型默认执行。')}`
-          : t('当前模型不支持调节思考强度，按模型默认执行。');
-        effortUnsupported.classList.remove('hidden');
-      }
-      syncDefaultsPillTitle();
-      return;
-    }
-    effortRow?.classList.remove('hidden');
-    pillEffort?.classList.remove('hidden');
-    customEffortGroup?.classList.remove('hidden');
-    effortUnsupported?.classList.add('hidden');
-
-    // 候选列表只决定「能选什么」，不得改写当前档事实。CLI 镜像拿不到档位时保留 null/未知，
-    // 不能因为候选第一项是 low 就谎报 low；FRESH settings=low 会由服务端明确下发，仍正常选中。
-    const ui = effortUiState(currentEffort, show, {
-      mirrorReadonly: Boolean(mirrorReadonlySid),
-      effective: appContext.state.effortEffective,
-    });
-    effortSelect.innerHTML = '';
-    if (!ui.selected && !ultracodeArmed) {
-      const placeholder = document.createElement('option');
-      placeholder.value = '';
-      placeholder.textContent = ui.placeholder;
-      placeholder.disabled = true;
-      effortSelect.appendChild(placeholder);
-    }
-    for (const lv of show) {
-      const o = document.createElement('option');
-      o.value = lv;
-      o.textContent = lv;
-      effortSelect.appendChild(o);
-    }
-    effortSelect.value = ultracodeArmed ? 'ultracode' : ui.selected;
-
-    if (customEffortGrid) {
-      customEffortGrid.innerHTML = '';
-      const currentVal = ultracodeArmed ? 'ultracode' : (effortSelect.value || '');
-      for (const lv of show) {
-        const active = currentVal === lv;
-        const isUltra = lv === 'ultracode';
-        // UX-014：副文案增量信息，非「思考等级: low」同义反复
-        const sub = effortLevelSubtitle(lv) || (isUltra ? t('xhigh + 多 agent · 最彻底') : '');
-        const lvTile = el(`
-          <div data-level="${esc(lv)}" class="effort-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
-            <div class="text-xs font-semibold ${active ? 'text-accent' : 'text-ink'}">${esc(lv)}</div>
-            ${sub ? `<div class="text-xs text-ink-soft mt-0.5">${esc(sub)}</div>` : ''}
-          </div>
-        `);
-        lvTile.onclick = () => {
-          haptic('tap');
-          effortSelect.value = lv;
-          effortSelect.onchange();
-        };
-        customEffortGrid.appendChild(lvTile);
-      }
-    }
-    // 同步 pill 文案（没指定显「CLI 默认」，已知实际档时带上它）
-    if (pillEffortText) {
-      pillEffortText.textContent = ultracodeArmed ? 'ultracode' : ui.label;
-    }
-    syncDefaultsPillTitle();
-    if (_composeReady) refreshComposeDefaultsSummary();
-  }
-  effortSelect.onchange = () => {
-    // 单驾驶员：终端驾驶中设置冻结（同 permModeSelect.onchange）——effort 切档还会 dispose+重开实例。
-    if (mirrorReadonlySid) { effortSelect.value = currentEffort || ''; addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
-    // 原样发 UI 档（含 ultracode）；server 映射 xhigh+Settings.ultracode 并置换实例。xhigh↔ultracode 也必须重建。
-    // auto 原样发（服务端映射成 effortLevel:null 控制请求）；它不是 null——null 是「没指定」。
-    const uiLevel = effortSelect.value || null;
-    if (uiLevel === currentEffort) return;
-    socket.emit('user:setEffort', { level: uiLevel });
-    // 不做乐观提示：前端预知不了服务端走轻路径（控制请求、不续接会话）还是重路径（dispose+resume），
-    // 而这里唯一能写的文案必然在其中一半场景下说谎。两条路径服务端都有回执——轻路径广播
-    // effort_mode（由 setEffortMode 上屏），重路径先发 system/resuming，失败发红条。
-  };
-
   // ---- 工作目录切换（台阶1：多目录单并发）----
   // basename：路径太长，目录切换器/顶部胶囊只显末段，title 挂全路径兜底重名
-  const baseName = projectDisplayName;
+  // 工作区展示名：子文件夹是「根 › 相对路径」、scratch 目录是「无文件夹」，其余取末段（见 projects-state）
+  const baseName = c => projectsState.labelFor(c);
 
   // 切 tab：静默把顶部面板（权限档/思考强度/模型 select）同步到目标实例的档。上下文恢复显示、
   // 非用户主动切档 → silent=true 不上屏系统条。model 先于 effort（effort 档位按当前模型 rebuildEffortOptions
@@ -4785,12 +4182,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function adoptPanelState(inst) {
     if (!inst) return; // 新会话尚无实例（viewingInstanceId=null）：保持现状不乱跳
     // 始终更新模型显示——即使 inst.model 为 null/空也清掉旧值，防切换工作区时上个区的模型名泄漏
+    if (inst.externalObserved) {
+      modelIntent.reset();
+      mirrorObservedCli = inst.externalObserved;
+      renderCliPanelState();
+      return;
+    }
     const rawModel = inst.model || '';
     updateModelAndSuffix(rawModel);
     const effortModelValue = rawModel || currentModel;
     if (modelInput) {
+      modelIntent.reset(); // 换了会话：上一个会话里点过的模型不是这一个的发送意图
       if (inst.model) {
-        ensureModelOption(currentModel);
+        if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel);
         modelInput.value = currentModel;
         rebuildEffortOptions(effortModelValue, { silentClear: true });
       } else {
@@ -4800,6 +4204,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     setPermMode(inst.permissionMode || 'default', true);
     appContext.state.effortEffective = inst.effortEffective ?? null;
+    appContext.state.effortSource = inst.effortSource ?? null;
     setEffortMode(inst.effort ?? null, true);
     rebuildEffortOptions(effortModelValue, { silentClear: true });
   }
@@ -4834,30 +4239,40 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     syncDefaultsPillTitle();
     permModeSelect?.classList.remove('ring-1', 'ring-danger', 'text-danger');
     customPermGrid?.querySelectorAll('.perm-tile').forEach(tile => {
+      tile.setAttribute('aria-pressed', 'false'); // CLI 模式未知：读屏也不能说某一张选中（#403）
+      // 未选中的底色与标题色要补回来（同 setPermMode）：选中时摘掉了 bg-surface、text-ink；危险档标题恒为 text-danger
       tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
-      tile.querySelector('.text-xs')?.classList.remove('text-accent');
+      tile.classList.add('bg-surface');
+      const title = tile.querySelector('.text-xs');
+      title?.classList.remove('text-accent');
+      if (title && !title.classList.contains('text-danger')) title.classList.add('text-ink');
     });
   }
 
-  function renderCliPanelState() {
+  // keepPickedModel：外部记录可写时点过的模型是发送意图（同 models 回执的 H2），刷新只重画权限与思考强度
+  function renderCliPanelState({ keepPickedModel = false } = {}) {
     const panel = resolvePanelState({
       mirrorReadonly: true,
       observedCli: mirrorObservedCli,
       web: mirrorWebPanelSnapshot,
     });
     const rawModel = panel.model || '';
-    updateModelAndSuffix(rawModel);
-    if (modelInput) {
+    if (!keepPickedModel) updateModelAndSuffix(rawModel);
+    if (modelInput && !keepPickedModel) {
       delete modelInput.dataset.fullModel;
       if (rawModel) {
-        ensureModelOption(currentModel, t('CLI 当前模型'));
+        if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel, t('CLI 当前模型'));
         modelInput.value = currentModel;
+        // 兜底卡是在上面 updateModelAndSuffix → syncModelUI 之后才插进来的：再同步一次，它的选中态（含 aria-pressed）才对（#246 review）
+        syncModelUI(currentModel);
       } else {
         modelInput.value = '';
         if (pillModelText) pillModelText.textContent = t('CLI 模型未知');
         syncDefaultsPillTitle();
         customModelGrid?.querySelectorAll('.model-tile').forEach(tile => {
+          tile.setAttribute('aria-pressed', 'false'); // 界面说不知道，读屏也不能说某一张选中（#246 review）
           tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
+          tile.classList.add('bg-surface'); // 选中时摘掉了（见 syncModelUI），未选中的卡片底要补回来
           const title = tile.querySelector('.text-xs');
           title?.classList.remove('text-accent');
           title?.classList.add('text-ink');
@@ -4865,8 +4280,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
     }
     renderCliPermissionMode(panel.permissionMode);
+    if (pillDefaults) pillDefaults.title = t('外部会话的最近记录；续接后由实际进程确认设置');
     setEffortMode(panel.effort, true);
-    rebuildEffortOptions(rawModel || cwdDefaultModel);
+    rebuildEffortOptions((keepPickedModel ? modelInput?.value : rawModel) || cwdDefaultModel);
   }
 
   function restoreWebPanelState() {
@@ -4955,9 +4371,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   let _canRestart = false; // 由 instances 广播维护，供配置面板判断能否就地重启
 
   function setInstances(p) {
-    availableDirs = Array.isArray(p?.dirs) ? p.dirs : [];
+    perfTrace.mark('instances');
+    projectsState.set(p);
+    availableDirs = projectsState.keys();
+    syncDashNoFolders(); // 首页开着时连上/断开了文件夹：引导跟着广播走，不等下次重画首页
     const prevInstances = instancesList;
     instancesList = Array.isArray(p?.instances) ? p.instances : [];
+    outboxAfterTurn.tick(); // 排队的离线条目：目标会话这一轮结束了就续发下一条（O66）
     // 结算兜底（跨实例）：agent:event 层的 shouldDropAgentEvent 只放行当前查看实例的事件，非当前查看
     // 实例的「停止」结算事件会被丢弃、其 interruptPendingByInstance 挂起态无法经 system(p) 清位。这条
     // instances 广播不受视图过滤，靠它独立探测每个挂起实例是否已不再 busy，及时补清——防止切视图后
@@ -4971,6 +4391,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 非 string（含 null=未探到）归一空 → 切到无默认的 cwd 自动清、不残留上区默认。
     const prevDefaultModel = cwdDefaultModel, prevCurrentModel = currentModel;
     cwdDefaultModel = (typeof p?.defaultModel === 'string') ? p.defaultModel : '';
+    // 本区 settings 禁用了 auto（#461）：变了才重建权限档面板（Auto 置灰并换成原因），先于下面的 setPermMode。
+    const autoModeDisabled = p?.autoModeDisabled === true;
+    if (autoModeDisabled !== (appContext.state.autoModeDisabled === true)) {
+      appContext.state.autoModeDisabled = autoModeDisabled;
+      rebuildPermissionModeUi();
+    }
     // 会话缓存不在这里做失效标记（P3 SWR 保鲜）：populateSubtree 拿缓存秒开渲染的同时恒发一次
     // session:list 刷新，新鲜度由那条响应负责——不需要谁来"标脏"。既不整段清空（避免"清空→骨架屏
     // →等网络往返"连坐重建没变化的目录），也不会因为 id 集合没变就把改名/截断变化漏掉。
@@ -4981,12 +4407,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const newServiceStartedAt = p?.service?.startedAt ?? null;
     const serverRestarted = detectServerRestart({ prevStartedAt: lastServiceStartedAt, newStartedAt: newServiceStartedAt });
     if (newServiceStartedAt != null) lastServiceStartedAt = newServiceStartedAt;
+    // 重启已兑现：撤掉「⟳ 正在重启服务…」那一行，否则它一直挂着、像还没重启完（O87）。
+    const restartBars = serverRestarted ? [...messagesEl.querySelectorAll('[data-restart-pending]')] : [];
+    restartBars.forEach(node => node.remove());
     // 清除④：freshInterrupted 标记的实例从 instances 列表消失（关闭/退出/别处清理），待续档态随之作废。
     if (freshInterruptedInstanceId && !currIds.has(freshInterruptedInstanceId)) {
       freshInterruptedInstanceId = null;
     }
     const newStates = aggregateStates(instancesList, availableDirs); // per-cwd 聚合（permission>busy>done>idle）
     const newViewing = p?.viewingInstanceId ?? null;
+    const oldViewed = prevInstances.find(x => x.instanceId === newViewing);
+    const nextViewed = instancesList.find(x => x.instanceId === newViewing);
+    const recordLocationChanged = Boolean(oldViewed && nextViewed)
+      && (oldViewed.transcriptCwd || oldViewed.cwd) !== (nextViewed.transcriptCwd || nextViewed.cwd);
     const newCwd = p?.viewingCwd ?? null;
     const cwdChanged = cwdSeen && newCwd && newCwd !== currentCwd;
     if (cwdSeen) notifyStateChanges(newStates, newCwd); // 首次只定基线不通知（刷新/重连不冒假通知）
@@ -5008,9 +4441,24 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       armedTakeoverSid = null;
       applyMirror(false, null);
     }
+    // 新会话页停在的文件夹被断开（本机或别的设备）→ 服务端把它归位到别处（O119）：记下从哪来，新会话页重画时说一句。
+    // 只在原来就在新会话页上、旧目录确实已不在任何已连接的文件夹（p.dirs）之下时算——用户自己换文件夹不提示。
+    // 不看展示用的项目清单：「无文件夹」只在用着时、子文件夹只在有会话时才占一节，换走就不在了，那不是被断开
+    // （#330 review P2）。「无文件夹」本来就不是连接来的，单独排除。必须在 currentCwd 覆写之前取。
+    // 「在新会话页上」认 _composeReady，不认 DOM 里有没有 compose-surface：在新会话页上断线发的首条会先挂一个
+    // 等待气泡、把表面顶掉，可这一页仍是新会话页——重连时被归位，那句「已断开」正是这时最要紧（O128）。
+    const connectedRoots = Array.isArray(p?.dirs) ? p.dirs : [];
+    const composeRelocatedFrom = !viewingInstanceId && !newViewing && cwdChanged && currentCwd && _composeReady
+      && !connectedRoots.some(root => isPathWithin(currentCwd, root)) && !projectsState.isNoFolder(currentCwd)
+      ? currentCwd : null;
     currentCwd = newCwd;
+    composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;
+    const viewingChanged = viewingInstanceId !== newViewing;
     viewingInstanceId = newViewing;
+    foregroundTasks.render(); // 「转后台」只跟着当前查看的实例
     cwdSeen = true;
+    // 「宿主机」页开着时查看的会话换了（含别的设备切走）：MCP 卡片立刻按新会话重画（先退回快照、不留旧按钮），再现查（#457 review）
+    if (viewingChanged && generalNav?.currentPage() === 'host') { renderHostEnvSection(); hostMcp.refresh(); }
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）
     if (pendingDeepLink) { const link = pendingDeepLink; pendingDeepLink = null; applyDeepLink(link); } // ②2c：instances 到齐后消费暂存深链
 
@@ -5037,6 +4485,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // canRestart 与 devMode 是两维：devMode 管上面这个常驻按钮组，canRestart 管配置面板
     // 保存成功后要不要给「立即重启」入口（生产 DEV_MODE=0 但被 launchd 托管时应为 true）。
     _canRestart = p?.canRestart === true;
+    // 开发者模式下拉不起来（前台 npm start、容器里没有托管）时按钮照样显示，但点了服务端只会拒绝——
+    // 不给点，并当场说明原因（与配置面板不给「立即重启」同一判据）。
+    if (btnRestartServer) {
+      btnRestartServer.disabled = !_canRestart;
+      btnRestartServer.textContent = _canRestart
+        ? t('⟳ 重启服务（改代码/配置后生效）')
+        : t('⟳ 重启服务：本进程不是常驻托管，停了不会自动拉起，请到电脑上重启');
+    }
     // 短 session_id 状态胶囊：显示当前查看会话的前 8 位；无 id 时收起胶囊并就地说明缺席原因。
     // 两个空态参数在此处求值：实例懒开于首条消息，故「有 newViewing 却无 sid」＝id 分配在途；
     // _pendingFirstSend 覆盖空首页首发到懒开广播回来之间那一瞬（此时 newViewing 仍是 null）。
@@ -5059,7 +4515,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 切视图：viewingInstanceId 变了重载；空首页内换工作区（newViewing 恒 null、cwd 变了）也重渲——
     // 否则 dashboard 工作区名 + 模型 chip 残留上个工作区（本次修复的 bug 正出于此：两个 null 空首页被判为「视图没变」）
     const startScreenCwdChanged = !newViewing && cwdChanged;
-    if (newViewing !== displayedInstanceId || startScreenCwdChanged) {
+    if (newViewing !== displayedInstanceId || startScreenCwdChanged || recordLocationChanged) {
       // 点停止顿一下跳主页（回归修复）：须在 displayedInstanceId 被 bindView 覆写之前判定——
       // prevIds/currIds 是本函数顶部按"这次广播前后的 instancesList"算出的旧/新快照，
       // displayedInstanceId 此刻仍是"切视图前实际绑定在屏幕上的那个实例"（bindView 内部才会覆写它）。
@@ -5079,6 +4535,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const destroyedResume = restartPrevEntry?.sessionId && restartPrevEntry?.cwd
         ? { sessionId: restartPrevEntry.sessionId, cwd: restartPrevEntry.cwd }
         : null;
+      // 进程异常退出：带 processExited 的 error 先到、已按实例（与会话）记下原因（SIGKILL 等），中断面当场写出来（验收 O121）。
+      // 按实例记：进程可能在 init 之前就退出，那时还没有会话 id（#329 review P2）。
+      // 刚切过来 / 重连时那条 error 可能还排在回放缓冲里，接下来的 bindView 会把队列丢掉，先收下来（见 adoptQueued）。
+      const destroyedInstanceId = instanceDestroyed && !destroyedByRestart ? displayedInstanceId : null;
+      const destroyedSid = destroyedInstanceId
+        ? prevInstances.find(x => x.instanceId === destroyedInstanceId)?.sessionId : null;
+      if (destroyedInstanceId) {
+        crashNotices.adoptQueued({ instanceId: destroyedInstanceId, sessionId: destroyedSid, queued: replayBuffer.queued(destroyedInstanceId) });
+      }
+      const destroyedReason = destroyedInstanceId ? crashNotices.reasonFor(destroyedInstanceId) : null;
       const target = instancesList.find(x => x.instanceId === newViewing);
       ultracodeArmed = false;           // ultracode 档不跨实例（CLI: never persist）；切会话/工作区一律回落（含切到空首页 target=null）
       adoptPanelState(target);          // 先静默同步顶部面板到新实例档（先于 bindView 的 sync 回放）
@@ -5090,9 +4556,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (!target && !instanceDestroyed) {
         updateModelAndSuffix(''); if (modelInput) modelInput.value = '';
         setPermMode(p.defaultPermissionMode || 'default', true);
+        appContext.state.effortSource = p.defaultEffortSource ?? null;
         setEffortMode(p.defaultEffort ?? null, true);
       }
-      bindView(target, newViewing, { instanceDestroyed, destroyedByRestart, destroyedResume }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
+      bindView(target, newViewing, { instanceDestroyed, destroyedByRestart, destroyedResume, destroyedReason, composeRelocatedFrom, forceHistoryReload: recordLocationChanged }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
       // bindView 内已按 shouldRestoreOptimisticBusy 补 busy；此处再补一次防 bindView early-return 路径漏补
       // （首发无 sessionId / 同会话 externalDirty·effort 置换）。session:switch 打开已有会话不补。
       if (shouldRestoreOptimisticBusy({
@@ -5126,9 +4593,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 若不在此静默刷新，顶部 mode/effort 会卡在首帧硬默认，直到用户切走再回来。
       // 用户在空窗手改档（L0）时 server 会把 pending 编进 default*，这里幂等对齐权威源即可。
       setPermMode(p.defaultPermissionMode || 'default', true);
+      appContext.state.effortSource = p.defaultEffortSource ?? null;
       setEffortMode(p.defaultEffort ?? null, true);
       // compose 页默认档摘要跟 pill 同源；L3 到齐后就地刷新，避免仍显 L4 硬默认。
       if (_composeReady) refreshComposeDefaultsSummary();
+      // 在首页 / 新会话页点的重启：addBar 插那一行时清掉了空态表面，而这条路不进 bindView——
+      // 撤掉那一行后主区若已空，把空态表面还回来，否则一片空白直到用户手动切走。
+      if (restartBars.length && !messagesEl.children.length) ensureEmptySurface();
     }
     // 视图未变的广播：server 权威 busy 单向对齐（reload 误擦兜底 + 多设备同视图静默窗口）。
     // 只置 true；释放交给 live result（见 shouldBindBusyFromBroadcast 注释）。
@@ -5149,6 +4620,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         forceClearBusyByAuthority(viewedInst);
       }
     }
+    if (nextViewed?.externalObserved && newViewing === displayedInstanceId && !mirrorReadonlySid) {
+      mirrorObservedCli = nextViewed.externalObserved;
+      renderCliPanelState({ keepPickedModel: modelIntent.isPicked() });
+    }
     updateSessionsDot();
     updateServiceNotice(p?.service ?? null); // 服务健康与实例结构无关，无条件每次广播都刷新（不进下方判定分支）
     // P3 性能优化（两层判定，故意不合并——关注点不同）：
@@ -5156,12 +4631,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     //   dirRow 高亮与自动展开）仍走全量重建：低频、全量更简单可靠，不做精细化 diff。
     // ② 其余情况按目录分键 diff（见 logic.js buildDirInstanceSignatures/diffDirSignatures：id/sessionId/
     //   title 前20字），只重建签名真变化的目录子树，未涉及目录的 DOM 原样不动（不撤离滚动位置/侧滑态/
-    //   "显示全部"展开态）——避免重连等场景下无关工作区被连坐重建（P3 抽屉局部重建）。
+    //   "显示更多"展开态）——避免重连等场景下无关工作区被连坐重建（P3 抽屉局部重建）。
     // 状态（busy/idle/permission/error）不进任何一层——由更新后的 workdirStates 驱动 refreshDirBadges
     // 实时刷新角标。expandedDirs 变化由 toggleBtn.onclick 直接调 populateSubtree，不经此路径。
-    const _structuralKey = `${availableDirs.join('|')}|${viewingInstanceId || ''}|${currentCwd || ''}`;
+    const _structuralKey = dirPanelStructuralKey({ dirs: availableDirs, viewingInstanceId, currentCwd });
     const _structuralChanged = _structuralKey !== _lastPanelStructKey;
     _lastPanelStructKey = _structuralKey;
+    const _dirOrderKey = availableDirs.join('|');
+    const _orderChanged = !_structuralChanged && _dirOrderKey !== _lastDirOrderKey;
+    _lastDirOrderKey = _dirOrderKey;
     const _nextDirSignatures = buildDirInstanceSignatures(instancesList, availableDirs);
     const _changedDirs = diffDirSignatures(_lastDirSignatures, _nextDirSignatures);
     _lastDirSignatures = _nextDirSignatures;
@@ -5170,6 +4648,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (isDesktop || isPanelOpen) {
       if (_structuralChanged) {
         openSessionPanel(); // 内含 needsYou/service 区 + 工作区树全量重建，此路径不必再单独 refresh*
+      } else if (_orderChanged) {
+        reorderDirSections(availableDirs); // 纯换序：只挪 DOM 位置，不碰 expandedDirs/不强制展开
+        refreshDirBadges();
+        refreshSessionStatusChips();
+        refreshNeedsYou();
       } else if (_changedDirs.length) {
         rebuildDirSections(_changedDirs); // 只重建真正变化的目录子树，其余目录 DOM 保持原样
         refreshDirBadges();
@@ -5223,7 +4706,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // count：sync:since ack 带回的 unreadOnEntry（第一次为这个会话结算的权威数字）。必须在渲染真正稳定后调用
   // （bindView 的 'keep' 分支直接调用；'load'/'reload' 分支要等 loadHistory 的 onDone 回调），否则
   // topLevelBubbles() 数不全，锚点会算错位置。
+  // 切入会话、渲染稳定后的汇合点（keep / load / reload / 超时 / 重连补同步各分支都在这时调用）：
+  // 先放未读胶囊（锚点按此刻的气泡算），再交还暂存的永久拒收条目——它们写的提示条排在锚点之后。
   function showUnreadPillIfAny(count) {
+    placeUnreadPill(count);
+    deliverOutboxDeadLetters();
+  }
+  function placeUnreadPill(count) {
     hideUnreadPill(); // 先清上一个会话可能残留的胶囊态，防止跨会话串味
     if (!unreadPillEl || !(count > 0)) return;
     const list = topLevelBubbles();
@@ -5285,6 +4774,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     });
   }, { passive: true });
 
+  // ---- 回到最新（#376）：上翻离开底部时出现；状态在 app/scroll-to-bottom.js，不散落顶层 let ----
+  // 与未读胶囊分层：不 emit user:ackUnread、不改应用图标角标；定位相对 #composerFooter 顶边。
+  const scrollToBottomBtn = $('scrollToBottomBtn');
+  const scrollToBottomLabel = $('scrollToBottomLabel');
+  const composerFooterForScrollBtn = $('composerFooter');
+  const scrollToBottom = createScrollToBottomController({
+    buttonEl: scrollToBottomBtn,
+    labelEl: scrollToBottomLabel,
+    messagesEl,
+    composerFooterEl: composerFooterForScrollBtn,
+    countTopLevel: () => topLevelBubbles().length,
+    onJump: () => { haptic('tap'); scrollBottom(true); },
+    isProgrammaticScroll: () => Date.now() < programmaticScrollUntil,
+    // 空首页 / composer 隐藏时不露这颗钮（没有消息流可贴底）。
+    isEnabled: () => Boolean(composerFooterForScrollBtn)
+      && !composerFooterForScrollBtn.classList.contains('hidden')
+      && !messagesEl.classList.contains('empty-start'),
+  });
+
   // aggregateStates 已抽到 logic.js（顶部 import）。
   // 切视图到指定实例（台阶3）：清视图 → sync 活缓冲（重建在途流 + 挂起审批弹窗）→ 无缓冲回退 history。
   // entry 缺失/无 sessionId（新会话尚未 init）= 空白，事件流入自然渲染。
@@ -5340,6 +4848,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function bindView(entry, id, opts = {}) {
     hidePromptSuggestion(); // 建议属于【上一个会话的上一轮】，跟着视图一起走
     hideUnreadPill(); // 无条件先清上一个会话的残留胶囊——含本函数下方提前 return 的空首页/compose 分支，避免悬浮在无关界面上
+    scrollToBottom.reset(); // 同上：回到最新钮不跨会话残留
     // 无条件先丢弃上一个实例的回放缓冲——同 hideUnreadPill：含下方提前 return 的空首页/compose/
     // pendingFirstSend 分支也要清，否则遗留缓冲会静默吞掉那个旧实例后续的实时事件（缓冲一直挂着、
     // 却再没人来 resolve() 它）。真正切入某个会话时 begin() 自身也会 discard，这里是兜底覆盖全分支。
@@ -5354,7 +4863,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     displayedInstanceId = id;
     const sid = entry?.sessionId || null;
     displayedSessionId = sid;
-    const cwd = entry?.cwd || currentCwd || null;
+    const cwd = entry?.transcriptCwd || entry?.cwd || currentCwd || null;
     sessionWorkspaceState.displayedCwd = cwd;
     // 清除①②：切到别的实例/空表面（id 变了），或该实例这一刻已经拿到 sessionId（sid 非空）——
     // 两种情况都意味着"sessionId 未到即被中断"这个待续档态不再适用，须清掉，否则会悬留到下一个
@@ -5366,10 +4875,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // Phase 2: Save DOM nodes of current session to cache before clearing.
     // S1：连同去重基线(lastSeq/epoch)一并缓存——切回时据此「只增量续传缓存之后的新事件」，而非
     // sync:since(0) 全量回放（会与缓存重复，且旧逻辑用 innerHTML='' 清重复时把回放也一起清掉 → 空屏）。
-    if (currentSessionId && !messagesEl.classList.contains('empty-start') && messagesEl.childNodes.length > 0) {
+    // 页面还没绑过任何视图（prevInstanceId 仍是初值 undefined）时，#messages 里的东西不属于任何会话：currentSessionId
+    // 是 localStorage 里上次那个，离线重放的提示又可能先于首次 bindView 写进来——当成它的缓存贴回去，sync:since 就走
+    // 'keep' 不拉历史，整屏只剩那一行（R10 修 O135 时发现，P0-02d11 守着）
+    if (prevInstanceId !== undefined && currentSessionId && !messagesEl.classList.contains('empty-start') && messagesEl.childNodes.length > 0) {
       // strip ephemeral live 行，避免切回会话时把 busy 状态行当历史气泡
       const nodes = stripEphemeralMessageNodes(Array.from(messagesEl.childNodes));
       if (nodes.length === 0) { /* 仅有 ephemeral 时不缓存空壳 */ }
+      // #307：历史还没落地（加载卡＝回执在途；提示条带 data-history-pending＝分块没画完或半路停了）时不存，该会话的旧缓存也作废。
+      // 存下来的话，切回或同会话换实例时会原样贴回，sync:since 判 'keep' 不再拉历史，屏幕就停在加载卡或只有提示条
+      else if (messagesEl.querySelector('#historyLoadingCard, [data-history-pending]')) sessionDomCache.delete(currentSessionId);
       else sessionDomCache.set(currentSessionId, { nodes, lastSeq, epoch: curEpoch, instanceId: prevInstanceId });
       // 最多 8 棵完整 DOM 树：长会话 tool 卡很重，40 在中低端机易顶 RAM
       if (sessionDomCache.size > 8) {
@@ -5384,7 +4899,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       text: inputEl ? inputEl.value : '',
       attachments: attachments.items(),
     };
-    clearView(sid, null);
+    clearView(sid, null, { prevSessionId });
     // 未发送草稿（文字+附件）按 draftKeyFor 的槽存/取：同一表面静默换实例(keep)不动；真实切换(swap)存旧恢复新。
     // 旧逻辑只 clear 不存 → 切走再切回输入/附件被清空（用户报告）。
     applySessionDraftSwap(prevSessionId, sid, draftSnapshot, { prevCwd, newCwd: cwd });
@@ -5428,7 +4943,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       live: shouldSeedBusyFromInstanceState(entry?.state) || entry?.turnRunning === true,
     });
     if (emptySurface === 'destroyed') {
-      showInstanceDestroyedSurface({ byRestart: Boolean(opts.destroyedByRestart), resume: opts.destroyedResume || null });
+      showInstanceDestroyedSurface({ byRestart: Boolean(opts.destroyedByRestart), resume: opts.destroyedResume || null, reason: opts.destroyedReason || null });
       return;
     }
     if (emptySurface === 'home') {
@@ -5436,7 +4951,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       return;
     }
     if (emptySurface === 'compose') {
-      showComposeSurface();
+      showComposeSurface({ relocatedFrom: opts.composeRelocatedFrom || null });
       return;
     }
 
@@ -5454,7 +4969,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     let resumeFromSeq = 0;
     const cached = sid ? sessionDomCache.get(sid) : null;
     const cachePlan = sessionDomCachePlan({ cached, currentInstanceId: id });
-    if (cachePlan.restore) {
+    if (cachePlan.restore && !opts.forceHistoryReload) {
       for (const node of cached.nodes) messagesEl.appendChild(node);
       if (cachePlan.reuseSeqBaseline) {
         curEpoch = cachePlan.epoch;
@@ -5470,6 +4985,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       showLoadingCard();
     }
 
+    // 打开会话埋点：并进刚才那次点击；没有点击的（启动恢复上次会话、同会话换实例）从这里起算
+    const perfOpen = perfTrace.openBind(sid, { note: hasCache ? '有缓存' : '无缓存' });
     // 回放缓冲（P0-REPLAY-BUFFER）：emit 之前先 begin()，期间命中该 instanceId 的 agent:event
     // 先入队不渲染（见上方 socket.on('agent:event', ...)），修「切会话逐条吐消息像打字机」。
     const replayHandle = replayBuffer.begin(id);
@@ -5481,18 +4998,23 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 已切走：丢弃过期回调。显式 discard 本轮 handle——后续 bindView 的 begin/discard 通常已顶替，
       // 但若同一实例被快速 A→B→A 重入，仅靠 displayed 守卫早退而不 resolve，会让中间那批已入队事件
       // 既不 flush 也不推进基线，最终被第三次 begin 无声丢掉。
-      if (displayedInstanceId !== id) {
+      if (displayedInstanceId !== id || drivingCwdOf(id) !== cwd) {
         replayBuffer.resolve(replayHandle, 'discard');
         return;
       }
+      // 点击时并行发出的那份历史（见 history-prefetch.js）：凭这次打开认领，不管下面走哪条分支都先取走。
+      // 只有 'load' 分支用得上：它不清屏，sync:since 读盘之后、这个 ack 之前推来的增量已经画在视图里，
+      // 预取那份虽然不含它，也不会丢。'reload' 分支要先 clearView，那条增量被清掉，预取里又没有，只能重新拉。
+      const prefetched = historyPrefetch.take({ open: perfOpen, sessionId: sid, cwd: entry.transcriptCwd || entry.cwd });
       if (err) {
         // 超时/断线：这个 ack 不会来了。有 sid → 与下面 'load' 分支同款转拉磁盘历史（loadHistory
         // 自带 15s 超时与 err 清理，连接还活着即自愈；resolve('reload') 把续传基线推进到缓冲尾，
         // 历史不占 seq、不会重复）。无 sid → 磁盘上无从补拉，缓冲就是唯一内容：flush 渲染 + 收
         // 加载卡，宁可残缺不可白等（同 decideTimeoutAction 的取舍）。unreadOnEntry 随 ack 丢失，按 0。
+        perfTrace.openStep(perfOpen, 'sync', { note: '超时或断线' });
         if (sid) {
           replayBuffer.resolve(replayHandle, 'reload');
-          loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(0));
+          loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(0), perfOpen);
         } else {
           replayBuffer.resolve(replayHandle, 'flush');
           hideLoadingCard();
@@ -5504,7 +5026,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       //   'load'   无缓存、聊天区空 → 拉磁盘首次填充（不必清屏）；
       //   'reload' gap（缓冲超窗残缺）或磁盘被外部写长（web 离开期间终端 CLI 写盘的盲区）→ 清屏全量重载磁盘；
       //   'keep'   缓存/活缓冲即最新真相 → 直接收尾，保留 DOM 秒恢复。
-      const action = shouldReloadOnEnter({
+      const action = opts.forceHistoryReload ? 'load' : shouldReloadOnEnter({
         replayed: res?.replayed, gap: res?.gap, hasCache,
         diskLen: res?.diskLen ?? 0, diskExternalLen: res?.diskExternalLen ?? 0,
         seenDiskLen: seenDiskLenBySession.get(sid) ?? 0,
@@ -5517,6 +5039,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // entry?.state——ack 到达前可能已有更新的 instances 广播）。
       const busy = shouldSeedBusyFromInstanceState(instancesList.find(x => x.instanceId === id)?.state ?? entry?.state);
       const bufferAction = resolveReplayBufferAction({ bufferedCount: replayBuffer.bufferedCount(id), priorAction: action, busy, hasSessionId: Boolean(sid) });
+      // 记下面走的是哪条分支：load / reload 接着等历史回执，keep 到这里就算打开完了
+      perfTrace.openStep(perfOpen, 'sync', { note: action === 'load' ? 'load' : bufferAction === 'reload' ? 'reload' : 'keep' });
       // 未读胶囊：数字随 ack 一次性到达，但 DOM 是否已就绪要看走哪条分支——'load'/'reload' 要等
       // loadHistory 分块渲染真正落地（onDone）才能查 topLevelBubbles()，'keep' 分支 DOM 已稳定可以直接查。
       const unreadOnEntry = res?.unreadOnEntry || 0;
@@ -5524,7 +5048,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 缓冲通常本就空（'load' 只在 server replayed===0 时出现）；仍统一走 resolve('reload') 收尾，
         // 防万一有穿插的实时事件——续传基线前移到缓冲尾，不遗漏、不重复。
         replayBuffer.resolve(replayHandle, 'reload');
-        loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
+        // forceHistoryReload 是 transcript 搬了位置：点击时按行的 cwd 读的那份不作数
+        loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(unreadOnEntry), perfOpen,
+          opts.forceHistoryReload ? {} : { prefetched, diskLen: res?.diskLen, diskTotal: res?.diskTotal });
       } else if (bufferAction === 'reload') {
         // 覆盖两种来源：action 本就是 'reload'（gap/外部写入），或 'keep' 但缓冲攒太多被这层升级——
         // 统一走清屏 + session:history 批量重载（loadHistory/renderHistoryBubbles 本就是一次性 fragment
@@ -5537,7 +5063,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 恢复前移后的基线即可让后续增量从缓冲尾部续。
         const keepSeq = lastSeq;
         const keepEpoch = curEpoch;
-        clearView(sid, null);
+        clearView(sid, null, { prevSessionId: displayedSessionId });
         lastSeq = keepSeq;
         curEpoch = keepEpoch;
         // clearView 内部只补乐观 busy（shouldRestoreOptimisticBusy），不含 state seed——
@@ -5546,7 +5072,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 发送闸同理：clearView 把 _turnRunning 清了，按广播的权威字段重种，否则 reload 后停止钮消失
         if (instancesList.find(x => x?.instanceId === id)?.turnRunning === true) _turnRunning = true;
         showLoadingCard();
-        loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
+        loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(unreadOnEntry), perfOpen);
       } else {
         // flush：缓冲队列（若有）按到达顺序正常派发（走原 handler 增量渲染），抑制中间滚动，派发完
         // 只做一次强制落底（resolveReplayBufferAction 内部处理，见 createReplayBuffer flushQueue）。
@@ -5558,10 +5084,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 视图会停留在旧底部附近，直到某条补发事件恰好触发滚动。flushQueue 已在缓冲非空时做过一次
         // 强制落底，这里是冗余但无害的兜底（replayed=0/缓冲为空时仍需要它独立生效）。
         if (shouldForceScrollAfterReplay({ action, replayed: res?.replayed })) scrollBottom(true);
+        perfTrace.openEnd(perfOpen, 'keep');
       }
       // 状态对账：视图已稳定（上面所有 clearView 已执行完）→ 用 ack 带回的快照重建未决审批/提问卡片。
       // 放最后而非提前 socket.emit，正为不被 reload 分支的 clearView 清掉（workflow 高频事件常触发 gap）。
-      applyPendingSnapshot(res?.pending);
+      applyPendingSnapshot(res?.pending, id);
+      // 'keep' 分支的卡是从 sessionDomCache 放回的，这里视图已稳定，按手里的前台任务快照把「后台运行」挂回去
+      foregroundTasks.render();
     });
   }
 
@@ -5579,612 +5108,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
   }
 
-  // 抽屉主状态只保留三种 kind：需要你 / 出错 / 运行中。目录角标和顶部点用三态原文；
-  // 会话行 busy 在 CLI 干活时写成「终端运行中」，来源不再塞进副行。
-  // 注意：这张表是 resolveDrawerStatus 的**渲染侧白名单**——appendSessionStatusChip 拿不到 meta
-  // 就直接 return。给纯函数加了新状态却漏了这里，chip 会静默不显示（判据全绿、界面照旧）。
-  const DRAWER_STATUS_META = {
-    busy: { icon: 'busy', tone: 'text-accent', label: tk('运行中') },
-    permission: { icon: 'warn', tone: 'text-warning', label: tk('需要你') },
-    // 与 Web 侧 permission 同色（都是"要人动手"），文案区分谁能处理它
-    terminal_waiting: { icon: 'warn', tone: 'text-warning', label: tk('终端需要你') },
-    error: { icon: 'error', tone: 'text-danger', label: tk('出错') },
-    // 中性色不是随手选的：warning 这一档在本产品里专指「点一下就能处理」的待办（宪法里
-    // 「需要你(N)」那条轴），而被后台 agent 占用恰恰是【处理不了】——手机上点它只会被拒。
-    // 用 warning 会让它去抢待办的注意力预算，最后是真正要人批的审批被淹掉。
-    bg_locked: { icon: 'warn', tone: 'text-ink-faint', label: tk('后台占用') },
-  };
-  function drawerStatusMeta(state) {
-    const meta = DRAWER_STATUS_META[state];
-    return meta ? { ...meta, label: t(meta.label) } : null;
-  }
-  function drawerStateForDir(cwd) {
-    return resolveDrawerStatus({
-      liveState: workdirStates[cwd],
-      terminalState: terminalStateByDir.get(cwd) ?? null,
-    });
-  }
-  function applyBadge(badge, state) {
-    const meta = drawerStatusMeta(state);
-    if (meta) {
-      badge.className = `dir-badge drawer-status-chip ml-auto shrink-0 ${meta.tone}`;
-      badge.textContent = meta.label;
-      badge.title = meta.label;
-      badge.setAttribute('aria-label', meta.label);
-      badge.classList.remove('hidden');
-    } else {
-      badge.textContent = '';
-      badge.className = 'dir-badge hidden';
-      badge.title = '';
-      badge.removeAttribute('aria-label');
-    }
-  }
-  function appendSessionStatusChip(head, liveState, terminalState, terminalSource = null, bgLocked = false) {
-    head.querySelector('[data-session-status]')?.remove();
-    const spec = resolveDrawerStatusChip({ liveState, terminalState, terminalSource, bgLocked });
-    const meta = spec ? DRAWER_STATUS_META[spec.status] : null;
-    if (!spec || !meta) return;
-    const label = t(spec.label);
-    const chip = el(`<span data-session-status class="drawer-status-chip shrink-0 ${meta.tone}"></span>`);
-    chip.textContent = label;
-    chip.title = label;
-    chip.setAttribute('aria-label', label);
-    head.appendChild(chip);
-  }
-  // "已等待"文案（与 needsYouList 共享 waitingSince 数据源）：按分钟粒度，不做秒级实时动画——
-  // 该区块只在 instances 广播到达时重渲（同 refreshNeedsYou 触发时机），文案本就是"上次广播时刻"的快照。
-  function formatWaitingDuration(waitingSince) {
-    if (typeof waitingSince !== 'number') return '';
-    const mins = Math.max(0, Math.floor((Date.now() - waitingSince) / 60000));
-    if (mins < 1) return t('已等待 <1 分钟');
-    if (mins < 60) return `${t('已等待')} ${mins} ${t('分钟')}`;
-    const h = Math.floor(mins / 60), m = mins % 60;
-    return `${t('已等待')} ${h} ${t('小时')}${m ? ' ' + m + ' ' + t('分钟') : ''}`;
-  }
-  // 单条"需要你"行：点击深链跳转（复用 applyDeepLink，同通知点击的落地逻辑）。
-  // 全程 textContent 插值动态数据（title/cwd/toolName 均可能含用户数据）→ CSP 安全，同现有行渲染惯例。
-  function needsYouRow(item) {
-    const isApproval = item.reason === 'awaiting_approval';
-    const row = el(`<button class="w-full flex items-center gap-2 pl-3 pr-3 py-2 border-b border-line-soft border-l-2 border-warning text-left hover:bg-sunk/30 active:opacity-70 bg-surface" data-testid="needs-you-row"></button>`);
-    const icon = el(`<span class="shrink-0"></span>`);
-    icon.textContent = isApproval ? '⚠️' : '❓';
-    row.appendChild(icon);
-    const body = el(`<div class="flex-1 min-w-0"></div>`);
-    const head = el(`<div class="truncate text-xs font-medium text-ink"></div>`);
-    head.textContent = item.title || t('新会话');
-    const sub = el(`<div class="truncate text-[10px] text-ink-faint"></div>`);
-    const reasonLabel = isApproval ? t('等待审批') : t('等待输入');
-    const toolSuffix = isApproval && item.toolName ? `（${item.toolName}）` : '';
-    sub.textContent = `${baseName(item.cwd)} · ${reasonLabel}${toolSuffix} · ${formatWaitingDuration(item.waitingSince)}`;
-    body.appendChild(head);
-    body.appendChild(sub);
-    row.appendChild(body);
-    row.onclick = () => {
-      haptic('tap');
-      applyDeepLink({ instanceId: item.instanceId, sessionId: item.sessionId, cwd: item.cwd });
-    };
-    return row;
-  }
-  // 顶部"需要你(N)"聚合区（AttentionDeriver）：needsYouList 已由 setInstances 按 waitingSince
-  // 升序排好（等得越久排越前，已决），此处只负责渲染，不重排序。空列表渲染空壳（hidden），
-  // 保持 #needsYouSection 锚点常在，refreshNeedsYou 的 querySelector 才总能找到替换目标。
-  function buildNeedsYouSection() {
-    const section = el(`<div id="needsYouSection"></div>`);
-    if (!needsYouList.length) { section.classList.add('hidden'); return section; }
-    const header = el(`<div class="px-3 py-1.5 text-[10px] font-semibold text-warning border-b border-line"></div>`);
-    header.textContent = `${t('需要你')} (${needsYouList.length})`;
-    section.appendChild(header);
-    for (const item of needsYouList) section.appendChild(needsYouRow(item));
-    return section;
-  }
-  // 面板开着时刷新"需要你"区（不重建整个面板）：needsYou 变化（新增/清除审批或提问）不改变 dirs/实例集，
-  // 不会触发结构性变化或目录签名变化 → openSessionPanel/rebuildDirSections 都不会被调用，须独立刷新
-  // （同 refreshDirBadges/refreshSessionStatusChips 的定位）。
-  // 面板尚未渲染过（#needsYouSection 不存在）时跳过——首次 openSessionPanel 会用当下 needsYouList 建好。
-  function refreshNeedsYou() {
-    const old = sessionPanel.querySelector('#needsYouSection');
-    if (!old) return;
-    old.replaceWith(buildNeedsYouSection());
-  }
-  // "服务"小节：与"需要你"聚合故意保持视觉分隔——放在需要你之后、目录列表之前，
-  // 避免看起来像"更多同类待办"（两条轴论证依据不同，见 updateServiceNotice 注释）。
-  // 仅异常时渲染（空数组=一切正常，section 直接 hidden），锚点 #serviceSection 常在同 needsYouSection 惯例。
-  // 抽屉不再放 live 实例汇总/状态图例——状态只活在需要你、行角标、主聊天面、底栏。
-  function buildServiceSection() {
-    const section = el(`<div id="serviceSection"></div>`);
-    const notices = formatServiceNotices({ service: latestServiceHealth, now: Date.now() });
-    if (!notices.length) { section.classList.add('hidden'); return section; }
-    const wrap = el(`<div class="px-3 py-1.5 text-[10px] font-semibold text-warning border-b border-line flex flex-col gap-0.5"></div>`);
-    for (const line of notices) {
-      const row = el(`<div></div>`);
-      row.textContent = line; // 动态文案，textContent 插值同现有行渲染惯例（CSP 安全）
-      wrap.appendChild(row);
-    }
-    section.appendChild(wrap);
-    return section;
-  }
-  function refreshServiceSection() {
-    const old = sessionPanel.querySelector('#serviceSection');
-    if (!old) return;
-    old.replaceWith(buildServiceSection());
-  }
-  // 顶栏会话按钮右下角标。判定在 resolveHeaderConnBadge（断开 > 需要你 > 隐藏）。
-  // 首连中不点亮，避免开页闪红。服务健康（推送失败等）不进这条轴——它归抽屉「服务」小节
-  // 与服务状态面板，不与「点一下就能推进」的待办抢顶栏那唯一的位子。
-  function updateAttentionSignal() {
-    if (!connDotWrap) return;
-    const { level } = whatNeedsAttention({
-      instances: instancesList,
-      needsYou: needsYouList,
-    });
-    const spec = resolveHeaderConnBadge({
-      connected: connBanner.isConnected(),
-      everConnected: connBanner.hasEverConnected(),
-      attentionLevel: level,
-      needsYouCount: needsYouList.length,
-    });
-    connDotWrap.dataset.conn = spec.conn;
-    connDotWrap.dataset.reason = spec.reason;
-    connDotWrap.title = spec.title;
-    if (connDot) {
-      const fill = spec.tone === 'warning' ? 'bg-warning' : 'bg-danger';
-      connDot.className = `w-2 h-2 rounded-full ${fill} shrink-0`;
-    }
-    connDotWrap.classList.toggle('hidden', !spec.visible);
-    updateHeaderAttentionChip();
-  }
-  function updateTerminalStateForDir(cwd, sessions, terminalBusy, terminalWaiting) {
-    // 新服务端给出完整 registry 的 cwd 汇总，避免默认分页漏掉页外的条目；旧服务端回落当前返回行。
-    const rowHas = state => Array.isArray(sessions) && sessions.some(s => s?.terminal === state);
-    const busy = typeof terminalBusy === 'boolean' ? terminalBusy : rowHas('busy');
-    const waiting = typeof terminalWaiting === 'boolean' ? terminalWaiting : rowHas('waiting');
-    // 等人 > 在跑：目录行只有一个角标位，卡在审批上的那个才是要用户动手的
-    const next = waiting ? 'waiting' : busy ? 'busy' : null;
-    const prev = terminalStateByDir.get(cwd) ?? null;
-    if (next === prev) return;
-    if (next) terminalStateByDir.set(cwd, next);
-    else terminalStateByDir.delete(cwd);
-    refreshDirBadges();
-    updateSessionsDot();
-  }
-  // 面板开着时仅更新已渲染目录行的文字状态（不重发 session:list）
-  function refreshDirBadges() {
-    sessionPanel.querySelectorAll('[data-dir]').forEach(row => {
-      const badge = row.querySelector('.dir-badge');
-      if (badge) applyBadge(badge, drawerStateForDir(row.dataset.dir));
-    });
-  }
-  // 初次绘制和 instances 增量广播共用同一个状态 resolver/builder，避免两套角标语义分叉。
-  function refreshSessionStatusChips() {
-    const instMap = new Map(instancesList.map(x => [x.instanceId, x]));
-    sessionPanel.querySelectorAll('[data-testid="session-row"]').forEach(row => {
-      const inst = row.dataset.instanceId ? instMap.get(row.dataset.instanceId) : null;
-      const head = row.querySelector('[data-session-head]');
-      if (!head) return;
-      appendSessionStatusChip(head, inst?.state, row.dataset.terminalState || null, row.dataset.terminalSource || null,
-        row.dataset.bgLocked === '1');
-    });
-  }
-  // 顶部点位空间极小，继续用 SVG；但只汇总需要你/出错/运行中，正常完成和中止不再持续点亮。
-  function updateSessionsDot() {
-    if (!sessionsDot) return;
-    const drawerStates = {};
-    for (const cwd of availableDirs) drawerStates[cwd] = drawerStateForDir(cwd);
-    const top = summarizeOtherWorkspaces(drawerStates, availableDirs, currentCwd);
-    const meta = drawerStatusMeta(top);
-    sessionsDot.classList.remove('text-accent', 'text-warning', 'text-danger', 'text-success', 'text-ink-faint');
-    if (meta) {
-      sessionsDot.classList.remove('hidden');
-      sessionsDot.classList.add('status-icon', meta.tone);
-      // tone:false —— 这颗角标的色由 DRAWER_STATUS_META 单独决定，不跟随图标 kind
-      // （bg_locked 刻意是 warn 图标 + ink-faint 色：它是「此路不通」的说明，不该去抢待办的注意力）
-      setStatusIcon(sessionsDot, meta.icon, { tone: false });
-      sessionsDot.setAttribute('aria-label', meta.label);
-      sessionsDot.title = `${t('其他工作区')} · ${meta.label}`;
-    } else {
-      sessionsDot.innerHTML = '';
-      sessionsDot.textContent = '';
-      sessionsDot.title = '';
-      sessionsDot.removeAttribute('aria-label');
-      sessionsDot.classList.remove('status-icon', 't-status');
-      sessionsDot.classList.add('hidden');
-    }
-    updateHeaderAttentionChip();
-  }
-  // 顶栏文字 chip（#attentionChip）：把 #connDot / #sessionsDot 两颗角标的含义写成人话——手机没有 hover，
-  // 它们的 title 等于不存在，用户只看到「一颗不知道什么意思的小红点」。判定在 resolveHeaderAttentionChip；
-  // 输入 1）#connDot 刚算出的 reason（读它的 dataset，DOM 即真相源，不另存一份）2）需要你计数
-  // 3）其他工作区汇总（与 updateSessionsDot 同一份数据）。两个角标的更新函数末尾都会调到这里，谁先谁后都不漏。
-  const ATTENTION_CHIP_TONE_CLASS = { danger: 'text-danger', warning: 'text-warning', accent: 'text-accent' };
-  function updateHeaderAttentionChip() {
-    if (!attentionChipEl) return;
-    const drawerStates = {};
-    for (const cwd of availableDirs) drawerStates[cwd] = drawerStateForDir(cwd);
-    const spec = resolveHeaderAttentionChip({
-      badgeReason: connDotWrap?.dataset.reason || 'ok',
-      needsYouCount: needsYouList.length,
-      otherWorkspaceStatus: summarizeOtherWorkspaces(drawerStates, availableDirs, currentCwd),
-    });
-    attentionChipEl.textContent = spec.text;
-    attentionChipEl.title = spec.text;
-    attentionChipEl.dataset.reason = spec.reason;
-    attentionChipEl.className = `${spec.visible ? '' : 'hidden '}conn-rtt-chip attention-chip select-none ${ATTENTION_CHIP_TONE_CLASS[spec.tone] || ''}`.trim();
-  }
-  // 目录头「N 未读」：按该目录已加载的会话页（SWR 缓存）计。搜索态缓存不是全量、不作数；没缓存
-  // （从未展开、后台保鲜还没回来）就不显示——不显示 0，也不为了这个数字多发一次 session:list。
-  //
-  // pinned（手动标「稍后再看」、被 limit 挤出本页而由服务端单独补回的那组）必须一起数：它们在屏幕上
-  // 有行、有「未读」chip，漏数就成了反方向的同一个毛病——行亮着而角标说 0。数字与 chip 必须同源，
-  // 这也是这两处共用 unread.isUnread 而不是各判一次的原因。
-  function unreadCountForDir(cwd) {
-    const entry = sessionsCache.get(cwd);
-    if (!entry || String(entry.query || '')) return null;
-    let n = 0;
-    for (const s of [...(entry.sessions || []), ...(entry.pinned || [])]) {
-      if (s?.id && unread.isUnread(s, { isViewing: s.id === displayedSessionId })) n += 1;
-    }
-    return n;
-  }
-  // 三态渲染（判定在 logic resolveDirUnreadBadge）：pending=缓存还没到位，必须占位说「不知道」，
-  // 不能什么都不画——不画就与「确定没有未读」同形，等于在空窗期报一个错误事实。
-  function applyDirUnreadBadge(badge, cwd) {
-    const spec = resolveDirUnreadBadge(unreadCountForDir(cwd));
-    badge.textContent = spec.text;
-    badge.dataset.state = spec.state;
-    badge.classList.toggle('hidden', !spec.visible);
-    badge.classList.toggle('dir-unread-pending', spec.state === 'pending');
-    if (spec.state === 'pending') {
-      badge.title = t('未读数加载中');
-      badge.setAttribute('aria-label', t('未读数加载中'));
-    } else if (spec.state === 'unread') {
-      // 手机没有 hover，title 基本等于不存在——但 aria-label 是读屏用户唯一能听到的那句，
-      // 「4 未读」和「4 未读，点按跳到下一条」的差别正是「知道有」与「知道怎么去」。
-      const label = `${spec.text} · ${t('点按跳到下一条')}`;
-      badge.title = label;
-      badge.setAttribute('aria-label', label);
-    } else {
-      badge.title = spec.text;
-      if (spec.text) badge.setAttribute('aria-label', spec.text);
-      else badge.removeAttribute('aria-label');
-    }
-  }
-  // 行数据变化（renderRows）与长按标记后都要刷：两条路径共用同一个 resolver，不各写一套。
-  function refreshDirUnreadCounts() {
-    sessionPanel.querySelectorAll('[data-dir]').forEach(row => {
-      const badge = row.querySelector('.dir-unread');
-      if (badge) applyDirUnreadBadge(badge, row.dataset.dir);
-    });
-  }
-  // 服务状态可见性（第一性原理重新设计）：与上面 updateSessionsDot（会话待处理/注意力不对称）
-  // 是不同的轴——这里只答"ccm 这个服务本身有没有出过岔子"（可维护性）。
-  function updateServiceNotice(service) {
-    latestServiceHealth = service;
-    // 只存快照 + 刷抽屉文案。顶栏角标由 setInstances 末尾的 updateAttentionSignal 重算。
-    refreshServiceSection();
-    renderHooksBridgeSection(); // 安装态随广播刷新：面板开着时点完开关能立刻看到变化
-    renderStatuslineBridgeSection(); // 同上：两个桥的安装态都随 instances 广播刷新
-    generalNav?.render(); // L1「宿主机」那行的运行时长吃的就是这份广播
-  }
 
-  // 配置面板「推送内容」段顶部的订阅状态行。推送不通时此前 UI 上零痕迹——铃铛按钮在权限被拒或
-  // 订阅失败时都不显示，用户查不出自己为什么收不到（实测：实测环境中从未订阅成功过而毫不知情）。
-  const pushStatusRowEl = $('pushStatusRow'), pushPreviewInertNote = $('pushPreviewInertNote');
-  async function renderPushStatusRow() {
-    if (!pushStatusRowEl) return;
-    let subscribed = false;
-    try {
-      // ⚠️ navigator.serviceWorker.ready 在「没有任何 SW 注册」时**永远不 resolve**（不是 reject）。
-      // 直接 await 会让本函数挂住，整行永远不渲染——正是"界面上什么都没有"的那类静默失败。
-      const reg = await Promise.race([
-        navigator.serviceWorker?.ready,
-        new Promise(r => setTimeout(() => r(null), 1500)),
-      ]);
-      subscribed = !!(await reg?.pushManager?.getSubscription());
-    } catch { /* 不支持/未注册 SW：按未订阅渲染，由 hint 解释原因 */ }
-    // 没订阅时「推送带内容预览」是空转的——把这件事说出来，别让人勾了以为生效
-    pushPreviewInertNote?.classList.toggle('hidden', subscribed);
-    // L1 目录「通知」那行吃同一份判据：面板里说「未开启」、目录里说「已开」会是自相矛盾的两句话
-    generalPushSubscribed = subscribed;
-    generalNav?.render();
-    const row = formatPushStatusRow({
-      hint: pushEnvHint(notifications.environment()),
-      permission: typeof Notification !== 'undefined' ? Notification.permission : 'default',
-      subscribed,
-      // 自己关掉的与订阅失败在 permission/subscribed 上同形，只有这个意图分得开
-      optedOut: readPushOptOut(k => localStorage.getItem(k)),
-    });
-    pushStatusRowEl.replaceChildren();
-    const card = el(`<div class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface text-xs text-ink"><span class="min-w-0"></span></div>`);
-    const value = el(`<span class="font-semibold block"></span>`);
-    value.textContent = row.value;
-    const toneCls = { ok: 'text-success', warn: 'text-warning' }[row.tone];
-    if (toneCls) value.classList.add(toneCls);
-    card.firstChild.appendChild(value);
-    if (row.hint) {
-      const h = el(`<span class="text-xs text-ink-soft"></span>`);
-      h.textContent = row.hint;
-      card.firstChild.appendChild(h);
-    }
-    // 两个方向共用一个按钮位：开与关是同一个开关的两侧，不该只有进、没有出。
-    if (row.action === 'subscribe' || row.action === 'unsubscribe') {
-      const off = row.action === 'unsubscribe';
-      const btn = el(`<button class="shrink-0 px-3 py-1.5 rounded-lg border border-line text-xs active:opacity-70"></button>`);
-      btn.dataset.testid = off ? 'push-unsubscribe' : 'push-subscribe';
-      btn.textContent = row.actionText;
-      btn.onclick = async () => {
-        btn.disabled = true;
-        // 开启那条走 requestSubscription，它自己用 explain()（系统 alert）说话——弹窗压在面板之上，看得见。
-        if (!off) {
-          await notifications.requestSubscription();
-          btn.disabled = false;
-          renderPushStatusRow();
-          return;
-        }
-        const ok = await notifications.unsubscribe();
-        btn.disabled = false;
-        await renderPushStatusRow();
-        // 成功：状态行当场翻成「已关闭」，那就是回答；addBar 那条是留给关掉面板之后的账
-        //（与 app/session-delete.js 的成功路径同构）。
-        // 失败：状态行原样不动 = 用户眼里的"点了没反应"，错因必须落在他此刻正看着的这一层。
-        // #generalSheet 是 z-40 的大底栏，盖着消息流——只写 addBar 等于没写（2026-09-12 抽屉里
-        // 撞过同一个坑）。这行插在重绘之后，下次重绘自然被 replaceChildren 清掉。
-        if (ok) addBar(t('🔕 已关闭推送通知'), 'text-ink-soft');
-        else {
-          const notice = el(`<div class="mt-1.5 text-[11px] text-warning px-1"></div>`);
-          notice.textContent = t('⚠️ 关闭推送失败，请重试');
-          pushStatusRowEl.appendChild(notice);
-        }
-      };
-      card.appendChild(btn);
-    }
-    pushStatusRowEl.appendChild(card);
-  }
-
-  // 「发一条测试推送」：自证推送链路，不必等真事件。结果如实回报——发出去几条、失败几条、
-  // 有没有收件人。"没有订阅"是最常见也最容易被误当成"功能坏了"的情况，要说清楚。
-  if ($('btnPushTest')) $('btnPushTest').onclick = () => {
-    const btn = $('btnPushTest');
-    btn.disabled = true;
-    const original = btn.textContent;
-    btn.textContent = t('发送中…');
-    socket.timeout(8000).emit('push:test', {}, (err, res) => {
-      btn.disabled = false;
-      btn.textContent = original;
-      if (err || !res?.ok) { addBar(t('测试推送失败，请检查网络'), 'text-danger'); return; }
-      if (!res.subscribed) {
-        addBar(t('这台设备还没订阅推送——先点上方的「开启」'), 'text-warning');
-      } else if (res.failed > 0) {
-        addBar(`${t('测试推送发送失败')} ${res.failed} ${t('条（订阅可能已过期，重新开启一次）')}`, 'text-danger');
-      } else {
-        addBar(`${t('已发出测试推送')} ${res.sent} ${t('条——若手机没响，检查系统通知权限')}`, 'text-success');
-      }
-    });
-  };
-
-  // 配置面板的「终端会话推送」段（CLI hooks 桥）。放在通知这一组、而不是服务状态诊断页：对用户
-  // 而言这就是"电脑终端里跑的会话要不要通知我"，与提示音/震动同一心智——埋进诊断页没人找得到。
-  const hooksBridgeSection = $('hooksBridgeSection'), hooksBridgeBody = $('hooksBridgeBody');
-  function renderHooksBridgeSection() {
-    if (!hooksBridgeSection || !hooksBridgeBody) return;
-    const row = formatHooksBridgeRow(latestServiceHealth?.hooksBridge);
-    if (!row) { hooksBridgeSection.classList.add('hidden'); return; } // 旧 server / 读不出状态 → 整段缺席
-    hooksBridgeSection.classList.remove('hidden');
-    hooksBridgeBody.replaceChildren();
-    const card = el(`<div class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface text-xs text-ink"><span class="min-w-0"></span></div>`);
-    const label = el(`<span class="font-semibold block"></span>`);
-    label.textContent = row.value;
-    const toneCls = { ok: 'text-success', warn: 'text-warning', muted: 'text-ink-soft' }[row.tone];
-    if (toneCls) label.classList.add(toneCls);
-    card.firstChild.appendChild(label);
-    const desc = el(`<span class="text-xs text-ink-soft"></span>`);
-    desc.textContent = row.hint || t('电脑终端里跑的会话，完成或需要你时通知手机');
-    card.firstChild.appendChild(desc);
-    if (row.action) {
-      const btn = el(`<button class="shrink-0 px-3 py-1.5 rounded-lg border border-line text-xs active:opacity-70" data-testid="hooks-bridge-action"></button>`);
-      btn.textContent = row.actionText;
-      btn.onclick = () => runHooksSetup(row.action, btn);
-      card.appendChild(btn);
-    }
-    hooksBridgeBody.appendChild(card);
-  }
-
-  // 服务日志（server 进程的 stdout/stderr）。与顶栏「运行日志」是两条不同的日志：
-  // 那条是前端 clientLogger + 会话交互日志（都在内存里），server 进程的输出一个字都不进去。
-  async function loadServerLog() {
-    const body = $('serverLogBody');
-    if (!body) return;
-    body.classList.remove('hidden');
-    body.replaceChildren(el('<div class="p-2.5 text-xs text-ink-faint"></div>'));
-    body.firstChild.textContent = t('读取中…');
-    const res = await new Promise(resolve => {
-      socket.timeout(8000).emit('logs:server', { limit: 200 }, (err, r) => resolve(err ? null : r));
-    });
-    body.replaceChildren();
-    const card = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs space-y-1"></div>');
-    const pathRow = el('<div class="text-[10px] text-ink-faint break-all"></div>');
-    pathRow.textContent = res?.path || t('未知路径');
-    card.appendChild(pathRow);
-    if (!res || res.ok !== true) {
-      // 读不到就说读不到。**不给空列表**——空列表看起来像「服务很干净」，
-      // 而实际是「我们压根没在看那个文件」。
-      const errRow = el('<div class="text-warning"></div>');
-      errRow.textContent = res?.error || t('读取失败');
-      card.appendChild(errRow);
-      body.appendChild(card);
-      return;
-    }
-    if (!res.lines.length) {
-      const empty = el('<div class="text-ink-soft"></div>');
-      empty.textContent = t('文件是空的（服务刚起来，或日志被轮转过）');
-      card.appendChild(empty);
-      body.appendChild(card);
-      return;
-    }
-    if (res.truncated) {
-      const note = el('<div class="text-[10px] text-ink-faint"></div>');
-      note.textContent = t('只显示文件末尾部分');
-      card.appendChild(note);
-    }
-    const pre = el('<div class="mt-1 space-y-0.5 max-h-64 overflow-y-auto"></div>');
-    for (const line of res.lines) {
-      const row = el('<div class="break-all text-ink-soft" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px"></div>');
-      row.textContent = line; // 日志原文，textContent 插值（CSP 安全）
-      pre.appendChild(row);
-    }
-    card.appendChild(pre);
-    const warn = el('<div class="text-[10px] text-ink-faint mt-1"></div>');
-    warn.textContent = t('含真实路径与错误原文（未脱敏）——投屏时注意');
-    card.appendChild(warn);
-    body.appendChild(card);
-    // 长日志默认滚到底：最新的一行才是排障要看的
-    pre.scrollTop = pre.scrollHeight;
-  }
-  $('btnServerLog')?.addEventListener('click', () => loadServerLog());
-
-  // 接入二维码。三步态：入口 → 二次确认 → 显示（带倒计时自动隐藏）。
-  // 自动隐藏的秒数刻意短：够扫、不够让人忘了它还挂在屏幕上。
-  const QR_AUTO_HIDE_MS = 30_000;
-  let qrHideTimer = null;
-  let qrTickTimer = null;
-  function qrShowStep(step) {
-    for (const [n, id] of [[1, 'qrStep1'], [2, 'qrStep2'], [3, 'qrStep3']]) {
-      $(id)?.classList.toggle('hidden', n !== step);
-    }
-  }
-  function hideQr() {
-    clearTimeout(qrHideTimer); qrHideTimer = null;
-    clearInterval(qrTickTimer); qrTickTimer = null;
-    // 真的把矩阵从 DOM 里删掉，不只是 hidden——留在 DOM 里的话，任何能看到页面的人
-    // （开发者工具、截图、后续的 innerHTML 读取）仍然拿得到那把钥匙。
-    const wrap = $('qrCanvasWrap');
-    if (wrap) wrap.replaceChildren();
-    qrShowStep(1);
-  }
-  function paintQrMatrix(matrix, size) {
-    const wrap = $('qrCanvasWrap');
-    if (!wrap) return;
-    wrap.replaceChildren();
-    // quiet zone 取 4：实测 2 检不出、3/4 可解（见 shared/qrcode.js 的实测记录）
-    const quiet = 4;
-    const total = size + quiet * 2;
-    const cell = Math.max(4, Math.floor(260 / total));
-    const cv = document.createElement('canvas');
-    cv.width = cv.height = total * cell;
-    cv.style.width = cv.style.height = `${total * cell}px`;
-    cv.setAttribute('data-testid', 'qr-canvas');
-    const ctx = cv.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, cv.width, cv.height);
-    ctx.fillStyle = '#000';
-    for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        if (matrix[r][c]) ctx.fillRect((c + quiet) * cell, (r + quiet) * cell, cell, cell);
-      }
-    }
-    wrap.appendChild(cv);
-  }
-  async function revealQr() {
-    const res = await new Promise(resolve => {
-      socket.timeout(8000).emit('connect:qr', { target: 'lan' }, (err, r) => resolve(err ? null : r));
-    });
-    if (!res?.ok) {
-      addBar(res?.error || t('二维码生成失败'), 'text-danger');
-      qrShowStep(1);
-      return;
-    }
-    paintQrMatrix(res.matrix, res.size);
-    const note = $('qrNote');
-    if (note) {
-      note.textContent = res.includeToken
-        ? t('码里含访问令牌，扫一下即可接入')
-        : (res.note || t('该域名受 Cloudflare Access 保护，码里不含令牌'));
-    }
-    qrShowStep(3);
-    let left = Math.floor(QR_AUTO_HIDE_MS / 1000);
-    const tick = () => {
-      const el2 = $('qrCountdown');
-      if (el2) el2.textContent = `${left} ${t('秒后自动隐藏')}`;
-    };
-    tick();
-    clearInterval(qrTickTimer);
-    qrTickTimer = setInterval(() => { left -= 1; tick(); }, 1000);
-    clearTimeout(qrHideTimer);
-    qrHideTimer = setTimeout(hideQr, QR_AUTO_HIDE_MS);
-  }
-  $('btnQrReveal')?.addEventListener('click', () => qrShowStep(2));
-  $('btnQrCancel')?.addEventListener('click', () => qrShowStep(1));
-  $('btnQrConfirm')?.addEventListener('click', () => revealQr());
-  $('btnQrHide')?.addEventListener('click', () => hideQr());
-
-  // 审批规则（只读）。按需拉——不进 instances 广播，理由见 server 侧 handler 头注。
-  let permissionRulesCache = null;
-  async function loadPermissionRules() {
-    const res = await new Promise(resolve => {
-      socket.timeout(5000).emit('permissions:rules', { cwd: currentCwd || null }, (err, r) => resolve(err ? null : r));
-    });
-    // 断线/读失败：保留上一次拿到的名单，不把已经显示对的东西刷成空
-    if (res?.ok === true) permissionRulesCache = res.rules;
-    renderPermissionRules();
-  }
-  function renderPermissionRules() {
-    const section = $('permissionRulesSection'), body = $('permissionRulesBody');
-    if (!section || !body) return;
-    const rules = permissionRulesCache;
-    // null = 这台机器没配过审批规则（或读不出来）→ 整段缺席。**不显示空名单**：
-    // 「我没有规则」与「我没读到」在安全上是两件事，后者显示成空会让人以为自己没配过。
-    if (!rules || !rules.total) { section.classList.add('hidden'); return; }
-    section.classList.remove('hidden');
-    body.replaceChildren();
-    // 三档各一张卡。deny 用 danger 色——把它显示成和 allow 一样会让人以为危险操作已被放行。
-    const groups = [
-      { key: 'allow', list: rules.allow, label: t('直接放行 · 不弹审批'), tone: 'text-success' },
-      { key: 'deny', list: rules.deny, label: t('直接拒绝'), tone: 'text-danger' },
-      { key: 'ask', list: rules.ask, label: t('每次都问'), tone: 'text-ink-soft' },
-    ];
-    for (const g of groups) {
-      if (!Array.isArray(g.list) || !g.list.length) continue;
-      const card = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs"></div>');
-      card.setAttribute('data-rule-group', g.key);
-      const head = el('<div class="font-semibold"></div>');
-      head.className = `font-semibold ${g.tone}`;
-      head.textContent = `${g.label} · ${g.list.length}`;
-      card.appendChild(head);
-      const ul = el('<div class="mt-1 space-y-0.5"></div>');
-      for (const rule of g.list) {
-        const row = el('<div class="text-ink-soft break-all" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace"></div>');
-        row.textContent = rule; // 规则是用户写的文本，textContent 插值（CSP 安全）
-        ul.appendChild(row);
-      }
-      card.appendChild(ul);
-      body.appendChild(card);
-    }
-  }
-
-  // statusline 桥段。与 renderHooksBridgeSection 同构——两个桥在面板上并列，渲染惯例也保持一致。
-  function renderStatuslineBridgeSection() {
-    const section = $('statuslineBridgeSection'), body = $('statuslineBridgeBody');
-    if (!section || !body) return;
-    const row = formatStatuslineBridgeRow(latestServiceHealth?.statuslineBridge);
-    if (!row) { section.classList.add('hidden'); return; } // 旧 server 无此字段 → 整段缺席
-    section.classList.remove('hidden');
-    body.replaceChildren();
-    const card = el(`<div class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface text-xs text-ink"><span class="min-w-0"></span></div>`);
-    const label = el(`<span class="font-semibold block"></span>`);
-    label.textContent = row.value;
-    const toneCls = { ok: 'text-success', warn: 'text-warning', muted: 'text-ink-soft' }[row.tone];
-    if (toneCls) label.classList.add(toneCls);
-    card.firstChild.appendChild(label);
-    const desc = el(`<span class="text-xs text-ink-soft"></span>`);
-    desc.textContent = row.hint || t('终端会话的模型 / 额度 / 上下文用量同步到手机');
-    card.firstChild.appendChild(desc);
-    if (row.action) {
-      const btn = el(`<button class="shrink-0 px-3 py-1.5 rounded-lg border border-line text-xs active:opacity-70" data-testid="statusline-bridge-action"></button>`);
-      btn.textContent = row.actionText;
-      btn.onclick = () => runStatuslineSetup(row.action, btn);
-      card.appendChild(btn);
-    }
-    body.appendChild(card);
-  }
 
   function setBusy(b) {
     // UX-010：镜像只读时不与本地忙碌条同现；live 状态迁到消息流 #streamLiveStatus，发送钮双态由 updateSendButtonState 驱动
@@ -6210,6 +5134,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       };
       startLiveTicker();
       showStreamLiveStatus(renderLiveLineText());
+      announceTurn(t('Claude 正在回复'));
     } else {
       clearInterruptPending(viewingInstanceId, { keepLiveOverride: true }); // setBusy(false) 终态：清 pending/timer；live 整清在下两行
       stopLiveTicker();
@@ -6241,10 +5166,33 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   const { openDeleteSession } = createSessionDeleteController(appContext, {
     socket, addBar, appConfirm, showDrawerNotice: drawer.showNotice,
-    onDeleted: ({ cwd } = {}) => {
-      // 立刻丢掉该 cwd 的 SWR 缓存，避免重建时先画「含已删行」的旧快照再等 revalidate。
+    isNoFolderCwd: cwd => projectsState.isNoFolder(cwd),
+    onDeleted: ({ cwd, sectionKey } = {}) => {
+      // 立刻丢掉这一行所在小节的 SWR 缓存，避免重建时先画「含已删行」的旧快照再等 revalidate。
+      // 缓存按小节归键：worktree / scratch 会话的 cwd 是成员目录，只按 cwd 删等于没删。
+      if (sectionKey) sessionsCache.delete(sectionKey);
       if (cwd) sessionsCache.delete(cwd);
       openSessionPanel();
+    },
+  });
+  const sessionRowMenu = createSessionRowMenu(appContext, { $, el, openSheet, closeSheet });
+  // 转后台（#459，终端 Ctrl+B）：输入条「转后台」与工具卡「后台运行」，见 app/foreground-tasks.js
+  const foregroundTasks = createForegroundTasks(appContext, {
+    $, socket, addBar,
+    getViewingInstanceId: () => viewingInstanceId,
+    // 切回会话时卡是从 sessionDomCache 原样放回的，toolCards 已随 clearView 清空；刷新后从历史渲染的卡只在
+    // histToolCards 里。两种都按 DOM 上的 data-tool-use-id 找回（#469 review）
+    getToolCard: toolUseId => toolCards.get(toolUseId)
+      || messagesEl.querySelector(`[data-tool-use-id="${CSS.escape(toolUseId)}"]`),
+  });
+  const sessionRename = createSessionRenameController(appContext, {
+    $, socket, openSheet, closeSheet,
+    onRenamed: ({ cwd, sectionKey, terminalMayOverwrite } = {}) => {
+      // 同删除：丢掉这一行所在小节的 SWR 缓存再重建，免得先画一帧旧名字
+      if (sectionKey) sessionsCache.delete(sectionKey);
+      if (cwd) sessionsCache.delete(cwd);
+      openSessionPanel();
+      drawer.showNotice(terminalMayOverwrite ? t('终端正在使用这个会话，改名可能被覆盖') : '');
     },
   });
 
@@ -6253,7 +5201,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 这里只做两件【只对发起方有意义】的事：说清处置建议、把那一轮的原话回填输入框。
   const rewindCommand = createRewindCommandController({
     $, socket, openSheet, closeSheet,
-    getCurrentSession: () => ({ sessionId: displayedSessionId, cwd: currentCwd }),
+    getCurrentSession: () => ({ sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId) }),
     onRewound: (res) => {
       // 整体性失败（warning）、哪些文件没恢复（unrestored）、几个链接被跳过（skippedLinks）——
       // 三者可叠加、有轻重，组装在 logic/rewind.js（可单测）。
@@ -6268,6 +5216,39 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         autosize();
         updateSendButtonState();
       }
+    },
+  });
+  // #399 / #425：把手下拉走 rewind close（清 picked/session），不要裸 closeSheet 留下脏态
+  setGestureDismiss($('rewindModal'), () => rewindCommand.close());
+
+  // ---- 续接会丢掉一段对话（SESSION-04）：发送被拒后问「分叉到新会话 / 仍然发送」----
+  // 话的去留在这里：分叉要把它从这个会话的输入框挪进新会话（正看着就直接放，否则放进草稿槽，
+  // 切过去时 bindView 的草稿交换会恢复它——fork 的 ack 与 instances 广播谁先到都对）。
+  const resumeDivergencePrompt = createResumeDivergencePrompt({
+    socket, appConfirm, addBar,
+    getCurrentSession: () => ({ sessionId: displayedSessionId }),
+    resend: (opts) => send(opts),
+    takeDraft: () => {
+      const draft = { text: inputEl.value, attachments: attachments.items() };
+      if (!draft.text.trim() && draft.attachments.length === 0) return null;
+      inputEl.value = '';
+      inputEl.dispatchEvent(new Event('input'));
+      dropDraftForCurrentSurface();
+      attachments.clear();
+      autosize();
+      updateSendButtonState();
+      return draft;
+    },
+    putDraft: (sessionId, draft) => {
+      if (displayedSessionId === sessionId && !inputEl.value.trim() && attachments.items().length === 0) {
+        inputEl.value = draft.text;
+        inputEl.dispatchEvent(new Event('input'));
+        attachments.setItems(draft.attachments);
+        autosize();
+        updateSendButtonState();
+        return;
+      }
+      sessionDraftCache.set(draftKeyFor({ sessionId }), { text: draft.text, attachments: draft.attachments });
     },
   });
 
@@ -6292,6 +5273,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const newSessionWorktree = createNewSessionWorktree(appContext, {
     onChange: () => { try { renderWorktreeChips(); } catch { /* 空首页未渲染时无事可做 */ } },
   });
+  // 「这一个新会话页」的标识：离线重放时同一页的几条并成一个会话、另开的一页各开各的（见 compose-page.js）
+  const composePage = createComposePage();
   // 两个子控制器只管各自半边的数据；sheet 开合与 tab 切换归 workspacePanel 统一持有
   const workspacePanel = createWorkspacePanel(appContext, {
     closeSheet,
@@ -6300,7 +5283,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     fileBrowser,
     gitChanges,
   });
+  // #399：把手下拉走面板自己的 close（含未保存编辑丢弃确认），不要直接 closeSheet
+  setGestureDismiss(workspaceModal, () => { void workspacePanel.close(); });
   const openWorkspacePanel = workspacePanel.open;
+  // 「选文件夹」面板：新会话在哪开（已连接的文件夹 / 子文件夹 / 无文件夹 / 添加文件夹）
+  const folderPicker = createFolderPicker({
+    $, el, socket, openSheet, closeSheet, haptic,
+    getProjects: () => projectsState.entries(),
+    getScratchRoot: () => projectsState.scratchRoot(),
+    getFoldersReadonly: () => projectsState.foldersReadonly(),
+    onPick: cwd => startNewSessionIn(cwd),
+  });
   // ⑧ 推送内容预览：本地偏好读写 + 改动时（若已授权通知权限）立即重新订阅，把新 prefs.preview 带给服务端
   // ——不重新订阅的话，服务端那份旧订阅记录的 prefs 就跟本地开关脱节，下次推送还是按旧偏好选 body。
   const pushPreview = {
@@ -6310,16 +5303,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') void notifications.subscribe();
     },
   };
-  // ⑨ 语言偏好：切换后写 storage + 提示刷新（不做响应式重渲——已翻译的静态串只在启动时应用一次，
+  // ⑨ 语言偏好：先确认刷新，同意后再写 storage + reload（不做响应式重渲——已翻译的静态串只在启动时应用一次，
   // 运行中改语言若不刷新，会停留在混杂态；appConfirm 走已有的确认 sheet，不新开一套 UI）。
   const langPref = {
     // 回显设置面板下拉框用原始存储值（含 auto）；语言渲染/t() 走 getLang() 的运行时折叠值，两者用途不同。
+    // 切换：先确认刷新，同意后再 writeLangPref + reload（取消不落盘，避免磁贴/文案半切换）。
     get: () => readLangPref(k => localStorage.getItem(k)),
-    set: async (lang) => {
-      writeLangPref((k, v) => localStorage.setItem(k, v), lang);
-      if (await appConfirm({ title: t('需要刷新页面才能生效'), body: t('现在刷新吗？'), okText: t('刷新') })) {
-        location.reload();
-      }
+    set: async (lang) => confirmAndWriteLangPref({
+      lang,
+      confirm: () => appConfirm({ title: t('需要刷新页面才能生效'), body: t('现在刷新吗？'), okText: t('刷新') }),
+      write: (next) => writeLangPref((k, v) => localStorage.setItem(k, v), next),
+      reload: () => location.reload(),
+    }),
+  };
+  // ⑩ 主题偏好：即时落盘 + apply（色板是 CSS 变量，无需刷新）；回显用原始 'light'|'dark'|'system'。
+  const themePref = {
+    get: () => readThemePref(k => localStorage.getItem(k)),
+    set: (theme) => {
+      writeThemePref((k, v) => localStorage.setItem(k, v), theme);
+      applyThemeToDocument(document, theme, { systemDark: systemDarkNow() });
     },
   };
   // ---- 设置：两个同构 sheet，由同一个 controller 按作用域分工 ----
@@ -6355,47 +5357,35 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 这样是「先收侧栏、再弹面板」而不是反过来闪一帧。也**不能**改写 btnGeneralSettings.onclick
   // （那是控制器 bind 的落点，覆盖掉 open 就没了）。
   if (btnGeneralSettings) btnGeneralSettings.addEventListener('click', closeLeftSidebar);
-  // 「宿主机上的 claude」段：MCP 服务器与 skills 数，来自 init 事件（缺字段不覆盖，见 init handler）。
+  // 「宿主机上的 claude」段：MCP 服务器与 skills 数。skills 数来自 init 事件（缺字段不覆盖，见 init handler）；
+  // MCP 进页时现查（#457，见 app/host-mcp.js），拿不到再用 init 那份快照。
+  const hostMcp = createHostMcp({
+    emit: (event, payload, ms = 3000) => new Promise(resolve => {
+      socket.timeout(ms).emit(event, payload, (err, res) => resolve(err ? null : res));
+    }),
+    appConfirm,
+    getInstanceId: () => viewingInstanceId,
+    // 现取当前 cwd 的那份：没有就是没有，绝不回落到上一个工作区的快照
+    getSnapshot: () => mcpServersByCwd.get(currentCwd) ?? null,
+    onChange: () => renderHostEnvSection(),
+  });
   function renderHostEnvSection() {
     const section = $('hostEnvSection'), body = $('hostEnvBody');
     if (!section || !body) return;
-    // 现取当前 cwd 的那份：没有就是没有（整段隐藏），绝不回落到上一个工作区的快照。
-    const lastMcpServers = mcpServersByCwd.get(currentCwd) ?? null;
     const lastSkillsCount = skillsCountByCwd.get(currentCwd) ?? 0;
-    const mcp = formatMcpServers(lastMcpServers);
+    const mcpCard = hostMcp.renderCard();
     // 两样都没有 = 这个 cwd 确实既没配 MCP 也没有 skill，整段隐藏，不给空计数占位
-    if (!mcp && !lastSkillsCount) { section.classList.add('hidden'); return; }
+    if (!mcpCard && !lastSkillsCount) { section.classList.add('hidden'); return; }
     section.classList.remove('hidden');
     body.replaceChildren();
-
-    if (mcp) {
-      const card = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs"></div>');
-      const head = el('<div class="font-semibold text-ink"></div>');
-      head.textContent = `${t('MCP 服务器')} · ${mcp.total} ${t('个')}`;
-      card.appendChild(head);
-      const list = el('<div class="mt-1 flex flex-wrap gap-x-3 gap-y-1"></div>');
-      for (const item of mcp.items) {
-        const row = el('<span class="inline-flex items-center gap-1"></span>');
-        const dot = el('<span aria-hidden="true"></span>');
-        dot.className = item.ok ? 'text-success' : 'text-danger';
-        dot.textContent = '●';
-        const name = el('<span class="text-ink-soft"></span>');
-        // 非正常态把原始 status 一并显示：'failed' 与 'needs-auth' 是两种完全不同的处置，
-        // 压成一个「异常」会让用户无从下手。
-        name.textContent = item.ok ? item.name : `${item.name}（${item.status || t('状态未知')}）`;
-        row.append(dot, name);
-        list.appendChild(row);
-      }
-      card.appendChild(list);
-      body.appendChild(card);
-    }
+    if (mcpCard) body.appendChild(mcpCard);
 
     if (lastSkillsCount) {
       const skills = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs"></div>');
       const t1 = el('<div class="font-semibold text-ink"></div>');
       t1.textContent = `Skills · ${lastSkillsCount} ${t('个可用')}`;
       const t2 = el('<div class="text-ink-soft mt-0.5"></div>');
-      t2.textContent = t('当前工作区加载的技能');
+      t2.textContent = t('当前文件夹加载的技能');
       skills.append(t1, t2);
       body.appendChild(skills);
     }
@@ -6410,6 +5400,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 在四分片并行的 E2E 下把一条依赖广播时序的既有用例挤成了 8s 超时，而它拿到的东西广播里本就有。
   let generalVersions = null;
   let generalVersionsInflight = false;
+  // 「关于」页（#303）。版本号用上面这份 generalVersions，不另发请求；检查更新要等服务端打 GitHub，超时由它自己传。
+  const aboutPage = createAboutPage({
+    $,
+    emit: (event, payload, ms = 3000) => new Promise(resolve => {
+      socket.timeout(ms).emit(event, payload, (err, res) => resolve(err ? null : res));
+    }),
+    getVersion: () => generalVersions?.server,
+  });
+  aboutPage.bind();
   async function ensureGeneralVersions() {
     if (generalVersions || generalVersionsInflight) return;
     generalVersionsInflight = true;
@@ -6418,13 +5417,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (status?.ok === true && status.versions) {
         generalVersions = status.versions;
         generalNav?.render();
+        aboutPage.renderVersion();
       }
     } finally {
       generalVersionsInflight = false;
     }
   }
 
-  // 两级导航：L1 目录 ↔ 6 个 L2 页。摘要是活数据，故 state() 每次现取，不缓存。
+  // 两级导航：L1 目录 ↔ 7 个 L2 页。摘要是活数据，故 state() 每次现取，不缓存。
   generalNav = createGeneralNav({
     haptic,
     state: () => ({
@@ -6440,29 +5440,33 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         statuslineBridge: latestServiceHealth?.statuslineBridge,
       },
       lang: langPref.get(),
+      theme: themePref.get(),
     }),
     // 「宿主机」页进来时补一次版本号（只拉一次，之后复用）。运行时长不用管——
     // 它跟着 instances 广播实时更新。
     onEnterPage: page => {
       // 离开「接入与设备」页就收码：钥匙不该挂在一个用户以为已经翻过去的界面上
       if (page !== 'devices') hideQr();
+      // #381：推送订阅回执只在通知页有上下文；离开（含回 L1 的 page=null）就清掉
+      if (page !== 'notify') notifications.clearSubscribeResult();
       // MCP / skills 那一段按 cwd 归键，而切到一个**已经 live** 的会话不会重放 init——
       // 只靠 init 回调重画的话，换过工作区之后这一页还挂着上一处的数据。每次进页现取一次。
-      if (page === 'host') { ensureGeneralVersions(); renderHostEnvSection(); }
+      if (page === 'host') { ensureGeneralVersions(); renderHostEnvSection(); hostMcp.refresh(); }
       // 审批规则每次进页重拉：用户可能刚在电脑上改过 settings.json，缓存一次会显示过期名单
       if (page === 'behavior') loadPermissionRules();
+      if (page === 'about') { ensureGeneralVersions(); aboutPage.load(); }
     },
   });
   generalNav.bind();
 
-  // 通用设置（侧栏底部入口，全局可达）：L1 目录 + 通知/设备/主机/行为/排查/帮助 六页。
+  // 通用设置（侧栏底部入口，全局可达）：L1 目录 + 通知/设备/主机/行为/排查/帮助/关于 七页。
   // beforeOpen 收掉可能还开着的会话设置——两个 sheet 同为 z-40，叠着会露出下面那层的边。
   general = createSettingsController(appContext, {
     keys: {
       sheet: 'generalSheet', body: 'generalSheetBody', scrim: 'generalScrim',
       dragZone: 'generalDragZone', close: 'generalClose', trigger: 'btnGeneralSettings',
     },
-    alerts, haptic, pushPreview, langPref,
+    alerts, haptic, pushPreview, langPref, themePref,
     beforeOpen: () => { if (settings.isOpen()) settings.close(); },
     // 推送订阅状态每次打开重算：权限可能在系统设置里被改过，渲染一次会过期。
     onOpen: () => {
@@ -6501,7 +5505,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   if (customPermGrid) {
     customPermGrid.addEventListener('click', (ev) => {
       const tile = ev.target.closest?.('.perm-tile');
-      if (!tile || !customPermGrid.contains(tile)) return;
+      if (!tile || !customPermGrid.contains(tile) || tile.disabled) return;
       haptic('tap');
       const mode = tile.dataset.mode;
       if (!mode || mode === currentPermMode) return;
@@ -6522,11 +5526,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     haptic('tap');
     closeLeftSidebar();
     leaveComposeReady();
-    // 清除③：用户显式回主页——放弃"sessionId 未到即中断"的待续档态，让 shouldShowStartScreen 按
-    // 正常规则判定（不应被 freshInterrupted 拦住，用户就是要去主页）。
+    // 清除③：用户显式回主页——放弃"sessionId 未到即中断"的待续档态（用户就是要去主页）。
     freshInterruptedInstanceId = null;
-    const sid = instancesList.find(x => x.instanceId === viewingInstanceId)?.sessionId || null;
-    if (shouldShowStartScreen({ viewingInstanceId, sessionId: sid })) {
+    // 「已在空表面」只认没有正在看的实例，不看 sessionId 有没有到。sessionId 未到的实例可能正在跑
+    // （首轮头几秒、网关卡住）：本地画了首页，服务端却仍当它是正在看的，busy 也还归它，动态状态行的
+    // 下一次刷新（每秒一拍的 ticker、status_line、流式 delta）就经 leaveStartScreen 清掉首页、挂回那一行
+    // （2026-10-15 复现，首页撑不过 1 秒）。也不能改成看它在不在跑：懒开的那条广播发在 send 之前，
+    // send 还要先等 setModel / effort 的控制请求才计入在途轮（CLI 没起来时可达数秒），这段时间广播里
+    // 实例还不是 busy，本地却已乐观 busy。所以有实例就走 session:home，广播回来经 bindView 落首页，
+    // 实例在后台照跑。
+    if (!viewingInstanceId) {
       showDashboard();
       return;
     }
@@ -6546,6 +5555,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 同步本地重置：不等服务端 instances 广播（那要一次网络往返）。JS 单线程保证这行执行完之后，
     // 无论用户手速多快，ensureEmptySurface()/send() 都只能读到 null，不会残留旧会话 id（Bug A）。
     viewingInstanceId = null;
+    // 新的一页属于项目本身：上一页在选择器里挑的 worktree 要当场作废（同 startNewSessionIn）。
+    // 等广播来清就晚了——广播落地前发出的首条消息会被 sendCwd() 投进那个 worktree。
+    composeCwd = null;
     // 【displayedSessionId 也要同步置空】上面那条 Bug A 的保证只做了一半：漏了这个变量，
     // 一次迟到的 instances 广播会拿「prev=旧会话 / new=null」进 bindView 判成 swap，
     // 把用户【刚在新会话页打的字】存进旧会话的草稿缓存，再用空串覆盖输入框
@@ -6564,6 +5576,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     enterComposeReady();
     ensureEmptySurface();
     newSessionWorktree.reset(); // 新一轮新会话：勾选/源分支/已建路径全部作废
+    composePage.renew();
     socket.emit('session:new', { cwd: currentCwd }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
   };
   function toggleSessions() {
@@ -6585,727 +5598,39 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
   btnSessions.onclick = toggleSessions;
 
-  // 台阶3 Step B：工作区面板 = 目录树（当前 cwd 展开，其他折叠）——类似 IDE 项目浏览器。
-  // 单个工作区目录的 DOM 子树构建（dirRow 头行 + subtree 展开区）——从 openSessionPanel 抽出以支持
-  // 局部重建（见 rebuildDirSections）：只有这个函数知道"一个目录该怎么画"，openSessionPanel（全量）
-  // 与 rebuildDirSections（局部，只重建按目录签名 diff 出的变化目录）都复用它，两条路径画出来的东西
-  // 保证一致，不会走成两套逻辑。tabs 现读 instancesList（不依赖调用方快照）：局部重建时数据可能比
-  // 上一次 openSessionPanel 更新，直接读最新更正确。
-  function buildDirSection(d) {
-    const isCurrent = d === currentCwd;
-    const isExpanded = expandedDirs.has(d);
-
-    // ---- 目录头行（所有目录均可点击展开/折叠）----
-    const dirRow = el(`<div class="w-full px-3 py-1.5 border-b border-line flex items-center justify-between hover:bg-sunk/30${isCurrent ? ' text-accent' : ' text-ink'}"></div>`);
-    dirRow.dataset.dir = d;
-    dirRow.title = d;
-
-    const toggleBtn = el(`<button class="flex-1 min-w-0 text-left flex items-center gap-2 py-1.5 active:opacity-70"></button>`);
-    const icon = el(`<span class="shrink-0"></span>`); icon.textContent = isExpanded ? '📂' : '📁';
-    // 统一用 "▶" 字符，旋转实现向下效果，平滑过渡
-    const arrow = el(`<span class="shrink-0 text-[9px] w-3 dir-arrow">▶</span>`);
-    if (isExpanded) arrow.classList.add('rotated');
-    const name = el(`<span class="truncate"></span>`); name.textContent = baseName(d);
-    const badge = el(`<span class="dir-badge hidden"></span>`);
-    applyBadge(badge, drawerStateForDir(d));
-    // 右侧角标组 [N 未读][运行中/需要你/出错]：未读数让折叠着的目录也能看出里面有没看过的会话
-    // （行内标记在折叠态下根本不可见）。计数按已加载的会话页算，见 applyDirUnreadBadge。
-    // 角标是按钮不是标签：点它跳到下一条未读行（见 app/drawer-unread-jump.js 头注）。用 <span
-    // role=button> 而非 <button>——它嵌在 toggleBtn（也是 <button>）里，按钮套按钮是非法 HTML，
-    // 浏览器会把内层甩出去，整个角标组的位置就散了。
-    const unreadBadge = el(`<span class="dir-unread drawer-status-chip shrink-0 text-accent hidden" data-testid="dir-unread" role="button" tabindex="0"></span>`);
-    applyDirUnreadBadge(unreadBadge, d);
-    // stopPropagation 是必须的：不拦就冒泡到 toggleBtn，点「跳到未读」的结果是把整个目录折叠起来。
-    const onBadgeActivate = (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      if (unreadBadge.dataset.state !== 'unread') return; // pending（数字还不知道）时点了不该有反应
-      haptic('tap');
-      drawerUnreadJump.request(d);
-    };
-    unreadBadge.onclick = onBadgeActivate;
-    unreadBadge.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') onBadgeActivate(e); };
-    const badgeGroup = el(`<span class="ml-auto shrink-0 flex items-center gap-1"></span>`);
-    badgeGroup.appendChild(unreadBadge);
-    badgeGroup.appendChild(badge);
-
-    toggleBtn.appendChild(icon);
-    toggleBtn.appendChild(arrow);
-    toggleBtn.appendChild(name);
-    toggleBtn.appendChild(badgeGroup);
-    dirRow.appendChild(toggleBtn);
-
-    // 物理热区扩大版 "＋" 新建按钮
-    const newSessionBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm font-bold shadow-sm transition-all" title="${t('在此工作区新建会话')}">＋</button>`);
-    newSessionBtn.onclick = (e) => {
-      e.stopPropagation();
-      closeLeftSidebar();
-      haptic('tap');
-      // 同步本地重置（同 btnNew，Bug A）：viewingInstanceId 不等广播落地；currentCwd 同样要立刻
-      // 切到 d——否则广播落地前发送会把消息投到当前正看的工作区，而不是刚点的这个 d。
-      viewingInstanceId = null;
-      currentCwd = d;
-      // displayedSessionId 同样要立刻置空 + 同步做完草稿交换，理由与 btnNew 那处逐字相同：
-      // 漏了它，一次迟到的 instances 广播会拿「prev=旧会话 / new=null」判 swap，把用户刚在
-      // 新会话页打的字存进旧会话草稿、再用空串覆盖输入框（E2E P0-11h 撞的就是这条路径——
-      // 它走的是目录行的 ＋，不经过 btnNew，所以只修 btnNew 那一处时它照旧红）。
-      applySessionDraftSwap(displayedSessionId, null, {
-        text: inputEl ? inputEl.value : '',
-        attachments: attachments.items(),
-      }, { forceSwap: true, prevCwd: sessionWorkspaceState.displayedCwd, newCwd: d });
-      displayedSessionId = null;
-      sessionWorkspaceState.displayedCwd = d;
-      sessionIdClearedByNav = true;
-      // 清除③：新建会话（按目录行 ＋）——放弃上一个实例"sessionId 未到即中断"的待续档态。
-      freshInterruptedInstanceId = null;
-      enterComposeReady();
-      ensureEmptySurface(); // cwd 可能变了；空表面内 viewing 仍 null 须本地切到 compose
-      newSessionWorktree.reset(); // 换工作区：分支列表与勾选都属于上一个工作区
-      socket.emit('session:new', { cwd: d }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
-    };
-    dirRow.appendChild(newSessionBtn);
-
-    // 文件浏览入口已收归顶部 pill（当前工作区）；抽屉只负责会话切换/新建，不再挂逐行「浏览」按钮。
-
-    // ---- 展开区容器（所有目录均常驻 DOM 以支持 CSS max-height 过渡，仅通过类来控制动画） ----
-    const subtree = el(`<div class="subtree-container"></div>`);
-    if (isExpanded) {
-      subtree.classList.add('expanded');
-    }
-
-    // 状态-only instances 广播不会重建目录子树；每次 renderRows 都必须现读 instancesList，不能捕获
-    // buildDirSection 当时的旧 state，否则后续 terminal revalidate 重画 rows 会把最新 Web 状态倒退。
-    const currentLiveRows = () => {
-      const liveMap = new Map();
-      const freshTabs = [];
-      for (const inst of instancesList) {
-        if (!inst.instanceId) continue;
-        // 托管 worktree 的会话行挂在父仓名下，但它的实例 cwd 是 `.claude/worktrees/<name>`——
-        // 只比 `inst.cwd !== d` 会把这些实例全滤掉，liveMap 对那些行恒空：开着的 worktree 会话
-        // 被画成未打开（没有运行态、没有关闭入口），点一下还要白走一趟 reopen。
-        // 归属判据与角标/sessionsDot 共用 owningWorkspace，别在这里另写一份前缀匹配。
-        const owner = owningWorkspace(inst.cwd, availableDirs) || inst.cwd;
-        if (owner !== d) continue;
-        // freshTabs 是「还没有 sessionId 的新会话 tab」，只可能开在工作区本身。
-        if (inst.sessionId) liveMap.set(inst.sessionId, inst);
-        else if (inst.cwd === d) freshTabs.push(inst);
-      }
-      return { liveMap, freshTabs };
-    };
-
-    // 统一行：一条会话（session:list 的 s，或无 id 的新会话）→ DOM 行。liveInst 非空 = 已打开为 tab。
-    // 全程 textContent（无 innerHTML 插值用户数据）→ CSP 安全。
-    const sessionRow = (s, liveInst, workspaceCwd) => {
-      // 托管 worktree 的会话行自带真实 cwd（`.claude/worktrees/<name>`，父仓只是展示归属）。
-      // 打开/删除都要用它：拿工作区 cwd 去 resume，会落到一个根本没有这条 transcript 的
-      // project 目录，ack 回「会话不存在」。父仓的行不带 cwd，照旧回落工作区 cwd。
-      const rowCwd = s.cwd || workspaceCwd;
-      const active = liveInst && liveInst.instanceId === viewingInstanceId;
-
-      // 使用相对定位的包装容器来实现侧滑关闭
-      const container = el(`<div class="relative overflow-hidden w-full select-none swipe-row-container"></div>`);
-
-      // 背景红底“关闭”按钮
-      let deleteBtn;
-      if (liveInst) {
-        deleteBtn = el(`<div class="absolute inset-y-0 right-0 w-[70px] bg-danger text-white flex items-center justify-center font-sans font-semibold text-xs active:opacity-90 cursor-pointer select-none" style="z-index: 10;">${t('关闭')}</div>`);
-        deleteBtn.onclick = async (e) => {
-          e.stopPropagation();
-          haptic('warning');
-          if (await appConfirm({
-            title: `${t('关闭会话「')}${s.title || t('新会话')}${t('」？')}`,
-            body: t('会话将从 tab 列表移除，但历史保留可重新打开。'),
-            okText: t('关闭会话'),
-          })) {
-            // 点停止顿一下跳主页的回归修复：若关的正是当前正在看的会话，记下 id 供
-            // wasViewingInstanceDestroyed 排除——这是用户自己确认过的主动关闭，不是"被摧毁"。
-            explicitCloseInstanceId = liveInst.instanceId;
-            socket.emit('session:close', { instanceId: liveInst.instanceId });
-            closeLeftSidebar();
-          } else {
-            rowContent.style.transform = 'translateX(0px)';
-            rowSwiped = false;
-          }
-        };
-        container.appendChild(deleteBtn);
-      }
-
-      // 行内容 (可滑动的前景卡片)
-      const rowContent = el(`<div class="row-content relative flex items-center gap-2 pl-6 pr-3 py-2.5 border-b border-line-soft transition-transform duration-200 cursor-pointer${active ? ' bg-accent-wash' : ' bg-surface'}" style="z-index: 20;" data-testid="session-row" data-session-id="${esc(s.id || '')}" data-instance-id="${esc(liveInst?.instanceId || '')}"></div>`);
-      rowContent.dataset.terminalState = s.terminal || '';
-      rowContent.dataset.terminalSource = s.terminalSource || '';
-      rowContent.dataset.bgLocked = s.bgLocked ? '1' : '';
-      const btn = el(`<button class="flex-1 min-w-0 text-left text-xs active:opacity-70"></button>`);
-      btn.title = s.title || t('新会话');
-      const head = el(`<div data-session-head class="flex items-center gap-1.5 min-w-0"></div>`);
-      const titleSpan = el(`<span class="flex-1 min-w-0 truncate font-medium${active ? ' text-accent' : ' text-ink-soft'}"></span>`);
-      titleSpan.textContent = s.title || t('新会话');
-      head.appendChild(titleSpan);
-      // R65 未读：标题加粗变深 + 文字 chip「未读」（原 8px 色点在手机上既不显眼也说不清自己是什么）。
-      // 上次打开后有新活动或长按标过才亮；正在看的（本实例激活或就是当前显示会话）不算未读。
-      // 抽成函数：长按标记后原地重刷这一行，不等整个列表重画。
-      const isViewingRow = active || s.id === displayedSessionId;
-      const applyUnreadMark = () => {
-        const on = Boolean(s.id) && unread.isUnread(s, { isViewing: isViewingRow });
-        titleSpan.classList.toggle('font-semibold', on);
-        titleSpan.classList.toggle('font-medium', !on);
-        if (!active) {
-          titleSpan.classList.toggle('text-ink', on);
-          titleSpan.classList.toggle('text-ink-soft', !on);
-        }
-        head.querySelector('[data-testid="unread-mark"]')?.remove();
-        if (!on) return;
-        const mark = el(`<span data-testid="unread-mark" class="drawer-status-chip shrink-0 text-accent"></span>`);
-        mark.textContent = t('未读');
-        mark.title = t('未读');
-        mark.setAttribute('aria-label', t('未读'));
-        titleSpan.after(mark);
-      };
-      applyUnreadMark();
-      appendSessionStatusChip(head, liveInst?.state, s.terminal, s.terminalSource, Boolean(s.bgLocked));
-      btn.appendChild(head);
-      const sub = el(`<div class="truncate text-ink-faint text-[10px]"></div>`);
-      const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : t('新会话（未保存）');
-      // 短 session_id（前 8 位）：便于对照 CLI /resume、日志、多设备定位同一会话；无 id 的新会话不显示。
-      sub.textContent = formatSessionRowSubtitle({
-        whenText: when,
-        liveOpen: Boolean(liveInst),
-        terminalState: s.terminal || null,
-        terminalSource: s.terminalSource || null,
-        shortId: s.id ? s.id.slice(0, 8) : null,
-        worktree: s.worktree || null, // 托管 worktree 的会话行：标出在哪个工作树干活
-        worktreeGone: Boolean(s.worktreeGone), // 那棵树已被删：这一行点不开，得当场看得出来
-      });
-      btn.appendChild(sub);
-
-      let rowSwiped = false;
-      btn.onclick = (e) => {
-        // 拦截滑动/滚动导致的误触
-        if (rowContent.getAttribute('data-preventClick') === 'true') {
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        }
-        if (rowSwiped) {
-          rowContent.style.transform = 'translateX(0px)';
-          rowSwiped = false;
-          return;
-        }
-        haptic('tap');
-        if (liveInst) {                      // 已打开：切视图，不重新 resume
-          if (liveInst.instanceId !== viewingInstanceId) socket.emit('user:setViewing', { instanceId: liveInst.instanceId });
-          closeLeftSidebar();
-        } else {                             // 未打开：resume 打开（同步关面板 + 4s 兜底，不把反馈压在 ack 上）
-          closeLeftSidebar();
-          let acked = false;
-          const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: rowCwd, title: s.title, message });
-          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => {
-            acked = true;
-            if (!res?.ok) blocked(res?.error || t('切换失败'));
-            else dismissBlockedSurfaceIfTarget(s.id, rowCwd); // 迟到的成功 ack：撤掉 4s 兜底弹出的落地页
-          });
-          setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
-        }
-      };
-      rowContent.appendChild(btn);
-
-      // 长按（触屏按住 / 鼠标按住 / 桌面右键）→ 标为未读 / 标为已读。只有落盘会话（有 id）才有「未读」可言。
-      // 正看着的会话同样能标「稍后再看」并当场亮起：手动标记不受 isViewing 管辖（见 logic/unread.js
-      // 里那两条短路的顺序注），所以这里问 isUnread 一个就够，不必再叠 isManualUnread。
-      if (s.id) {
-        attachLongPress(rowContent, async () => {
-          if (rowContent.getAttribute('data-preventClick') === 'true') return; // 已被侧滑手势认领
-          haptic('tap');
-          const wasUnread = unread.isUnread(s, { isViewing: isViewingRow });
-          const ok = await appConfirm({
-            title: s.title || t('新会话'),
-            body: wasUnread
-              ? t('标为已读后，这一行的「未读」提示消失。')
-              : t('标为未读后，这一行会一直显示「未读」，直到你再次打开它。'),
-            okText: wasUnread ? t('标为已读') : t('标为未读'),
-          });
-          if (!ok) return;
-          unread.setManualUnread(s.id, !wasUnread);
-          applyUnreadMark();
-          refreshDirUnreadCounts();
-        });
-      }
-
-      // 原生 x 按钮：桌面/移动端均常显（此前 md:block hidden 只在桌面显示，手机端只能靠不可发现的侧滑
-      // 手势——已打开会话本行没有其它可见按钮，用户体感是"点开会话后这行的图标凭空消失了"）。
-      // 侧滑仍保留作快捷方式，二者并存、互不冲突，都是触发同一个 session:close。
-      if (liveInst) {
-        // ✕ 保留字符（E2E hasText:'✕'）；红=不可逆留给 🗑，故 hover 用中性色。
-        const closeBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-ink hover:bg-sunk active:bg-line text-sm" data-testid="session-close" title="${t('关闭会话')}" aria-label="${t('关闭会话')}">✕</button>`);
-        closeBtn.onclick = async e => {
-          e.stopPropagation();
-          haptic('warning');
-          if (await appConfirm({
-            title: `${t('关闭会话「')}${s.title || t('新会话')}${t('」？')}`,
-            body: t('会话将从 tab 列表移除，但历史保留可重新打开。'),
-            okText: t('关闭会话'),
-          })) {
-            // 同上（侧滑关闭按钮走的是另一条 DOM 路径，但同一个 session:close 语义）。
-            explicitCloseInstanceId = liveInst.instanceId;
-            socket.emit('session:close', { instanceId: liveInst.instanceId });
-            closeLeftSidebar();
-          }
-        };
-        rowContent.appendChild(closeBtn);
-      }
-
-      // 未打开的历史会话：彻底删除入口。已打开的会话走上面的关闭 tab，不在此重复给删除入口
-      // （删一个正被本产品驱动的会话语义混乱，后端保护①也会拒）。无 id 的新会话（未落盘）无从删。
-      if (s.id && !liveInst) {
-        const delBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm" data-testid="session-delete" title="${t('删除会话')}" aria-label="${t('删除会话')}">🗑</button>`);
-        delBtn.onclick = e => {
-          e.stopPropagation();
-          haptic('warning');
-          openDeleteSession(s.id, rowCwd, s.title);
-        };
-        rowContent.appendChild(delBtn);
-      }
-
-      container.appendChild(rowContent);
-
-      // 手机端：侧滑触控手势监听 (Swipe left gestures) - 贴合指尖且防点击误触
-      if (liveInst) {
-        let rowStartX = 0, rowStartY = 0;
-        let isDragging = false;
-
-        rowContent.addEventListener('touchstart', ev => {
-          rowStartX = ev.touches[0].clientX;
-          rowStartY = ev.touches[0].clientY;
-          isDragging = true;
-          rowContent.classList.add('swiping'); // 禁用过渡
-        }, { passive: true });
-
-        rowContent.addEventListener('touchmove', ev => {
-          if (!rowStartX || !isDragging) return;
-          const currentX = ev.touches[0].clientX;
-          const currentY = ev.touches[0].clientY;
-          const diffX = currentX - rowStartX;
-          const diffY = currentY - rowStartY;
-
-          // 只要手指发生了明显移动（超过 8px），就标记为拖拽，防止触发点击事件
-          if (Math.abs(diffX) > 8 || Math.abs(diffY) > 8) {
-            rowContent.setAttribute('data-preventClick', 'true');
-          }
-
-          // 横向滑动优势判定
-          if (Math.abs(diffX) > Math.abs(diffY) * 1.2) {
-            let targetX = rowSwiped ? -70 + diffX : diffX;
-            // 边缘阻尼
-            if (targetX > 15) {
-              targetX = 15 * 0.3;
-            } else if (targetX < -100) {
-              targetX = -100 + (targetX + 100) * 0.3;
-            }
-            rowContent.style.transform = `translateX(${targetX}px)`;
-          }
-        }, { passive: true });
-
-        rowContent.addEventListener('touchend', ev => {
-          if (!isDragging) return;
-          isDragging = false;
-          rowContent.classList.remove('swiping'); // 启用过渡
-
-          const currentX = ev.changedTouches[0].clientX;
-          const diffX = currentX - rowStartX;
-
-          let finalSwiped = rowSwiped;
-          if (rowSwiped) {
-            if (diffX > 30) finalSwiped = false;
-          } else {
-            if (diffX < -35) finalSwiped = true;
-          }
-
-          rowSwiped = finalSwiped;
-          if (rowSwiped) {
-            rowContent.style.transform = 'translateX(-70px)';
-            haptic('tap');
-          } else {
-            rowContent.style.transform = 'translateX(0px)';
-          }
-
-          // 延迟清除防误触标志，确保拦截 touchend 后产生的 click 事件
-          setTimeout(() => {
-            rowContent.removeAttribute('data-preventClick');
-          }, 100);
-
-          rowStartX = 0;
-          rowStartY = 0;
-        }, { passive: true });
-      }
-
-      return container;
-    };
-
-    // 组装并渲染子树函数
-    // subtreeGen：populateSubtree 每次调用递增的代次，供内部各异步 ack 判断"自己是否已被更晚一次调用
-    // 顶替"——expandedDirs.has(cwd) 只答"这个目录还展开着吗"，答不了"这次 ack 属于哪一次调用"。快速
-    // 折叠再展开同一目录（复用同一个 container）时，旧调用的迟到 ack 若只查前者，可能用 renderRows
-    // 整段清空刚渲染好的新内容。
-    let subtreeGen = 0;
-    let sessionListRequestGen = 0;
-    const populateSubtree = (cwd, container, { background = false } = {}) => {
-      // 后台保鲜不使现有 renderRows /「显示全部」闭包失效；首次（折叠目录尚未画过）仍建立代次。
-      if (!background || subtreeGen === 0) subtreeGen += 1;
-      const myGen = subtreeGen;
-      const activeQuery = () => String(sessionSearchQueryByDir.get(cwd) || '').trim();
-
-      const mountSearch = () => bindSessionSearchInput(container, {
-        cwd,
-        getQuery: (dir) => sessionSearchQueryByDir.get(dir) || '',
-        setQuery: (dir, value) => sessionSearchQueryByDir.set(dir, value),
-        onDebouncedQuery: (dir) => {
-          if (!expandedDirs.has(dir)) return;
-          populateSubtree(dir, container);
-        },
-        el,
-      });
-
-      // 渲染：搜索框（稳定节点）+ 行宿主（可重建）+ 无 id 新会话 + 会话行 +（浏览态）「显示全部」/剩余提示
-      // git worktree 不再嵌套在本目录下自动分组——须作为独立 workdir 出现在 availableDirs。
-      const renderRows = (sessions, hasMore, total = null, pinned = []) => {
-        const { liveMap, freshTabs } = currentLiveRows();
-        const query = activeQuery();
-        mountSearch();
-        const rowsHost = bindSessionRowsHost(container, el);
-        rowsHost.innerHTML = '';
-
-        if (!query) {
-          for (const inst of freshTabs) {
-            rowsHost.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
-          }
-          // 手动标「稍后再看」、已被 limit 挤出时间序这一页的会话（服务端 session:list 的 pinned）。
-          // 置顶而不是按时间插回原位：插回原位等于没补——它本来就是因为排得太后才看不见的。
-          // 带一行小标，否则「一条上周的会话排在最上面」读起来像排序坏了。
-          if (pinned.length) {
-            const pinnedHead = el(`<div class="pl-6 pr-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-ink-faint" data-testid="session-pinned-head"></div>`);
-            pinnedHead.textContent = t('稍后再看');
-            rowsHost.appendChild(pinnedHead);
-            for (const s of pinned) {
-              rowsHost.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
-            }
-          }
-        }
-        for (const s of sessions) {
-          rowsHost.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
-        }
-        if (query && sessions.length === 0) {
-          const empty = el(`<div class="pl-6 pr-3 py-3 text-xs text-ink-faint border-b border-line-soft/40" data-testid="session-search-empty">${t('无匹配会话')}</div>`);
-          rowsHost.appendChild(empty);
-        }
-
-        if (!query && hasMore && !expandedAllDirs.has(cwd)) {
-          const more = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40">${t('显示全部会话…')}</button>`);
-          more.onclick = () => {
-            haptic('tap');
-            more.textContent = t('加载中…');
-            expandedAllDirs.add(cwd); // 记住意图：后续 revalidate 也得按全量拉，否则重建一次就被打回截断
-            const requestGen = ++sessionListRequestGen;
-            socket.emit('session:list', { cwd, all: true }, state => {
-              if (requestGen !== sessionListRequestGen) return;
-              if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
-              if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return;
-              const all = state?.sessions || [];
-              const nextHasMore = !!state?.hasMore;
-              const nextTotal = Number.isFinite(state?.total) ? state.total : null;
-              const nextPinned = Array.isArray(state?.pinned) ? state.pinned : [];
-              unread.hydrate(state?.readState); // 下面无条件 renderRows，只需保证灌在渲染之前
-              updateTerminalStateForDir(cwd, all, state?.terminalBusy, state?.terminalWaiting);
-              sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '', pinned: nextPinned });
-              renderRows(all, nextHasMore, nextTotal, nextPinned);
-            });
-          };
-          rowsHost.appendChild(more);
-        } else if (!query && hasMore && expandedAllDirs.has(cwd)) {
-          const remaining = remainingOlderSessionCount(total, sessions.length);
-          const hintText = remaining != null
-            ? t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining))
-            : t('还有更早的会话，可用搜索查找');
-          const hint = el(`<div class="pl-6 pr-3 py-2 text-xs text-ink-faint border-b border-line-soft/40" data-testid="session-remaining-hint"></div>`);
-          hint.textContent = hintText;
-          rowsHost.appendChild(hint);
-        }
-        refreshDirUnreadCounts(); // 行数据（含 lastUsedAt）刚更新，目录头「N 未读」随之重算
-        // 折叠态点角标 → 先展开、发 session:list、等 ack 回来渲染完行，跳转才有落点，就是这里。
-        drawerUnreadJump.flushPendingJump(cwd);
-      };
-
-      if (!background) {
-        // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore, total?, query?}）：有缓存就先拿旧数据把列表画出来，
-        // 不等网络；新鲜度交给下面那次无条件 revalidate。搜索态与浏览态缓存键共享同一 Map，用 query 字段区分。
-        mountSearch();
-        const cachedEntry = sessionsCache.get(cwd);
-        const cacheMatchesQuery = cachedEntry && String(cachedEntry.query || '') === activeQuery();
-        if (cacheMatchesQuery) {
-          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null, cachedEntry.pinned || []);
-        } else {
-          const rowsHost = bindSessionRowsHost(container, el);
-          rowsHost.innerHTML = '';
-          if (!activeQuery()) {
-            for (const inst of currentLiveRows().freshTabs) {
-              rowsHost.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
-            }
-          }
-          const skeleton = el(`
-            <div class="skeleton-loader py-1">
-              <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
-                <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-2/3"></div>
-                <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/3"></div>
-              </div>
-              <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
-                <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-1/2"></div>
-                <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/4"></div>
-              </div>
-            </div>
-          `);
-          rowsHost.appendChild(skeleton);
-        }
-      }
-
-      // 2) 后端异步刷新：无条件发 session:list——这就是 SWR 里的 revalidate，缓存只负责"秒开"，
-      // 不负责"够新"。曾经这里加过 `仅当无缓存或已标 stale 才发` 的省流条件，而 stale 只在
-      // 实例集 id 增删时置位，于是「id 集合没变、内容变了」的场景全部刷不出来：会话被改名、
-      // session:list 自身返回值变化（如溢出截断转为 hasMore）都停留在旧数据上（P0-11n/v/w 就是
-      // 为此而写的回归测试）。省下的那次 socket 往返不值这个正确性。
-      //
-      // 常规调用仍由结构变化/展开动作收窄；另有仅在抽屉可见时每 12 秒一次的 background revalidate，
-      // 用来跟进 CLI registry 的 busy/alive。响应回来后由 shouldRerenderSessionList 比对内容签名，
-      // 没真变化只更新缓存、不动 DOM，因此不会重画列表或闪骨架屏（P0-11t/P0-11z）。
-      // 搜索态 revalidate 必须带上 query，否则会把匹配结果打回默认 6 条。
-      if (background && !socket.connected) return;
-      const requestGen = ++sessionListRequestGen;
-      const query = activeQuery();
-      const listPayload = query
-        ? { cwd, query }
-        : { cwd, all: expandedAllDirs.has(cwd) };
-      socket.emit('session:list', listPayload, state => {
-        if (requestGen !== sessionListRequestGen) return;
-        if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
-        if (myGen !== subtreeGen) return;
-        if (!background && !expandedDirs.has(cwd)) return;
-        // 用户在请求飞行期间改了搜索词 → 丢弃过期 ack
-        if (activeQuery() !== query) return;
-        const sessions = state?.sessions || [];
-        const hasMore = !!state?.hasMore;
-        const total = Number.isFinite(state?.total) ? state.total : null;
-        // pinned：手动标记但被 limit 挤出本页的会话，服务端单独补回（旧服务端不发这个字段 → 空数组，
-        // 功能静默退回「标了就可能找不回来」，但不报错、不影响本页任何一行）。
-        const pinned = Array.isArray(state?.pinned) ? state.pinned : [];
-        // 已读位点搭 session:list 回来（服务端刻意不另开广播）：必须在渲染前灌进去，让「行数据」
-        // 与「未读判定」同帧——否则会出现行已更新、未读标记还是旧的这种撕裂。返回值是「内容真变了吗」，
-        // 拿它并进重渲染条件；恒真会打掉 shouldRerenderSessionList 的省渲优化。
-        const readChanged = unread.hydrate(state?.readState);
-        updateTerminalStateForDir(cwd, sessions, state?.terminalBusy, state?.terminalWaiting);
-        const prevEntry = sessionsCache.get(cwd);
-        const willRerender = shouldRerenderSessionList({
-          hasPrevEntry: !!prevEntry && String(prevEntry.query || '') === query,
-          prevSessions: prevEntry?.sessions,
-          prevHasMore: prevEntry?.hasMore,
-          prevTotal: prevEntry?.total ?? null,
-          prevPinned: prevEntry?.pinned,
-          nextSessions: sessions,
-          nextHasMore: hasMore,
-          nextTotal: total,
-          nextPinned: pinned,
-        });
-        sessionsCache.set(cwd, { sessions, hasMore, total, query, pinned });
-        if (willRerender || readChanged) renderRows(sessions, hasMore, total, pinned);
-      });
-    };
-
-    // 如果当前展开，则渲染列表
-    if (isExpanded) {
-      populateSubtree(d, subtree);
-    }
-
-    // 折叠/展开切换：纯 CSS 驱动，不触发重绘全量 DOM
-    // 展开抽成具名函数：折叠态点未读角标时也要走这条路（先展开，行渲染完再由 flushPendingJump
-    // 补上跳转），两个入口共用一份，不各写一遍展开动作。
-    const expandDir = () => {
-      expandedDirs.add(d);
-      try { localStorage.setItem('ccm_expanded_dirs', JSON.stringify([...expandedDirs])); } catch {}
-      subtree.classList.add('expanded');
-      arrow.classList.add('rotated');
-      icon.textContent = '📂';
-      populateSubtree(d, subtree);
-    };
-    toggleBtn.onclick = () => {
-      haptic('tap');
-      if (expandedDirs.has(d)) {
-        expandedDirs.delete(d);
-        try { localStorage.setItem('ccm_expanded_dirs', JSON.stringify([...expandedDirs])); } catch {}
-        subtree.classList.remove('expanded');
-        arrow.classList.remove('rotated');
-        icon.textContent = '📁';
-        drawerUnreadJump.resetCursor(d); // 下次点开从第一条未读重新数起
-      } else {
-        expandDir();
-      }
-    };
-
-    return {
-      dirRow,
-      subtree,
-      expand: expandDir,
-      revalidate: () => populateSubtree(d, subtree, { background: true }),
-    };
-  }
-
-  function openSessionPanel() {
-    sessionPanel.innerHTML = '';
-    // ★ 这里【不】清抽屉的失败回执。列表重建与那条回执没有因果关系，而每次打开抽屉都会走到
-    // 这里：慢 ACK 的回执写进刚关上的抽屉后，用户重新打开的第一件事就是把它清掉——正好复现
-    // 原来那个"点了没反应"。清除归 drawer（关抽屉时）与删除成功时，两处都是真的翻篇了。
-    drawerUnreadJump.resetCursor(); // 面板整段重建：旧游标指向的行已不存在，从头数起
-    // UX-007：当前工作区默认展开 + 记忆用户展开态
-    try {
-      const saved = JSON.parse(localStorage.getItem('ccm_expanded_dirs') || '[]');
-      if (Array.isArray(saved)) for (const d of saved) if (d) expandedDirs.add(d);
-    } catch { /* ignore */ }
-    if (currentCwd) expandedDirs.add(currentCwd);
-
-    // 抽屉 = 注意力入口 + 导航树（非状态仪表盘）：需要你 → 服务异常 → 工作区树。
-    // "需要你"聚合置顶（AttentionDeriver）：跨全部工作区/会话，
-    // 不限于当前展开的目录——正是它相对下方逐目录列表的增量价值（注意力不对称）。
-    sessionPanel.appendChild(buildNeedsYouSection());
-    sessionPanel.appendChild(buildServiceSection());
-
-    // 按 availableDirs 顺序（=WORK_DIR 首位 + WORK_DIRS），每目录一行：
-    //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）
-    //   折叠：📁 ▶ basename + 角标 → 点击展开（若非当前 cwd 则同时切换）
-    dirSectionNodes = new Map();
-    for (const d of availableDirs) {
-      const section = buildDirSection(d);
-      sessionPanel.appendChild(section.dirRow);
-      sessionPanel.appendChild(section.subtree);
-      dirSectionNodes.set(d, section);
-    }
-    startSessionPanelRevalidator();
-  }
-
-  // P3 抽屉局部重建：只重建 changedDirs 列出的目录（调用方=setInstances，changedDirs 来自
-  // diffDirSignatures），其余目录的 dirRow/subtree 保持原 DOM 节点不动——滚动位置、侧滑态、
-  // "显示全部"展开态等本地态都不受影响，不会像全量重建那样连坐撤离。dirRow 与 subtree 必须保持
-  // 相邻兄弟节点（expandWorkspace 等测试辅助函数按 nextElementSibling 定位 subtree），两次
-  // replaceWith 各自原地替换，不改变整体顺序，故这个不变量始终成立。
-  function rebuildDirSections(changedDirs) {
-    for (const d of changedDirs) {
-      const old = dirSectionNodes.get(d);
-      if (!old || !old.dirRow.isConnected) {
-        // 防御：面板还没针对这个目录做过全量渲染（理论上不应发生——setInstances 里
-        // isDesktop||isPanelOpen 门控保证局部重建只在面板已可见时触发，可见就必然渲染过）。
-        // 自愈：退化为全量重建，好过留下一段不完整的面板。
-        openSessionPanel();
-        return;
-      }
-      const next = buildDirSection(d);
-      old.dirRow.replaceWith(next.dirRow);
-      old.subtree.replaceWith(next.subtree);
-      dirSectionNodes.set(d, next);
-    }
-  }
-
-  // 已读位点被服务端刷新后（read:sync 归并回来）重画未读标记。每个目录小节的渲染逻辑是 buildDirSection
-  // 的闭包，外部够不着，只能整段重建；面板还没渲染过时 dirSectionNodes 为空，什么都不做——下次
-  // openSessionPanel 自然用新位点。首页最近列表不走这里：它在自己的 session:list 回调里 hydrate，
-  // 与列表数据同帧渲染。
-  function refreshUnreadMarks() {
-    if (dirSectionNodes?.size) rebuildDirSections([...dirSectionNodes.keys()]);
-    refreshDashRecentUnreadMarks();
-  }
-
-  // 首页最近行的未读 chip 就地重算。首页是「重连后停在原地」最常见的落点（锁屏再打开必然重连），
-  // 而 read:sync 只在 connect 那一趟发；只重建抽屉的话，已经画在屏幕上的首页行会一直停在旧判定，
-  // 直到用户自己离开首页再回来——在另一台设备上读过的会话，这里仍写着「未读」。
-  // 判定所需字段取自行自己的 dataset（渲染时留下），不保存列表快照：多一份状态就多一处会和 DOM 漂移。
-  function refreshDashRecentUnreadMarks() {
-    for (const item of document.querySelectorAll('#dashRecentsList .dash-recent-item[data-session-id]')) {
-      const title = item.querySelector('.dash-recent-title');
-      if (!title) continue;
-      const id = item.dataset.sessionId;
-      const lastUsedAt = Number(item.dataset.lastUsedAt);
-      const shouldMark = unread.isUnread(
-        { id, lastUsedAt: Number.isFinite(lastUsedAt) ? lastUsedAt : undefined },
-        { isViewing: id === displayedSessionId },
-      );
-      const existing = title.querySelector('[data-testid="unread-mark"]');
-      if (shouldMark === Boolean(existing)) continue;
-      if (existing) existing.remove();
-      else title.prepend(dashUnreadMark());
-    }
-  }
-
-  // 首页最近行与抽屉行共用的「未读」chip 构造：渲染侧与就地重算侧各写一份必然漂移。
-  function dashUnreadMark() {
-    const mark = el(`<span data-testid="unread-mark" class="drawer-status-chip text-accent mr-1.5 align-middle"></span>`);
-    mark.textContent = t('未读');
-    mark.setAttribute('aria-label', t('未读'));
-    return mark;
-  }
-
-  function isSessionPanelRevalidateActive() {
-    if (!leftSidebar || document.visibilityState !== 'visible') return false;
-    if (window.innerWidth >= 1024) return !document.body.classList.contains('sidebar-collapsed');
-    return !leftSidebar.classList.contains('-translate-x-full');
-  }
-  function stopSessionPanelRevalidator() {
-    if (sessionPanelRevalidateTimer) clearTimeout(sessionPanelRevalidateTimer);
-    sessionPanelRevalidateTimer = null;
-    // 抽屉不可见时不再刷新 CLI registry；与其让顶部/目录无限保留旧状态，不如撤下这条临时信号。
-    if (terminalStateByDir.size) {
-      terminalStateByDir.clear();
-      refreshDirBadges();
-      updateSessionsDot();
-    }
-    // SWR 缓存仍保留标题/时间以便下次秒开，但 terminal 是短时活体状态，关闭后必须剥掉，避免重开时
-    // 先画一帧已经结束的“终端运行中”。
-    for (const [cwd, entry] of sessionsCache) {
-      let changed = false;
-      const sessions = (entry?.sessions || []).map(session => {
-        if (!session?.terminal) return session;
-        changed = true;
-        const copy = { ...session };
-        delete copy.terminal;
-        return copy;
-      });
-      if (changed) sessionsCache.set(cwd, { ...entry, sessions });
-    }
-  }
-  // skipExpanded：紧跟 openSessionPanel() 的那次立即刷新专用。openSessionPanel 已经同步给每个
-  // 展开目录调过 populateSubtree（各自恒发一次 session:list），再对它们刷一遍是纯冗余往返；这次
-  // 立即刷新真正要覆盖的是【折叠目录】——它们不 populate，缓存空着，目录头未读角标要靠这一轮才有数。
-  // 周期刷新与回前台不传此项（抽屉可能已开着很久，展开目录的数据同样陈旧，必须全量刷）。
-  function revalidateSessionPanelDirs({ skipExpanded = false } = {}) {
-    if (!isSessionPanelRevalidateActive()) { stopSessionPanelRevalidator(); return; }
-    if (socket.connected) {
-      for (const cwd of availableDirs) {
-        if (skipExpanded && expandedDirs.has(cwd)) continue;
-        dirSectionNodes.get(cwd)?.revalidate?.();
-      }
-    }
-    scheduleSessionPanelRevalidate();
-  }
-  function scheduleSessionPanelRevalidate(delay = SESSION_PANEL_REVALIDATE_MS) {
-    if (sessionPanelRevalidateTimer || !isSessionPanelRevalidateActive()) return;
-    sessionPanelRevalidateTimer = setTimeout(() => {
-      sessionPanelRevalidateTimer = null;
-      revalidateSessionPanelDirs();
-    }, delay);
-  }
-  function startSessionPanelRevalidator({ immediate = false, skipExpanded = false } = {}) {
-    if (!isSessionPanelRevalidateActive()) { stopSessionPanelRevalidator(); return; }
-    if (immediate) revalidateSessionPanelDirs({ skipExpanded });
-    else scheduleSessionPanelRevalidate();
-  }
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') startSessionPanelRevalidator({ immediate: true });
-    else stopSessionPanelRevalidator();
+  const sessionSidebar = createSessionSidebar(appContext, {
+    appConfirm, applyDeepLink, applySessionDraftSwap, attachments, attentionChipEl, baseName,
+    closeLeftSidebar, composePage, connBanner, connDot, connDotWrap,
+    dismissBlockedSurfaceIfTarget: (...args) => dismissBlockedSurfaceIfTarget(...args), drawer, el,
+    ensureEmptySurface: (...args) => ensureEmptySurface(...args),
+    enterComposeReady: (...args) => enterComposeReady(...args), envConfigPanel, folderPicker, haptic,
+    inputEl, leftSidebar, newSessionWorktree, noticeDismissals, openDeleteSession, perfTrace, prefetchHistory, projectsState,
+    renderHooksBridgeSection, renderStatuslineBridgeSection, SESSION_PANEL_REVALIDATE_MS, sessionPanel,
+    sessionRename, sessionRowMenu, sessionsCache, sessionsDot, sessionSearchQueryByDir, sessionWorkspaceState,
+    setStatusIcon, showSessionBlockedSurface: (...args) => showSessionBlockedSurface(...args), socket,
+    syncDashNoFolders: (...args) => syncDashNoFolders(...args), unread,
+    getAvailableDirs: () => availableDirs, getCurrentCwd: () => currentCwd,
+    getDirSectionNodes: () => dirSectionNodes, getDisplayedSessionId: () => displayedSessionId,
+    getExpandedDirs: () => expandedDirs, getGeneralNav: () => generalNav,
+    getInstancesList: () => instancesList, getLatestServiceHealth: () => latestServiceHealth,
+    getMirrorAutonomousFlag: () => mirrorAutonomousFlag, getMirrorReadonlySid: () => mirrorReadonlySid,
+    getMirrorStaleFlag: () => mirrorStaleFlag, getMirrorWaitingFlag: () => mirrorWaitingFlag,
+    getNeedsYouList: () => needsYouList, getViewingInstanceId: () => viewingInstanceId,
+    getWorkdirStates: () => workdirStates, setComposeCwd: v => { composeCwd = v; },
+    setCurrentCwd: v => { currentCwd = v; }, setDirSectionNodes: v => { dirSectionNodes = v; },
+    setDisplayedSessionId: v => { displayedSessionId = v; },
+    setExplicitCloseInstanceId: v => { explicitCloseInstanceId = v; },
+    setFreshInterruptedInstanceId: v => { freshInterruptedInstanceId = v; },
+    setLatestServiceHealth: v => { latestServiceHealth = v; },
+    setSessionIdClearedByNav: v => { sessionIdClearedByNav = v; },
+    setViewingInstanceId: v => { viewingInstanceId = v; },
   });
-  window.addEventListener('pagehide', stopSessionPanelRevalidator);
+  const {
+    dashUnreadMark, isSessionPanelRevalidateActive, mirrorRowLock, openSessionPanel, rebuildDirSections,
+    refreshDirBadges, refreshNeedsYou, refreshSessionStatusChips, refreshUnreadMarks, reorderDirSections,
+    startNewSessionIn, startSessionPanelRevalidator, stopSessionPanelRevalidator, updateAttentionSignal,
+    updateServiceNotice, updateSessionsDot,
+  } = sessionSidebar;
 
   // 清视图层（DOM + 去重基线 + 弹窗队列），不加载历史——加载由调用方决定（台阶3：bindView 切 tab 时
   // 先 sync 活缓冲、无缓冲再 history）。
@@ -7318,7 +5643,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const guide = el(`
       <div class="empty-session-guide flex flex-col items-center justify-center py-10 px-4 text-center select-none" data-testid="empty-session-guide">
         <div class="text-base font-medium text-ink mb-1">${t('新会话已就绪')}</div>
-        <div class="text-xs text-ink-soft mb-4">${t('工作区')} <span class="font-semibold text-ink">${esc(baseName(currentCwd) || '…')}</span>${currentModel ? ` · ${t('模型')} <span class="font-semibold">${esc(currentModel)}</span>` : ''}</div>
+        <div class="text-xs text-ink-soft mb-4">${t('文件夹')} <span class="font-semibold text-ink">${esc(baseName(currentCwd) || '…')}</span>${currentModel ? ` · ${t('模型')} <span class="font-semibold">${esc(currentModel)}</span>` : ''}</div>
         <div class="flex flex-col gap-2 w-full max-w-sm">
           <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('总结当前仓库结构并指出入口文件')}">${t('💡 总结当前仓库结构')}</button>
           <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('帮我写一个最小改动的修复计划')}">${t('🛠 写一个最小修复计划')}</button>
@@ -7338,7 +5663,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     messagesEl.appendChild(guide);
   }
 
-  function clearView(sessionId, tip) {
+  // prevSessionId：清屏前屏幕上是哪个会话。调用方说清是同一会话的重载，离线条目的气泡才保得住（缺省不保）。
+  // 不能在这里读 displayedSessionId 代替：bindView 先改写它再调本函数。
+  function clearView(sessionId, tip, { prevSessionId = null } = {}) {
     currentSessionId = sessionId;
     lastSeq = 0;
     curEpoch = null;
@@ -7359,11 +5686,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       viewingInstanceId: displayedInstanceId,
       sessionId,
     });
+    // 离线条目（交给 outbox 的）气泡另判一次，只保气泡、不补 busy。这是有意拆开，不是漏扩：发送窗口那条问的是
+    // 「有没有一次乐观 busy 会被这次清屏冲掉」，离线条目没有这样一个 busy——断线时入队不点亮运行条，重放那一批的
+    // busy 在批后按结果结算（shouldBusyAfterOfflineBatch），两条重载路径清屏之后又按 instances 权威态重种。
+    // 照着发送窗口补 busy，还在等连接的那几条会凭空点亮一条运行条，没有 result 来收。
+    // 保它们是为了让同一会话的清屏重载不把气泡摘掉：负 ack 常常先于重载的历史到达，气泡不在，「未发送 + 重发」
+    // 就只能另起一条提示条，被随后的历史压到顶上（判据见 shouldCarryOutboxBubbleOnClear）。
     // 只捞未确认的（.opacity-70）——已被 user_message 认领转正的那些属于历史，照常随清屏走、
     // 由 sessionDomCache 或 loadHistory 负责复原，重复留下会和历史回放撞成两条。
-    const keptPending = inSendWindow
-      ? [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]
-      : [];
+    const keptPending = [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]
+      .filter(b => inSendWindow || shouldCarryOutboxBubbleOnClear({
+        outboxSessionId: b.dataset.outboxSessionId || null, prevSessionId, sessionId,
+      }));
     messagesEl.innerHTML = '';
     messagesEl.classList.remove('empty-start');
     clearStreams(); thinkings.clear(); toolCards.clear();
@@ -7373,6 +5707,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     queueMicrotask(() => maybeShowEmptySessionGuide());
     subagentCards.clear(); // 切会话/清屏：丢弃子 agent 卡状态（DOM 已随 messagesEl 清空）
     approvals.clearAll();
+    elicitationSheet.clearAll();
     // 附件托盘不再这里无脑清空：bindView 经 planSessionDraftSwap 按会话存/取；
     // 发送成功路径各自清空。否则同会话静默换实例 / 重载历史会误清未发送附件。
     setBusy(false);
@@ -7384,11 +5719,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (inSendWindow) {
       setBusy(true);
       _turnRunning = true; // 同会话静默换实例：那条刚发出的消息仍在跑，闸不能松
-      // 未确认气泡放回（innerHTML='' 只是把节点摘出 DOM 树，节点本身连同已绑的监听器都还完好）。
-      // 追加到末尾即可：这批本就是清屏前最靠后的消息，且此刻容器是空的，相对顺序原样保留。
-      // 必须排在 maybeShowEmptySessionGuide 的 queueMicrotask 之前落地——它以 childNodes.length 为
-      // 判据，气泡先回来才不会在"其实有消息"的会话上多贴一张空态引导卡。同步代码天然先于微任务。
-      for (const node of keptPending) messagesEl.appendChild(node);
+    }
+    // 未确认气泡放回（innerHTML='' 只是把节点摘出 DOM 树，节点本身连同已绑的监听器都还完好）。
+    // 追加到末尾即可：这批本就是清屏前最靠后的消息，且此刻容器是空的，相对顺序原样保留。
+    // 必须排在 maybeShowEmptySessionGuide 的 queueMicrotask 之前落地——它以 childNodes.length 为
+    // 判据，气泡先回来才不会在"其实有消息"的会话上多贴一张空态引导卡。同步代码天然先于微任务。
+    // 打上 data-carried：在历史回包之前，回显（user_message）可能先把它认领转正、摘掉 .opacity-70。落定逻辑
+    // 只认 .opacity-70 的话会跳过它，它就留在随后落地的历史上方、历史里又画出同一条（验收 O29）。
+    // 原文一并记下：回显转正时会把气泡内容换成 markdown 渲染，.whitespace-pre-wrap 就没了，历史认领按文本找不到它。
+    for (const node of keptPending) {
+      node.dataset.carried = '1';
+      node.dataset.carriedText = node.querySelector('.whitespace-pre-wrap')?.textContent ?? '';
+      messagesEl.appendChild(node);
     }
 
     // Clear stale status line and hide details row to prevent latency layout flashes
@@ -7397,62 +5739,26 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (tip) addBar(tip, 'text-ink-faint');
   }
 
-  // 收起状态栏并清掉陈旧内容。两个调用者都是「视图换了人，旧数据立刻失真」：clearView（切会话）与
-  // showComposeSurface（点 ＋ 开新会话）。两边都随后由新的 status_line 填回。
-  //
-  // home 表面刻意【不】调：那里 syncComposerVisibility 会把整个 #composerFooter 隐藏，状态栏在它
-  // 里面，跟着一起不可见——再调一次是纯冗余（注入验证过：删掉不会让任何用例变红）。
-  // destroyed 表面【要调】，别照着 home 类推：从 compose 首发跳过去时 _composeReady 仍是 true，
-  // shouldShowComposer 于是判显示，footer 没隐藏，状态栏会原地留在中断表面上。
-  function hideStatuslineWrap() {
-    if (cliStatusEl) cliStatusEl.innerHTML = '';
-    if (cliSummaryEl) cliSummaryEl.textContent = 'statusline';
-    if (cliStatusWrapEl) {
-      cliStatusWrapEl.removeAttribute('open'); // 折叠 <details>
-      cliStatusWrapEl.classList.add('hidden');
-    }
-  }
-
-  // 空首页最近列表代次：连续 showDashboard（切 cwd / 重连）时丢弃过期 ack，防旧列表盖新。
-  // 产品决策：重启/空闲回收后永远停在空首页，只展示最近列表，不自动 session:switch。
-  let _dashRecentsGen = 0;
-
-  // 底部输入区显隐：空首页枢纽隐藏；composeReady（点 ＋）/ 有 session / 首发在途显示。
-  const composerFooterEl = document.getElementById('composerFooter') || document.querySelector('footer');
-  function syncComposerVisibility() {
-    const sid = instancesList.find(x => x.instanceId === viewingInstanceId)?.sessionId
-      || currentSessionId
-      || displayedSessionId
-      || null;
-    const show = shouldShowComposer({
-      viewingInstanceId,
-      sessionId: sid,
-      composeReady: _composeReady,
-      pendingFirstSend: _pendingFirstSend,
-      freshInterrupted: viewingInstanceId === freshInterruptedInstanceId,
-    });
-    if (!composerFooterEl) return;
-    composerFooterEl.classList.toggle('hidden', !show);
-  }
-  // 顶部文件夹 pill：真实会话 + compose 页（工作区已定，文件/改动与 session 无关）显示；空首页隐藏。
-  // composeReady 显式传参而不是直接读 _composeReady：三个空表面里 destroyed 那张调用时 _composeReady
-  // 可能仍是 true（resolveEmptySurface 的 instanceDestroyed 分支排在 composeReady 之前），读全局会让
-  // 「会话已中断」表面凭空多出一个入口。cwd 取 panelCwd()——与 pill 的 onclick 同源，判据和落点不许分叉。
-  function syncTopContextPillVisibility(viewingId = viewingInstanceId, sessionId = null, { composeReady = _composeReady } = {}) {
-    if (!topContextPill) return;
-    const sid = sessionId
-      ?? instancesList.find(x => x.instanceId === viewingId)?.sessionId
-      ?? currentSessionId
-      ?? displayedSessionId
-      ?? null;
-    const show = shouldShowTopContextPill({
-      viewingInstanceId: viewingId, sessionId: sid, composeReady, cwd: panelCwd(),
-    });
-    topContextPill.classList.toggle('hidden', !show);
-    // 隐藏时不可聚焦，避免读屏仍读到工作区入口
-    topContextPill.tabIndex = show ? 0 : -1;
-    topContextPill.setAttribute('aria-hidden', show ? 'false' : 'true');
-  }
+  const emptySurfaces = createEmptySurfaces(appContext, {
+    $, approvals, baseName, btnHome, btnNew, btnSessions, dashUnreadMark, el, elicitationSheet, folderPicker, haptic,
+    hideStatuslineWrap, inputEl, messagesEl, modelInput, newSessionWorktree, openLeftSidebar, panelCwd,
+    perfTrace, pillEffortText, pillPermText, prefetchHistory, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,
+    topContextPill, topProjectText, topTitleText, unread, updateWorkspaceChangeBadge,
+    wireConfigRefreshButton, getAvailableDirs: () => availableDirs, getComposeReady: () => _composeReady,
+    getCurrentCwd: () => currentCwd, getCurrentGatewaySuffix: () => currentGatewaySuffix,
+    getCurrentModel: () => currentModel, getCurrentSessionId: () => currentSessionId,
+    getCwdDefaultModel: () => cwdDefaultModel, getDisplayedSessionId: () => displayedSessionId,
+    getFreshInterruptedInstanceId: () => freshInterruptedInstanceId, getInstancesList: () => instancesList,
+    getLatestServiceHealth: () => latestServiceHealth, getModelsList: () => modelsList,
+    getPendingFirstSend: () => _pendingFirstSend, getViewingInstanceId: () => viewingInstanceId,
+    setComposeReady: v => { _composeReady = v; },
+  });
+  const {
+    dismissBlockedSurfaceIfTarget, ensureEmptySurface, enterComposeReady, leaveComposeReady,
+    refreshComposeDefaultsSummary, renderWorktreeChips, showComposeSurface, showDashboard,
+    showInstanceDestroyedSurface, showSessionBlockedSurface, syncComposerVisibility, syncDashNoFolders,
+    syncTopContextLabel, syncTopContextPillAriaLabel, syncTopContextPillVisibility,
+  } = emptySurfaces;
   /**
    * 顶栏 pill 的未提交改动角标。数据源是 status_line 事件里现成的 git 段——不发 git:status、不加轮询。
    * 角标记住自己属于哪个 cwd（dataset.cwd），供 syncTopContextLabel 判断换区后是否该清零。
@@ -7462,66 +5768,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const text = formatWorkspaceChangeBadge(git);
     topContextChanges.textContent = text;
     topContextChanges.classList.toggle('hidden', !text);
+    // 有文案时对 AT 可见；空/隐藏时继续藏（#366）
+    topContextChanges.setAttribute('aria-hidden', text ? 'false' : 'true');
     topContextChanges.dataset.cwd = currentCwd || '';
-  }
-  // 顶栏主 pill 文案：固定工作区 basename（维护者拍板不要会话标题——同仓多会话靠侧栏区分）。
-  // #topTitleText 仍 hidden；title 挂完整 cwd 供长按辨认。
-  function syncTopContextLabel() {
-    const project = baseName(currentCwd);
-    if (topProjectText) topProjectText.textContent = project || '…';
-    // 换工作区即清角标：别让上个工作区的数字挂在新工作区名旁边（下一条 status_line 会填新值）。
-    // 判据用 cwd 归属而非「每次调用都清」——本函数随 instances 广播高频触发，无条件清会让角标反复闪。
-    if (topContextChanges && topContextChanges.dataset.cwd !== (currentCwd || '')) {
-      updateWorkspaceChangeBadge(null);
-    }
-    if (topContextPill) {
-      topContextPill.title = currentCwd
-        ? `${t('工作区：浏览或查看改动')} · ${currentCwd}`
-        : t('工作区：浏览或查看改动');
-    }
-  }
-  function enterComposeReady() {
-    _composeReady = true;
-    syncComposerVisibility();
-  }
-  function leaveComposeReady() {
-    if (!_composeReady) {
-      syncComposerVisibility();
-      return;
-    }
-    _composeReady = false;
-    syncComposerVisibility();
-  }
-
-  // 读底栏 pill 已同步的文案（instances defaults / models scout）→ 写进 compose 页摘要。
-  // 与 setPermMode / setEffortMode / syncModelUI 同源，避免页内与底栏各猜一套。
-  function currentComposeDefaultsLabels() {
-    const cliDefault = (modelsList || []).find(m => (typeof m === 'string' ? m : m?.value) === 'default');
-    const cliDefaultLabel = cliDefault && typeof cliDefault === 'object'
-      ? (cliDefault.displayName || 'Default (recommended)')
-      : null;
-    // 与底栏 pill 同源（resolveModelPillText）：新会话空 model 时同样把 cwd 默认别名解析成真实模型名，
-    // 不再各猜一套 / 靠读 pill DOM 文案兜底。
-    // H3：compose 摘要与底栏 pill 同源——优先待发 modelInput（下一条才生效），否则 currentModel
-    const pendingModel = (modelInput?.dataset?.fullModel || modelInput?.value || '').trim();
-    const modelForSummary = (pendingModel && pendingModel !== 'default') ? pendingModel : currentModel;
-    const modelLabel = resolveModelPillText({
-      model: modelForSummary,
-      gatewaySuffix: currentGatewaySuffix,
-      modelsList,
-      cwdDefaultModel,
-      cliDefaultLabel,
-    });
-    return {
-      modelLabel,
-      modeLabel: (pillPermText?.textContent || '').trim(),
-      effortLabel: (pillEffortText?.textContent || '').trim(),
-    };
-  }
-  function refreshComposeDefaultsSummary() {
-    const elSum = messagesEl?.querySelector?.('[data-compose-defaults]');
-    if (!elSum) return;
-    elSum.textContent = formatComposeDefaultsSummary(currentComposeDefaultsLabels());
+    syncTopContextPillAriaLabel();
   }
 
   // CLI 配置刷新：用户在终端侧改了 ~/.claude/settings.json 后，web 侧默认档不会自己感知
@@ -7533,6 +5783,47 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // （常驻，已有会话里也能用）。spinEl 单独传：只转图标，避免整块按钮旋转。
   function wireConfigRefreshButton(btn, spinEl = btn) {
     if (!btn) return;
+    // 图标字形节点：settings 用 [data-spin]；compose ↻ 无 data-spin，落在内层 span（spinEl 是整颗按钮）。
+    const iconGlyphEl = () => btn.querySelector('[data-spin]')
+      || (spinEl !== btn ? spinEl : null)
+      || btn.querySelector('span')
+      || btn;
+    // 有 [data-label] 改文案；纯图标钮改字形+色（手机无 hover，只改 title 等于没反馈）。
+    // 超时 / ack ok:false 必须同样可见，不能只 restore（面板盖住消息流时 addBar 也看不见）。
+    const showFeedback = (ok) => {
+      const labelEl = btn.querySelector('[data-label]');
+      if (labelEl) {
+        if (labelEl.dataset.reverting === '1') return;
+        const original = labelEl.textContent;
+        labelEl.dataset.reverting = '1';
+        labelEl.textContent = ok ? t('✓ 已刷新') : t('刷新失败');
+        setTimeout(() => {
+          labelEl.textContent = original;
+          delete labelEl.dataset.reverting;
+        }, 2000);
+        return;
+      }
+      if (btn.dataset.iconReverting === '1') return;
+      const glyph = iconGlyphEl();
+      const originalText = glyph.textContent;
+      const originalTitle = btn.getAttribute('title') || '';
+      const hadAria = btn.hasAttribute('aria-label');
+      const originalAria = btn.getAttribute('aria-label') || '';
+      btn.dataset.iconReverting = '1';
+      glyph.classList.remove('text-success', 'text-danger');
+      glyph.classList.add(ok ? 'text-success' : 'text-danger');
+      glyph.textContent = ok ? '✓' : '✗';
+      const feedbackTitle = ok ? t('✓ 已刷新') : t('刷新失败');
+      btn.setAttribute('title', feedbackTitle);
+      if (hadAria) btn.setAttribute('aria-label', feedbackTitle);
+      setTimeout(() => {
+        glyph.textContent = originalText;
+        glyph.classList.remove('text-success', 'text-danger');
+        btn.setAttribute('title', originalTitle);
+        if (hadAria) btn.setAttribute('aria-label', originalAria);
+        delete btn.dataset.iconReverting;
+      }, 2000);
+    };
     btn.onclick = () => {
       if (btn.disabled) return;
       haptic('tap');
@@ -7543,559 +5834,22 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         btn.disabled = false;
         spinEl.classList.remove('animate-spin');
       };
-      socket.emit('config:refresh', { cwd: currentCwd }, () => {
+      socket.emit('config:refresh', { cwd: currentCwd }, (res) => {
         acked = true;
         restore();
-        // 成功反馈：有 [data-label] 就改文案；图标按钮则改 title 两秒（面板盖住消息流时 addBar 看不见）。
-        const labelEl = btn.querySelector('[data-label]');
-        if (labelEl) {
-          if (labelEl.dataset.reverting === '1') return;
-          const original = labelEl.textContent;
-          labelEl.dataset.reverting = '1';
-          labelEl.textContent = t('✓ 已刷新');
-          setTimeout(() => {
-            labelEl.textContent = original;
-            delete labelEl.dataset.reverting;
-          }, 2000);
-          return;
-        }
-        if (btn.dataset.titleReverting === '1') return;
-        const originalTitle = btn.getAttribute('title') || '';
-        btn.dataset.titleReverting = '1';
-        btn.setAttribute('title', t('✓ 已刷新'));
-        setTimeout(() => {
-          btn.setAttribute('title', originalTitle);
-          delete btn.dataset.titleReverting;
-        }, 2000);
+        showFeedback(res?.ok !== false);
       });
       // 兜底：与文件里其它「乐观禁用+超时兜底恢复」操作（session:home/session:switch 等）对齐——
-      // ack 丢了也不能让按钮永久卡在禁用+转圈态。
+      // ack 丢了也不能让按钮永久卡在禁用+转圈态；超时须在图标上显失败，不只靠 addBar。
       setTimeout(() => {
         if (acked) return;
         restore();
+        showFeedback(false);
         addBar(t('刷新无响应，请检查网络后重试'), 'text-danger');
       }, 4000);
     };
   }
 
-  // 空表面本地分流：viewing 已 null 时 instances 广播不进 bindView，＋/侧栏 ＋ 须直接重渲。
-  function ensureEmptySurface() {
-    const sid = instancesList.find(x => x.instanceId === viewingInstanceId)?.sessionId
-      || currentSessionId
-      || displayedSessionId
-      || null;
-    const surface = resolveEmptySurface({
-      viewingInstanceId,
-      sessionId: sid,
-      composeReady: _composeReady,
-      freshInterrupted: Boolean(viewingInstanceId) && viewingInstanceId === freshInterruptedInstanceId,
-    });
-    if (surface === 'compose') showComposeSurface();
-    else if (surface === 'home') showDashboard();
-  }
-
-
-  // 新会话页的 worktree 两件套：源分支 chip（可点换分支）+「在新 worktree 里开」勾选。
-  //
-  // 【懒创建】勾选只改本地状态，**一个请求都不发**：意图跟着第一条消息传给服务端，那时才
-  // `git worktree add`。勾了又取消、改分支重勾，磁盘上都不会留下任何东西。
-  // 与 Claude Code Desktop 同构——它的 lazyWorktrees.prepare 同样挂在 start_session 上，不挂在勾选上。
-  // 【非 git 工作区整块不显示】那里没有 worktree 这个概念，摆一个恒灰的勾选框只会让人去点。
-  let branchListOpen = false;
-  function renderWorktreeChips() {
-    const host = messagesEl?.querySelector('[data-worktree-chips]');
-    if (!host) return;
-    const st = newSessionWorktree.snapshot();
-    const sub = messagesEl.querySelector('[data-compose-sub]');
-    host.innerHTML = '';
-
-    if (!newSessionWorktree.isAvailable()) {
-      if (sub) sub.textContent = t('将在此工作区开新 CLI 会话');
-      return;
-    }
-
-    if (sub) {
-      sub.textContent = st.enabled
-        ? t('将在 %s 的新 worktree 里开，不动当前工作树').replace('%s', st.sourceBranch || '')
-        : t('将在此工作区开新 CLI 会话');
-    }
-
-    const row = el('<div class="flex items-center justify-center gap-1.5 flex-wrap"></div>');
-
-    const branchBtn = el(`<button type="button" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-line-soft bg-surface text-ink-soft text-[11px] font-semibold active:scale-[0.98] transition-all" data-testid="compose-source-branch">
-      <span class="text-ink-faint">⑂</span><span class="max-w-[9rem] truncate">${esc(st.sourceBranch || '')}</span><span class="text-ink-faint">⌄</span>
-    </button>`);
-    branchBtn.onclick = (e) => { e.stopPropagation(); haptic('tap'); branchListOpen = !branchListOpen; renderWorktreeChips(); };
-    row.appendChild(branchBtn);
-
-    const on = st.enabled;
-    const wtBtn = el(`<button type="button" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold active:scale-[0.98] transition-all ${on ? 'border-accent-bright bg-accent-wash text-accent-deep' : 'border-line-soft bg-surface text-ink-soft'}" data-testid="compose-worktree-toggle" aria-pressed="${on}">
-      <span class="inline-block w-3.5 h-3.5 rounded-[4px] border ${on ? 'bg-accent border-accent text-white' : 'border-line'} leading-[13px] text-[9px] text-center">${on ? '✓' : ''}</span>
-      <span>${t('在新 worktree 里开')}</span>
-    </button>`);
-    wtBtn.onclick = (e) => {
-      e.stopPropagation();
-      haptic('tap');
-      branchListOpen = false;
-      newSessionWorktree.setEnabled(!on);
-    };
-    row.appendChild(wtBtn);
-    host.appendChild(row);
-
-    if (st.loadError) {
-      const errEl = el(`<div class="text-[10px] text-danger"></div>`);
-      errEl.textContent = st.loadError;
-      host.appendChild(errEl);
-    }
-
-    if (branchListOpen && st.branches.length) {
-      // 自绘按钮组，不用原生 select：移动端上原生下拉会把弹层渲染到页面另一头（2026-09-11 实测）
-      const list = el('<div class="flex flex-wrap items-center justify-center gap-1 max-h-32 overflow-y-auto px-1" data-testid="compose-branch-list"></div>');
-      for (const b of st.branches) {
-        const active = b === st.sourceBranch;
-        const item = el(`<button type="button" class="px-2 py-0.5 rounded-full border text-[11px] ${active ? 'border-accent-bright bg-accent-wash text-accent-deep font-semibold' : 'border-line-soft bg-surface text-ink-soft'}"></button>`);
-        item.textContent = b;
-        item.onclick = (e) => {
-          e.stopPropagation();
-          haptic('tap');
-          branchListOpen = false;
-          newSessionWorktree.setSourceBranch(b);
-          // 已勾选时换分支 = 换了源，必须重建：旧那棵是从别的分支切的，继续用就是在错的基线上干活
-          // 换分支不需要做任何事：意图跟着第一条消息传给服务端，此刻磁盘上还什么都没建
-        };
-        list.appendChild(item);
-      }
-      host.appendChild(list);
-    }
-  }
-
-  // 干净新会话页（＋ / session:new）：当前工作区 + 将开 CLI 的默认档 + 示例 prompt；无最近列表。
-  function showComposeSurface() {
-    messagesEl.innerHTML = '';
-    messagesEl.classList.add('empty-start');
-    if (topTitleText) topTitleText.textContent = t('新聊天');
-    // 走 syncTopContextLabel 而不是只手写 topProjectText：pill 现在在这张页面上是【可见】的，
-    // 光换名字不够——改动角标与 title 还归属上一个工作区，得靠它那道 dataset.cwd 判据清掉。
-    // 抽屉里按目录行点 ＋ 时这条路是同步的（currentCwd 当场改、compose 表面当场渲染），不清就会
-    // 出现「新工作区名 + 旧工作区改动数」，一直挂到服务端 instances 广播回来才自愈。
-    syncTopContextLabel();
-    syncComposerVisibility();
-    // compose 页：显示顶栏文件夹（工作区已定；页内那个 pill 通向会话列表，不通向文件）
-    syncTopContextPillVisibility(null, null, { composeReady: true });
-    // 状态栏先清空再等新数据：btnNew 这条路**不经过 clearView**（见 btnNew.onclick → ensureEmptySurface），
-    // 上一个会话的 model/ctx 会原样挂在新会话页上。
-    //
-    // 【E2E 验不到，别照着"没测试所以是冗余"删】：compose 页随后必定收到自己那条 status_line
-    // （真 server session:new 末尾 scheduleStatusRefresh；mock 已对齐），而 status_line 渲染是整体替换
-    // （cliStatusEl.textContent='' 后重 append），于是残留窗口只有那 300ms，断言必然扑空。这行保的是
-    // statusOff / WEB_STATUSLINE=off 的场景——那条事件永不到达，不清就是永久显示别的会话的用量。
-    hideStatuslineWrap();
-
-    const defaultsText = formatComposeDefaultsSummary(currentComposeDefaultsLabels());
-    const container = el(`
-      <div class="compose-surface flex flex-col items-center w-full max-w-xl mx-auto py-8 px-3 select-none" data-testid="compose-surface">
-        <div class="text-center mb-5 w-full">
-          <h1 class="text-xl md:text-2xl font-bold tracking-tight text-ink mb-2 leading-tight">${t('新会话已就绪')}</h1>
-          <div class="text-[10px] text-ink-faint uppercase tracking-wider mb-1" data-compose-sub>${t('将在此工作区开新 CLI 会话')}</div>
-          <button type="button" class="compose-project-pill inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="${t('点击打开会话列表（按工作区浏览）')}">
-            <svg class="w-4 h-4 shrink-0 text-accent opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5h4.25l2 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
-            </svg>
-            <span class="max-w-[12rem] truncate">${esc(baseName(currentCwd))}</span>
-            <span class="text-xs text-ink-faint">⌄</span>
-          </button>
-          <div class="mt-2 flex flex-col items-center gap-1.5" data-worktree-chips></div>
-          <div class="mt-2 flex items-center justify-center gap-1">
-            <span class="text-xs text-ink-soft" data-compose-defaults>${esc(defaultsText)}</span>
-            <button type="button" class="compose-defaults-refresh shrink-0 w-5 h-5 flex items-center justify-center rounded-full text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 transition-all disabled:opacity-50" data-testid="compose-defaults-refresh" title="${t('重新读取 CLI 配置')}">
-              <span class="text-sm leading-none">↻</span>
-            </button>
-          </div>
-        </div>
-        <div class="flex flex-col gap-2 w-full max-w-sm">
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('总结当前仓库结构并指出入口文件')}">${t('💡 总结当前仓库结构')}</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('帮我写一个最小改动的修复计划')}">${t('🛠 写一个最小修复计划')}</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('运行相关测试并解读失败')}">${t('🧪 运行测试并解读')}</button>
-        </div>
-      </div>`);
-
-    container.querySelector('.compose-project-pill').onclick = (e) => {
-      e.stopPropagation();
-      haptic('tap');
-      if (btnSessions) btnSessions.onclick();
-    };
-    container.querySelectorAll('.esg-prompt').forEach(btn => {
-      btn.onclick = () => {
-        haptic('tap');
-        if (inputEl) {
-          inputEl.value = btn.getAttribute('data-p') || '';
-          inputEl.focus();
-          inputEl.dispatchEvent(new Event('input'));
-        }
-      };
-    });
-
-    wireConfigRefreshButton(container.querySelector('.compose-defaults-refresh'));
-
-    messagesEl.appendChild(container);
-    // 分支列表按 cwd 缓存，拉到后 onChange 会回来重画这一块；拉之前先画一次（此时 isAvailable
-    // 为假、整块不显示），避免非 git 工作区闪一下空 chip 行。
-    renderWorktreeChips();
-    void newSessionWorktree.ensureBranches(currentCwd);
-    // defaults 可能仍在 L4→L3 途中；微任务再刷一次，兜住刚 setPerm/setEffort 的 pill 文案
-    queueMicrotask(() => refreshComposeDefaultsSummary());
-  }
-
-  // 会话打不开时的落地页（2026-09-07）。**四个 session:switch 入口共用的失败路径**：侧栏会话行 /
-  // 首页最近列表 / 通知深链落地 / 重启后「继续此会话」。此前它们各自 addBar，而 addBar 落在
-  // #messages —— 也就是【当时正看着的那个会话】的消息流里。视图从头到尾没动过，于是「blog_static 的
-  // 会话被后台任务占用」这句话出现在 third-party 会话的工具卡中间，读起来像是当前会话出了事；点击时
-  // 又已经先 closeLeftSidebar()，连"我刚点了别的会话"这个上下文都没了（2026-09-06 用户实撞）。
-  //
-  // 与 showInstanceDestroyedSurface 的关键区别：那张空表面直接 messagesEl.innerHTML = ''，因为那时
-  // 实例真的没了；这里当前会话很可能【正在跑】，清空会让后续流式事件追加到一片废墟上。所以这里是
-  // 覆盖层，不碰 #messages，关掉即回到原会话。
-  let blockedSurfaceTarget = null;
-  let blockedSurfaceWired = false;
-  function setBlockedReason(text) {
-    const reasonEl = $('sessionBlockedReason');
-    if (reasonEl) reasonEl.textContent = text;
-  }
-  function hideSessionBlockedSurface() {
-    blockedSurfaceTarget = null;
-    $('sessionBlockedSurface')?.classList.add('hidden');
-  }
-  // 迟到的成功 ack：4s 兜底已经把落地页弹出来了，而这次切换其实成功了——服务端可能先广播导航、
-  // 后回 ack。不撤掉的话用户人已经在目标会话里，屏幕上却盖着一张「切换无响应」。
-  // 只撤属于本次请求的那一张：这 4 秒里用户完全可能已经点开别的会话并撞上真实失败，
-  // 无条件 hide 会把那条真实的错误提示一起抹掉。
-  function dismissBlockedSurfaceIfTarget(sessionId, cwd) {
-    if (isBlockedSurfaceTarget(blockedSurfaceTarget, { sessionId, cwd })) hideSessionBlockedSurface();
-  }
-  function retryBlockedSession() {
-    const target = blockedSurfaceTarget;
-    if (!target?.sessionId) return;
-    const btn = $('sessionBlockedRetry');
-    // 乐观禁用 + 4s 兜底恢复：与四个入口原本各自的 ack/超时约定同形，不新造一套。
-    if (btn) btn.disabled = true;
-    let acked = false;
-    socket.emit('session:switch', { sessionId: target.sessionId, cwd: target.cwd }, res => {
-      acked = true;
-      if (btn) btn.disabled = false;
-      // 成功后不必自己导航：服务端广播新 viewingInstanceId，setInstances→bindView 自然接管。
-      // 按目标撤而不是无条件 hide：这次重试的 ack 可能迟到，期间用户已经点开别的会话并撞上
-      // 真实失败，此刻挂着的是那一张——无条件 hide 会把那条真实错误一起抹掉。
-      if (res?.ok) dismissBlockedSurfaceIfTarget(target.sessionId, target.cwd);
-      else setBlockedReason(res?.error || t('切换失败'));
-    });
-    setTimeout(() => {
-      if (acked) return;
-      if (btn) btn.disabled = false;
-      setBlockedReason(t('切换无响应，请刷新页面后重试'));
-    }, 4000);
-  }
-  function showSessionBlockedSurface({ sessionId = null, cwd = null, title = '', message = '' } = {}) {
-    const surface = $('sessionBlockedSurface');
-    if (!surface) return;
-    blockedSurfaceTarget = { sessionId, cwd };
-    const titleEl = $('sessionBlockedTitle'), projectEl = $('sessionBlockedProject');
-    // 标题回落短 id：深链与「继续此会话」两条路只有 {sessionId, cwd}，拿不到标题。宁可显示
-    // 8 位 id 也不写"会话"——用户要靠这行确认自己点的是不是那一个。
-    if (titleEl) titleEl.textContent = title || (sessionId ? sessionId.slice(0, 8) : t('会话'));
-    if (projectEl) projectEl.textContent = cwd ? baseName(cwd) : '';
-    setBlockedReason(message || t('切换失败'));
-    if (!blockedSurfaceWired) {
-      blockedSurfaceWired = true;
-      $('sessionBlockedBack').onclick = () => { haptic('tap'); hideSessionBlockedSurface(); };
-      $('sessionBlockedRetry').onclick = () => { haptic('tap'); retryBlockedSession(); };
-      $('sessionBlockedSessions').onclick = () => { haptic('tap'); hideSessionBlockedSurface(); openLeftSidebar(); };
-    }
-    surface.classList.remove('hidden');
-  }
-
-  // 点停止顿一下跳主页的回归修复：正在查看的实例被摧毁（中断失败→settleForce 强杀子进程→onExit→
-  // 无同 cwd 存活实例可回退，见 wasViewingInstanceDestroyed）时的专属提示态——不静默 showDashboard()，
-  // 让用户先看到"发生了什么"，自己决定下一步（回首页 / 新建会话）。不做自动导航（维护者已否决"自动
-  // 静默 resume 接管"方案，这里同理：不能因为实现方便就悄悄跳转）。
-  // 视觉语言复用两处既有约定：标题行走 addBar 同款 msg-frame 系统提示条样式（对齐 interrupted/
-  // queue_dropped 的系统提示行）；外层卡片 + 操作按钮走 showDashboard/showComposeSurface 同款
-  // 空表面卡片布局——不引入新的弹窗/模态体系。两个按钮直接复用 btnHome/btnNew 的既有点击处理，
-  // 不重复其内部逻辑（保持行为完全一致，包括 haptic、freshInterruptedInstanceId 清理等副作用）。
-  // byRestart：server 整机重启细分（见 setInstances 的 detectServerRestart）——不是这个实例被单独
-  // 摧毁，文案换成准确的「服务已重启」，并加「继续此会话」一键重开（resume={sessionId,cwd} 走既有
-  // session:switch 打开路径懒 resume，与侧栏/最近列表点击同源）。不自动切换：尊重「重启后不自动
-  // session:switch」的既有产品决策（见 _dashRecentsGen 注释），按钮是用户主动点的。
-  function showInstanceDestroyedSurface({ byRestart = false, resume = null } = {}) {
-    messagesEl.innerHTML = '';
-    messagesEl.classList.add('empty-start');
-    if (topTitleText) topTitleText.textContent = t('新聊天');
-    if (topProjectText) topProjectText.textContent = baseName(currentCwd);
-    syncComposerVisibility();
-    // 「会话已中断」：顶栏文件夹入口隐藏（同 home）。显式 composeReady:false——见函数注释，此处全局值不可信
-    syncTopContextPillVisibility(null, null, { composeReady: false });
-    // 状态栏也要收：实例已经没了，里面那份 ctx / 模型 / 额度全归属于它，留在屏上就是在报废数字。
-    // 这张表面不像 home 那样能靠 #composerFooter 整体隐藏顺带藏掉它——composer 在这里仍可能是显示的
-    // （从 compose 首发跳过来时 _composeReady 停在陈旧的 true，shouldShowComposer 据此判显示）。
-    // 上面那道判据改读 DOM 只防住「后续事件把它重新渲染出来」，防不住已经渲染好的那份残留。
-    hideStatuslineWrap();
-
-    const title = byRestart ? t('🔄 服务已重启') : t('⏹ 会话已中断');
-    const body = byRestart
-      ? t('服务已重启，之前的会话进程随之退出。会话记录仍保存在磁盘上，可以继续此会话，也可以回首页或新建一个会话。')
-      : t('停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。');
-    const canResume = byRestart && resume?.sessionId && resume?.cwd;
-    const container = el(`
-      <div class="instance-destroyed-surface flex flex-col items-center w-full max-w-xl mx-auto py-8 px-3 select-none" data-testid="instance-destroyed-surface">
-        <div class="msg-frame text-center text-xs text-warning font-semibold mb-2">${title}</div>
-        <p class="text-xs text-ink-faint text-center mb-6 max-w-sm leading-relaxed px-2">${body}</p>
-        <div class="flex flex-col gap-2 w-full max-w-xs">
-          ${canResume ? `<button type="button" class="instance-destroyed-resume inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-resume">${t('继续此会话')}</button>` : ''}
-          <button type="button" class="instance-destroyed-home inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-home">${t('回首页')}</button>
-          <button type="button" class="instance-destroyed-new inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-new">${t('新建会话')}</button>
-        </div>
-      </div>`);
-
-    if (canResume) {
-      const resumeBtn = container.querySelector('.instance-destroyed-resume');
-      resumeBtn.onclick = (e) => {
-        e.stopPropagation();
-        haptic('tap');
-        // 乐观禁用 + ack/超时兜底恢复：对齐 dashboard 最近列表 switchToSession 的既有约定。
-        // 成功路径不必手动导航——服务端广播新 viewingInstanceId，setInstances→bindView 自然接管。
-        resumeBtn.disabled = true;
-        let acked = false;
-        const blocked = message => {
-          resumeBtn.disabled = false;
-          showSessionBlockedSurface({ sessionId: resume.sessionId, cwd: resume.cwd, message });
-        };
-        socket.emit('session:switch', { sessionId: resume.sessionId, cwd: resume.cwd }, res => {
-          acked = true;
-          if (!res?.ok) blocked(res?.error || t('切换失败'));
-          else dismissBlockedSurfaceIfTarget(resume.sessionId, resume.cwd); // 同上：迟到的成功 ack 要撤页
-        });
-        setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
-      };
-    }
-    container.querySelector('.instance-destroyed-home').onclick = (e) => {
-      e.stopPropagation();
-      btnHome?.onclick?.();
-    };
-    container.querySelector('.instance-destroyed-new').onclick = (e) => {
-      e.stopPropagation();
-      btnNew.onclick?.();
-    };
-
-    messagesEl.appendChild(container);
-  }
-
-  function showDashboard() {
-    messagesEl.innerHTML = '';
-    messagesEl.classList.add('empty-start');
-    if (topTitleText) topTitleText.textContent = t('新聊天');
-    if (topProjectText) topProjectText.textContent = baseName(currentCwd);
-    syncComposerVisibility();
-    syncTopContextPillVisibility(null, null, { composeReady: false }); // 首页：工作区未选定，顶栏文件夹隐藏
-
-    const hour = new Date().getHours();
-    let greeting;
-    if (hour < 5) greeting = t('夜深了，有什么需要我帮忙的吗？');
-    else if (hour < 11) greeting = t('上午好，今天我能帮您做什么？');
-    else if (hour < 13) greeting = t('中午好，今天我能帮您做什么？');
-    else if (hour < 18) greeting = t('下午好，今天我能帮您做什么？');
-    else greeting = t('晚上好，今天我能帮您做什么？');
-
-    // 首页 = 枢纽：问候 + 最近工作区/会话；不标「当前工作区」
-    // （＋ 仍用 currentCwd 默认区；要先选区 → 侧栏或最近 chip）
-    const container = el(`
-      <div class="dashboard-container flex flex-col items-center w-full max-w-xl mx-auto py-6 px-3 select-none" data-testid="home-dashboard">
-        <div class="text-center mb-6 w-full">
-          <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-ink mb-1 leading-tight" id="dashGreeting">${esc(greeting)}</h1>
-          <p class="text-xs text-ink-faint">${t('从最近会话继续，或点 ＋ 新建')}</p>
-        </div>
-
-        <div id="dashWorkspacesSection" class="w-full hidden mb-5">
-          <div class="text-[10.5px] font-bold text-ink-faint uppercase tracking-wider mb-2 px-1 flex items-center gap-1">
-            <span>📁</span>
-            <span>${t('最近活跃工作区')}</span>
-          </div>
-          <div id="dashWorkspacesList" class="flex flex-wrap gap-2 w-full px-0.5"></div>
-        </div>
-
-        <div id="dashRecentsSection" class="w-full hidden">
-          <div class="text-[10.5px] font-bold text-ink-faint uppercase tracking-wider mb-3 px-1 flex items-center gap-1">
-            <span>⏱️</span>
-            <span>${t('最近活跃会话')}</span>
-          </div>
-          <div id="dashRecentsList" class="flex flex-col gap-2 w-full"></div>
-          <!-- 部分工作区 session:list 超时（4s）时的缺角提示：拿不到 ≠ 没有。常驻此处，JS 只切 hidden + 换文案。 -->
-          <p id="dashRecentsIncomplete" class="hidden text-[10.5px] text-ink-faint mt-2 px-1" data-testid="recents-incomplete"></p>
-        </div>
-
-        <div id="dashEmptyHint" class="w-full hidden text-center mt-2">
-          <p class="text-xs text-ink-faint mb-3">${t('还没有最近会话')}</p>
-          <button type="button" class="dash-open-sessions inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="${t('打开会话列表')}">
-            ${t('打开工作区与会话列表')}
-          </button>
-        </div>
-
-        <button id="dashHelpLink" class="mt-6 text-xs text-ink-faint hover:text-accent underline underline-offset-2 transition-colors" type="button">${t('❓ 如何连接与使用')}</button>
-      </div>`);
-
-    // 绑定使用引导入口 → 访问帮助页（showAccessHelp）
-    const dashHelp = container.querySelector('#dashHelpLink');
-    if (dashHelp) dashHelp.onclick = (e) => { e.stopPropagation(); haptic('tap'); showAccessHelp(); };
-
-    const openSessions = (e) => {
-      e?.stopPropagation?.();
-      haptic('tap');
-      if (btnSessions) btnSessions.onclick();
-    };
-    container.querySelector('.dash-open-sessions')?.addEventListener('click', openSessions);
-
-    // 跨全部白名单工作区拉最近会话（并行 session:list），合并后展示，便于冷启动/空首页一键切回。
-    // git worktree 须作为独立 workdir 写入 workdirs.json，才会出现在 availableDirs 里被扫到。
-    const recentsSection = container.querySelector('#dashRecentsSection');
-    const recentsList = container.querySelector('#dashRecentsList');
-    const workspacesSection = container.querySelector('#dashWorkspacesSection');
-    const workspacesList = container.querySelector('#dashWorkspacesList');
-    const emptyHint = container.querySelector('#dashEmptyHint');
-    const dirs = (availableDirs && availableDirs.length) ? availableDirs.slice() : (currentCwd ? [currentCwd] : []);
-    const gen = ++_dashRecentsGen;
-
-    const switchToSession = (s) => {
-      let acked = false;
-      const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: s.cwd, title: s.title, message });
-      socket.emit('session:switch', { sessionId: s.id, cwd: s.cwd }, res => {
-        acked = true;
-        if (!res?.ok) blocked(res?.error || t('切换失败'));
-        else dismissBlockedSurfaceIfTarget(s.id, s.cwd); // 同上：迟到的成功 ack 要撤页
-      });
-      setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
-    };
-
-    const renderDashRecents = (recent) => {
-      // 工作区 chips：按最近会话时间去重排序，点 chip → 进入该区最近一条
-      if (workspacesSection && workspacesList) {
-        const seen = new Set();
-        const wsOrder = [];
-        for (const s of recent) {
-          if (seen.has(s.cwd)) continue;
-          seen.add(s.cwd);
-          wsOrder.push(s);
-        }
-        workspacesList.innerHTML = '';
-        for (const s of wsOrder) {
-          const chip = el(`
-            <button type="button" class="inline-flex items-center gap-1.5 max-w-full px-3 py-1.5 rounded-full border border-line-soft bg-surface hover:bg-accent-wash/40 hover:border-accent-bright/50 active:scale-[0.98] transition-all text-xs font-semibold text-ink shadow-sm">
-              <span class="shrink-0 opacity-80 dash-ws-icon"></span>
-              <span class="truncate max-w-[10rem]"></span>
-            </button>`);
-          chip.querySelector('.dash-ws-icon').textContent = '📁';
-          chip.querySelector('span.truncate').textContent = s.workspaceName;
-          chip.title = s.cwd;
-          chip.onclick = (e) => {
-            e.stopPropagation();
-            haptic('tap');
-            switchToSession(s);
-          };
-          workspacesList.appendChild(chip);
-        }
-        if (wsOrder.length) workspacesSection.classList.remove('hidden');
-        else workspacesSection.classList.add('hidden');
-      }
-
-      recentsList.innerHTML = '';
-      for (const s of recent) {
-        const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : t('时间未知');
-        const item = el(`
-          <div class="dash-recent-item flex items-center justify-between p-3 bg-surface hover:bg-accent-wash/30 border border-line-soft hover:border-accent-bright/50 rounded-xl cursor-pointer transition-all active:scale-[0.99]">
-            <div class="flex-1 min-w-0 pr-3">
-              <div class="dash-recent-title font-bold text-xs text-ink truncate"></div>
-              <div class="text-[10px] text-ink-faint mt-1 flex items-center gap-1.5 min-w-0">
-                <span class="shrink-0 dash-ws-icon"></span>
-                <span class="truncate dash-ws"></span>
-                <span class="shrink-0 opacity-50">·</span>
-                <span class="shrink-0 dash-when"></span>
-              </div>
-            </div>
-            <div class="text-xs text-accent font-bold shrink-0">${t('进入 ➔')}</div>
-          </div>
-        `);
-        item.querySelector('.dash-recent-title').textContent = s.title || t('无标题会话');
-        // 判定所需的两个字段留在行上：位点晚到时（read:sync 归并）要能就地重算，而 renderDashRecents
-        // 是 showDashboard 的闭包、外部够不着。存 DOM 不存快照——省掉一份会和界面漂移的状态。
-        if (s.id) item.dataset.sessionId = s.id;
-        if (Number.isFinite(s.lastUsedAt)) item.dataset.lastUsedAt = String(s.lastUsedAt);
-        // R65 未读（首页最近行）：与抽屉同款「未读」chip，inline-flex 前置进 truncate 容器，不改其块级截断语义。
-        if (s.id && unread.isUnread(s, { isViewing: s.id === displayedSessionId })) {
-          item.querySelector('.dash-recent-title').prepend(dashUnreadMark());
-        }
-        item.querySelector('.dash-ws-icon').textContent = '📁';
-        // 托管 worktree 的会话挂在父仓工作区名下，但要标出工作树——否则首页两行看起来是同一个
-        // 地方的会话，而它们改的是不同的树。cwd 已由 mergeRecentSessionsAcrossWorkspaces 带回真实值。
-        const wsLabel = s.worktree ? `${s.workspaceName} / ${s.worktree}` : s.workspaceName;
-        item.querySelector('.dash-ws').textContent = wsLabel;
-        item.querySelector('.dash-when').textContent = when;
-        item.title = `${wsLabel} · ${s.title || t('无标题会话')}`;
-        item.onclick = (e) => {
-          e.stopPropagation();
-          haptic('tap');
-          switchToSession(s);
-        };
-        recentsList.appendChild(item);
-      }
-      if (recent.length) {
-        recentsSection.classList.remove('hidden');
-        emptyHint?.classList.add('hidden');
-      } else {
-        recentsSection.classList.add('hidden');
-        emptyHint?.classList.remove('hidden');
-      }
-    };
-
-    // 缺角提示。两件事：① 说出「有 N 个工作区没能加载」；② 把 dashEmptyHint 压掉——「还没有最近
-    // 会话」在缺角时是错的（全部超时 → recent 为空 → 那句话会以确定语气宣布一件没被证实的事，
-    // 正是本次要修的病本身）。无缺角时本函数不碰 section/emptyHint，那是 renderDashRecents 的职责。
-    const incompleteEl = container.querySelector('#dashRecentsIncomplete');
-    const renderRecentsIncompleteNotice = ({ complete, failedCount, failedDirs } = {}) => {
-      if (!incompleteEl) return;
-      if (complete !== false) { incompleteEl.classList.add('hidden'); incompleteEl.textContent = ''; return; }
-      const names = failedDirs.map(projectDisplayName).join('、');
-      incompleteEl.textContent = `${t('{n} 个工作区未能加载').replace('{n}', String(failedCount))}：${names}`;
-      incompleteEl.classList.remove('hidden');
-      recentsSection?.classList.remove('hidden');
-      emptyHint?.classList.add('hidden');
-    };
-
-    if (recentsSection && recentsList && dirs.length) {
-      // timedOut 必须随行上报：拿不到 ≠ 该目录没有会话。此前超时一律 done([])，那个工作区连同
-      // 它的未读会话从首页静默消失、界面零痕迹（与目录头角标 null/0 同形是同一个病）。合并结果
-      // 不变（拿到多少展示多少），只是让下面能挂一行「部分工作区未能加载」。
-      const listMain = (cwd) => new Promise(resolve => {
-        let settled = false;
-        const done = (sessions, timedOut = false) => {
-          if (!settled) { settled = true; resolve({ cwd, sessions, timedOut }); }
-        };
-        socket.emit('session:list', { cwd }, state => {
-          unread.hydrate(state?.readState); // 首页最近行也画未读 chip；Promise.all 之后才渲染，天然同帧
-          // 刻意不合并 ack 的 pinned（手动标「稍后再看」但排在分页窗外的那些）：这个列表叫「最近」，
-          // 语义是时间序的前 8 条，塞进上周的会话既名不副实，又会挤掉真正最近的。待办入口在抽屉。
-          done(state?.sessions || []);
-        });
-        setTimeout(() => done([], true), 4000); // 单目录超时不挡整表，但要说出来
-      });
-      Promise.all(dirs.map(listMain)).then((mainLists) => {
-        if (gen !== _dashRecentsGen) return; // 已换页/重渲
-        const recent = mergeRecentSessionsAcrossWorkspaces(mainLists, { limit: 8 });
-        renderDashRecents(recent); // 空列表也渲 → dashEmptyHint
-        renderRecentsIncompleteNotice(summarizeRecentsLoad(mainLists));
-      });
-    } else if (emptyHint) {
-      emptyHint.classList.remove('hidden');
-    }
-
-    messagesEl.appendChild(container);
-  }
 
   // onDone：历史渲染真正落地（含 renderHistoryBubbles 内部分块 requestIdleCallback）后触发，供未读胶囊
   // 判断"此刻 DOM 已稳定、可以查 topLevelBubbles() 定位锚点"——只有 bindView 的 sync:since 回调会传，
@@ -8105,17 +5859,28 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // ack 回 { messages: [], error: '会话不存在' } → 灰行「历史消息加载失败」。
   // 2026-09-13 真机：首次点开（bindView 传 entry.cwd，驾驶轴）好好的，锁屏回来走
   // reloadCurrentFromHistory（用缺省值）就必failed——所以症状是「会出现，但不是百分百」。
-  function loadHistory(sessionId, cwd = drivingCwdOf(displayedInstanceId), onDone) {
+  // perfOpen：打开会话埋点的凭据，在发起时定——回执到时同一个会话可能已经又开了一次（换了实例、A→B→A），
+  // 旧回执不能记进新那次。bindView 传它自己那次的；别的路径缺省取这个会话此刻正在走的那次。
+  // prefetched：点击时并行发出、bindView 凭这次打开认领到的那份（见 history-prefetch.js），diskLen / diskTotal 是
+  // sync:since 刚报的磁盘条数与削顶前的总条数。等它落地，对得上（prefetchedHistoryFits）就直接画，对不上照常重新拉；
+  // 核对不了（没读盘、截顶了却没报 diskTotal）就不等它，当场重新拉。
+  function loadHistory(sessionId, cwd = drivingCwdOf(displayedInstanceId), onDone, perfOpen = perfTrace.openFor(sessionId), { prefetched = null, diskLen = null, diskTotal = null } = {}) {
     if (!sessionId) return;
     const reqInstanceId = displayedInstanceId; // WS-001：捕获发起时的视图目标（代次）
+    // 发起时那一轮在不在跑：在跑的话，读盘那一刻没配上结果的工具可能随后跑完，渲染收尾时不能判它中止（PR #233 review）
+    const turnRunningAtRequest = _turnRunning;
     // SS-ORDER：从这里到历史真正落地是一段可观的窗口（socket 往返 + renderHistoryBubbles 的分块
     // 渲染，2000 条约 50 块）。期间镜像追平的 history_append 完全可能插进来——它是 out-of-band，
     // 不进 replay buffer，挡不住。扣住它们，等历史落地后按原顺序放行（见 history-load-gate.js）。
     const gateHandle = historyLoadGate.begin(reqInstanceId);
-    // 必须用 socket.timeout()：裸 ack 在断线时会被 socket.io-client 的 _clearAcks() 直接 delete 掉
-    // 且【不调用】（只有 withError 的才回调），于是这个回调永不执行——闸门不 abort 也不 release，
-    // 手机锁屏/切后台就能触发。带 timeout 后断线会以 err 形式回调，下面 err 分支负责收尾。
-    socket.timeout(HISTORY_ACK_TIMEOUT_MS).emit('session:history', { sessionId, cwd }, (err, res) => {
+    // via：历史是怎么来的，记进 [PERF] 那行的历史回执一段
+    const onAck = (err, res, via) => {
+      // 之后同一实例又发起了一次加载（手动「重新加载」、gap 重载）：这一轮整段作废，收尾归新一轮。
+      // 排在 err 分支之前——超时的旧 ACK 不能 hideLoadingCard 把新一轮的加载卡收掉（#354 review）
+      if (historyLoadGate.superseded(gateHandle)) {
+        logClientEvent('recv', `[HISTORY_RENDER] 上一轮历史回执迟到，已作废（之后又发起了新一轮加载） session=${sessionId} instance=${reqInstanceId}`);
+        return;
+      }
       // ★ 这里必须 release+drain 而【不是】abort：ACK 失败 ≠ 视图已切走。超时（15s）时连接常常还活着，
       // 断线时也可能不触发全量重载，而扣住的那些 history_append 是 out-of-band 的单程票——不进 replay
       // buffer，server 的 catch-up 基线又已前移，abort 掉就是永久丢失（终端在跑、手机上少几条，直到
@@ -8123,109 +5888,106 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 返回 []，上一轮的迟到 err 动不了当前轮的队列；② onHistoryAppend 的 viewingInstanceId 守卫会丢弃
       // 不属于当前视图的事件。于是「视图已切走」时它与 abort 完全等价，只在「视图还在」时多放行——正是
       // 要修的那一格。同款取舍见 processChunk 的中断路径与闸门看门狗：宁可顺序稍差，绝不静默吞消息。
-      if (err) { hideLoadingCard(); flushHeldHistoryAppends(gateHandle); onDone?.(); return; }
+      if (err) { perfTrace.openEnd(perfOpen, 'error'); hideLoadingCard(); flushHeldHistoryAppends(gateHandle); onDone?.(); return; }
       // WS-001：迟到 ACK 守卫——发起后若已切走（会话或实例变），丢弃本回调。否则 A 的历史会被 renderHistoryBubbles
       // 追加进当前 B 的 DOM，且 hideLoadingCard 抹掉 B 的 loading 卡。对齐 onHistoryAppend 的 viewingInstanceId 守卫。
       if (displayedSessionId !== sessionId || displayedInstanceId !== reqInstanceId) { historyLoadGate.abort(gateHandle); return; }
+      if (drivingCwdOf(reqInstanceId) !== cwd) { historyLoadGate.abort(gateHandle); return; }
       hideLoadingCard();
       const msgs = res?.messages || [];
+      perfTrace.openStep(perfOpen, 'history', { note: via, count: msgs.length, server: res?.timing });
       if (!msgs.length) {
+        perfTrace.openEnd(perfOpen, res?.error ? 'error' : 'empty');
         if (res?.error) addBar(t('历史消息加载失败'), 'text-ink-faint');
+        crashNotices.restore(sessionId);
         flushHeldHistoryAppends(gateHandle);
         onDone?.();
         return;
       }
-      addBar(`${t('加载了')} ${msgs.length} ${t('条历史消息')}`, 'text-ink-faint');
-      renderHistoryBubbles(msgs, () => { flushHeldHistoryAppends(gateHandle); onDone?.(); }, { fullReload: true });
+      // 带 tail 拉的回执只是最近一段，窗口条数在 diskLen：更早那段当场再要，和画最近一段同时在路上（historyPage）。
+      // 旧 server 不认 tail、不报 diskLen，交的就是整窗
+      const windowLen = res.diskLen ?? msgs.length;
+      const earlier = windowLen > msgs.length ? fetchEarlier(res) : null;
+      const noticeBar = addBar(historyLoadedNotice(windowLen, res?.total), 'text-ink-faint');
+      renderHistoryBubbles(msgs, () => {
+        // 渲染途中切走时 renderHistoryBubbles 也会调这里（为了放行历史闸），那时补提示就补进了别的会话（PR #245 review）
+        if (displayedSessionId === sessionId && displayedInstanceId === reqInstanceId) crashNotices.restore(sessionId);
+        // 前台任务快照随 sync:since 先到、那时卡还没从历史渲染出来——卡落地后再挂一次「后台运行」
+        foregroundTasks.render();
+        flushHeldHistoryAppends(gateHandle);
+        onDone?.();
+      }, { fullReload: true, splitRecent: true, earlier, windowLen, turnRunningAtRequest, noticeBar, superseded: () => historyLoadGate.superseded(gateHandle), perfOpen });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
-      // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
-      seenDiskLenBySession.set(sessionId, msgs.length);
+      // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长（更早那段没补上时提示条留着 pending，DOM 不进缓存，切回来照样重拉）。
+      seenDiskLenBySession.set(sessionId, windowLen);
+    };
+    // 窗口里 from 之前那段。落地给数组（可能是空的：最近一段就是整窗的头），超时、出错、对不上（stale：两次之间
+    // 历史被改写、或截顶窗口滑过了这段的头）给 null，renderHistoryBubbles 据此只留最近一段、给「重新加载」
+    // 这次回执另有 15s 超时，闸门的看门狗从发出时重新计时（history-load-gate.js）
+    const fetchEarlier = ({ from, anchor }) => new Promise(resolve => {
+      historyLoadGate.rearm(gateHandle);
+      socket.timeout(HISTORY_ACK_TIMEOUT_MS).emit('session:history', { sessionId, cwd, before: from, anchor }, (err, res) => {
+        const failed = err || res?.error ? '失败' : res?.stale ? '对不上' : null;
+        perfTrace.openStep(perfOpen, 'older', failed ? { note: failed } : { count: res?.messages?.length, server: res?.timing });
+        resolve(failed || !Array.isArray(res?.messages) ? null : res.messages);
+      });
+    });
+    // 必须用 socket.timeout()：裸 ack 在断线时会被 socket.io-client 的 _clearAcks() 直接 delete 掉
+    // 且【不调用】（只有 withError 的才回调），于是这个回调永不执行——闸门不 abort 也不 release，
+    // 手机锁屏/切后台就能触发。带 timeout 后断线会以 err 形式回调，onAck 的 err 分支负责收尾。
+    // 预取用的是同一个超时（history-prefetch.js），同样保证回调一定来一次。
+    const fetchFresh = via => socket.timeout(HISTORY_ACK_TIMEOUT_MS).emit('session:history', { sessionId, cwd, tail: HISTORY_TAIL_FIRST }, (err, res) => onAck(err, res, via));
+    if (!prefetched) { fetchFresh(); return; }
+    // 核对不了的等落地也只会被判掉，白等一份下行
+    if (!prefetchCheckable(diskLen, diskTotal)) { fetchFresh('预取无法核对，重新拉'); return; }
+    prefetched.then(({ err, res }) => {
+      // 这一轮已被顶替：交给 onAck 记「迟到作废」收掉，不再为它重新拉
+      if (historyLoadGate.superseded(gateHandle) || prefetchedHistoryFits({ diskLen, diskTotal, err, res })) onAck(err, res, '预取');
+      // 预取超时也重新拉：服务端冷读一份大 transcript 可能超过 15s，第二次读走缓存。最坏两次都超时，
+      // 闸门 20s 的看门狗会先放行扣住的增量（顺序可能差，不丢）
+      else fetchFresh('预取对不上，重新拉');
     });
   }
 
   // 长会话切入分块渲染：块大小/让出间隔是经验起点，真机 DevTools Performance 面板校准。
   const HISTORY_RENDER_CHUNK_SIZE = 40; // 真机 DevTools Performance 校准起点；2000 条 ≈ 50 块
   const HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS = 200; // 明显短于下方高亮用的 2000ms——渲染气泡在关键路径上，高亮是锦上添花
+  const HISTORY_RENDER_RECENT_MIN = 60; // 先画、先插的最近一段至少这么多条，约两屏；切点要落在回合边界上，见 historyRenderSplit
   function scheduleIdle(fn, opts) {
     if (typeof requestIdleCallback !== 'undefined') requestIdleCallback(fn, opts);
     else setTimeout(fn, 0);
   }
 
-  // 长按气泡：550ms 触发，touchmove>8px 视为滚动/误触而取消（同侧滑手势阈值，见 sessionRow 侧滑）。
-  // 按气泡归属分流——user → 文件轴 Rewind，assistant → 对话轴 fork，见 setTimeout 里的说明。
-  // 绑定前提是气泡带 dataset.uuid。2026-09-10 起 live 气泡也带（服务端随 user_message 下发 uuid），
-  // 所以「刚发完就想回退」不再需要先刷新页面。
-  function bindBubbleLongPress(bubble, role) {
-    let timer = null, sx = 0, sy = 0, moved = false;
-    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
-    bubble.addEventListener('touchstart', ev => {
-      const touch = ev.touches?.[0];
-      if (!touch) return;
-      sx = touch.clientX; sy = touch.clientY; moved = false;
-      cancel();
-      timer = setTimeout(() => {
-        timer = null;
-        if (moved) return;
-        // 长按只剩「从这里分叉」这一个动作。
-        // 【2026-09-20 撤掉 user 气泡上的二选一】原来长按 user 气泡会弹「回退 / 分叉」确认框，
-        // 回退现在走 /rewind 斜杠命令（对齐终端的两步交互，见 app/rewind-command.js）——
-        // 长按是隐藏手势、发现不了，而回退在终端里本来就有名字。
-        requestSessionFork(bubble, role);
-      }, 550);
-    }, { passive: true });
-    bubble.addEventListener('touchmove', ev => {
-      if (!timer) return;
-      const touch = ev.touches?.[0];
-      if (!touch) return;
-      if (Math.abs(touch.clientX - sx) > 8 || Math.abs(touch.clientY - sy) > 8) { moved = true; cancel(); }
-    }, { passive: true });
-    bubble.addEventListener('touchend', cancel, { passive: true });
-    bubble.addEventListener('touchcancel', cancel, { passive: true });
-  }
-
-  // 沿 DOM 序回溯找最近一条主链 assistant 气泡的 uuid（工具卡/思考块/子agent卡都没有 dataset.uuid，天然跳过）。
-  function findPrecedingAssistantUuid(bubble) {
-    let node = bubble.previousElementSibling;
-    while (node) {
-      if (node.dataset?.uuid && node.getAttribute('data-testid') === 'assistant-message') return node.dataset.uuid;
-      node = node.previousElementSibling;
-    }
-    return null;
-  }
-
-  async function requestSessionFork(bubble, role) {
-    // 【锚点不再由前端算】只送这条气泡自己的 uuid + 语义，真正的 upToMessageId 由服务端对着
+  // 【气泡上不挂长按】（2026-10-26）长按曾是分叉的入口（O136 起还认 Android 的 contextmenu 并拦下），
+  // 真机上系统选字照样出来、分叉确认又盖在上面，想复制一段文字复制不了。浏览器没有「保留系统选字、
+  // 同时把长按另作他用」的可靠做法，于是长按整个还给系统：入口只剩 assistant 操作栏的「分叉」按钮；
+  // user 气泡原来那个「丢弃这条及之后」就是 /rewind 的「只恢复对话」，服务端同一个 planRewind。
+  async function requestSessionFork(bubble) {
+    // 【锚点不再由前端算】只送这条气泡自己的 uuid，真正的 upToMessageId 由服务端对着
     // transcript 算（见 sessions/rewind-plan.js 的 planFork）。前端 DOM 里工具卡没有 uuid，
     // 「保留轮尾部是 tool_result」这种形态在这一侧结构上就看不见，算不对。
     const ownUuid = bubble.dataset.uuid || null;
-    // resolveForkAnchorUuid 仍用来做【值不值得发这一趟】的快速判断：user 气泡前面没有任何
-    // assistant 时，分叉出来就是个空会话，本地拦掉比让服务端拒绝一次更快。
-    const reachable = resolveForkAnchorUuid({
-      role,
-      ownUuid,
-      precedingAssistantUuid: findPrecedingAssistantUuid(bubble),
-    });
-    if (!ownUuid || !reachable) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
-    if (!displayedSessionId) return;
-    // 快照：确认框等待用户点击期间，任何与本地操作无关的 instances 广播都可能改写 currentCwd/
+    if (!ownUuid || !displayedSessionId) return;
+    // 快照：确认框等待用户点击期间，任何与本地操作无关的 instances 广播都可能改写 cwd/
     // displayedSessionId（同 loadHistory 的 await 前快照+await 后重新校验模式）——不快照会把 A 会话
     // 消息的 anchor 和 await 后已变成 B 的 cwd/sessionId 拼到一起发出去。
-    const cwdAtRequest = currentCwd, sessionIdAtRequest = displayedSessionId;
+    // cwd 取驾驶轴：服务端按它找 transcript、也在那里开分叉出来的会话。worktree 会话的 currentCwd 是父仓，
+    // 拿它分叉就是「会话不存在」。
+    const cwdAtRequest = drivingCwdOf(displayedInstanceId), sessionIdAtRequest = displayedSessionId;
     const ok = await appConfirm({
       title: t('从这里分叉新会话？'),
       body: t('会复制到这条消息为止的对话，创建一个独立的新会话；原会话不受影响。'),
       okText: t('分叉'),
     });
     if (!ok) return;
-    if (currentCwd !== cwdAtRequest || displayedSessionId !== sessionIdAtRequest) {
+    if (drivingCwdOf(displayedInstanceId) !== cwdAtRequest || displayedSessionId !== sessionIdAtRequest) {
       addBar(t('会话已切换，分叉已取消，请重新发起'), 'text-info');
       return;
     }
     haptic('tap');
-    // keepAnchorTurn 表达语义而非位置：assistant 气泡=「保留到这一轮」，user 气泡=「丢弃这条及之后」。
-    // 两者锚点相反，交给服务端按 transcript 解析，前端不做位置计算。
+    // keepAnchorTurn 表达语义而非位置：assistant 气泡＝「保留到这一轮」，交给服务端按 transcript 解析。
     socket.emit('session:fork', {
-      cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: ownUuid, keepAnchorTurn: role === 'assistant',
+      cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: ownUuid, keepAnchorTurn: true,
     }, res => {
       if (!res?.ok) addBar(res?.error || t('分叉失败'), 'text-danger');
     });
@@ -8251,21 +6013,33 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 全量重载后处置被 clearView 保住的未确认气泡。
   // 历史已带回这条 → 丢乐观气泡并移交 clientMessageId（否则随后 user_message 会再新建一颗）。
   // 历史还没有 → 移到末尾。必须在 append 之后做：渲染前先摘会闪一下。
+  // 交给 outbox 的气泡多一道闸（canTextClaimPendingBubble）：没有证据说它进了 transcript 就不认领，直接移到末尾。
   // 走 dropPendingUserBubble，避免 sessionDomCache 把已删节点复活。
   function settleCarriedPendingBubbles(msgs) {
-    for (const bubble of [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]) {
+    // 认 data-carried 而不只是 .opacity-70：被保住的气泡可能已在历史回包之前被回显认领转正（见 clearView）。
+    // 转正过的就是服务端收下了的证据，可以让历史认领，不必再过 canTextClaimPendingBubble 那道闸。
+    for (const bubble of [...messagesEl.querySelectorAll('[data-testid="user-message"][data-carried]')]) {
+      const carriedText = bubble.dataset.carriedText ?? '';
+      delete bubble.dataset.carried;
+      delete bubble.dataset.carriedText;
+      const settled = !bubble.classList.contains('opacity-70');
       const tDiv = bubble.querySelector('.whitespace-pre-wrap');
-      const claim = findHistoryClaimForPending({
-        text: tDiv ? tDiv.textContent : '',
-        attNames: bubble.dataset.attNames || '',
-        messages: msgs,
-      });
+      const claim = (settled || canTextClaimPendingBubble({
+        outboxOutcome: bubble.dataset.outboxOutcome ?? null,
+        maybeSent: Boolean(bubble.dataset.outboxMaybeSent),
+      }))
+        ? findHistoryClaimForPending({
+          text: tDiv ? tDiv.textContent : carriedText,
+          attNames: bubble.dataset.attNames || '',
+          messages: msgs,
+        })
+        : null;
       if (!claim) {
         messagesEl.appendChild(bubble); // 同一节点 appendChild = 移动；已绑的监听器与 dataset 都还在
         continue;
       }
       const heir = claim.uuid
-        ? [...messagesEl.querySelectorAll('[data-testid="user-message"]')].find(b => b.dataset.uuid === claim.uuid)
+        ? [...messagesEl.querySelectorAll('[data-testid="user-message"]')].find(b => b !== bubble && b.dataset.uuid === claim.uuid)
         : null;
       if (!heir) {
         // 认领到了历史里的那条，却定位不到它渲染出的气泡（msg.uuid 缺失——真实 transcript 每行都有，
@@ -8287,14 +6061,82 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 用它抑制三个页面级副作用——尤其 scrollBottom：展开一张历史卡片时把页面滚到底是灾难性的。
   // 之所以仍走本函数而不另写一个渲染器：renderOne 是 live/history 共用的那一份，
   // 另写一个就等于再造一套平行实现，而"刷新前后同构"正是这条链要保证的东西。
-  function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false } = {}) {
+  // 历史没画完、屏幕上只剩「加载了 N 条历史消息」提示条时（#307，根因未明），在那条提示条上原地给「重新加载」：
+  // 走 reloadCurrentFromHistory（先清屏再拉），不刷新整页，也不会和残留的内容叠成两份。
+  function offerHistoryReload(bar) {
+    if (!bar?.isConnected || bar.querySelector('[data-testid="history-reload"]')) return;
+    const btn = el('<button type="button" class="ml-2 underline text-accent" data-testid="history-reload"></button>');
+    btn.textContent = t('重新加载');
+    btn.addEventListener('click', reloadSessionByHand);
+    bar.appendChild(btn);
+  }
+  // 手动重载（提示条上的「重新加载」与顶栏「⋯」）：clearView 连审批 / 提问卡一起清，session:history 又不带待办——
+  // 画完后照重连那条路补一次 sync:since，用回执里的 pending 快照重建，否则服务端还在等批、手机上却没了卡（#354 review）
+  function reloadSessionByHand() { reloadCurrentFromHistory(() => requestSync({ probe: false })); }
+
+  // 顶栏「⋯」→「重新加载本会话」（#307）：原地按钮只挂在已知的两处停下的地方上，别的路径停住时靠这一项。
+  // 没在看会话时（首页等）不可点，判据同 reloadCurrentFromHistory 自己的守卫。
+  const moreModal = $('moreModal');
+  const closeMoreMenu = () => { if (moreModal?.classList.contains('sheet-open')) closeSheet(moreModal); };
+  $('btnMore')?.addEventListener('click', () => {
+    if (!moreModal) return;
+    const item = $('moreReloadSession');
+    if (item) item.disabled = !displayedSessionId;
+    openSheet(moreModal);
+  });
+  $('moreReloadSession')?.addEventListener('click', () => { closeMoreMenu(); reloadSessionByHand(); });
+  $('moreCancel')?.addEventListener('click', closeMoreMenu);
+  moreModal?.addEventListener('click', e => { if (e.target === moreModal) closeMoreMenu(); });
+  moreModal?.addEventListener('keydown', e => { if (e.key === 'Escape') closeMoreMenu(); });
+
+  // noticeBar：loadHistory 刚插的那条「加载了 N 条」提示条。渲染半路停下时，在它上面给「重新加载」（offerHistoryReload）。
+  // superseded：loadHistory 传入，这一轮之后同实例又发起了加载时为真（见 processChunk 开头）。
+  // perfOpen：loadHistory 传入，这一轮加载所属那次打开会话的埋点凭据，插入和高亮凭它记。
+  // splitRecent：loadHistory 传入。长会话先画最近一段、插入并落底，更早的在空闲里画完再插到它前面（historyRenderSplit）。
+  //   只在这条路上切：历史闸扣着 history_append，两段都落地（onDone）才放行，中间不会有追平插进来、也不会被整窗替换清屏。
+  // earlier：loadHistory 传入。msgs 只是窗口的最近一段时，更早那段的 Promise（数组；失败或对不上是 null）。
+  //   切点按 suffix 算：切得开就先画 msgs[cut..]，更早那段到了接上 msgs[0..cut) 一起插到前面；切不开就等它到了拼成整窗再画。
+  //   没补上时最近一段留着、给「重新加载」，提示条不摘 pending（partial）。
+  // windowLen：msgs 是哪个窗口的最近一段（默认就是整窗）。日志里的序号和总数按整窗算，与提示条的条数对得上。
+  function renderHistoryBubbles(msgs, onDone, { fullReload = false, splitRecent = false, earlier = null, partial = false, windowLen = msgs?.length, cardsOnly = false, turnRunningAtRequest = false, noticeBar = null, superseded = null, perfOpen = null } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
-    const frag = document.createDocumentFragment();
+    // 提示条下面的历史全部落地时才摘掉；bindView 看到它就不把这份半成品存进 sessionDomCache（#307）。
+    // 切成两段时，最近一段插进去之后它还挂着，更早的那段也插进去才摘
+    noticeBar?.setAttribute('data-history-pending', '1');
+    // cut > 0：先画 msgs[cut..]，再画 msgs[0..cut)（有 earlier 时前面再接上更早那段）；cut = 0 照旧一次画完
+    const { cut, seedPrevTs } = splitRecent ? historyRenderSplit(msgs, HISTORY_RENDER_RECENT_MIN, { suffix: Boolean(earlier) }) : { cut: 0, seedPrevTs: null };
+    if (earlier && !cut) {
+      const waitInstanceId = displayedInstanceId, waitSessionId = displayedSessionId;
+      // 整窗下行要两三秒，屏幕上只有提示条：加载卡挂回去（onAck 已经收过一次）。回来后只摘自己这张——
+      // 按 id 摘会把新视图的卡也摘掉；被顶替时不碰，新一轮清屏或 hideLoadingCard 会收
+      showLoadingCard();
+      const loadingCard = $('historyLoadingCard');
+      earlier.then(older => {
+        if (superseded?.()) return; // 同 processChunk：闸门已归新一轮，不调 onDone
+        loadingCard?.remove();
+        if (displayedInstanceId !== waitInstanceId) {
+          logClientEvent('recv', `[HISTORY_RENDER] 等更早那段时实例变了，放弃本次历史渲染 session=${waitSessionId} instance=${waitInstanceId}→${displayedInstanceId}`);
+          if (displayedSessionId === waitSessionId) offerHistoryReload(noticeBar);
+          onDone?.();
+          return;
+        }
+        const rest = { fullReload, splitRecent, turnRunningAtRequest, noticeBar, superseded, perfOpen };
+        renderHistoryBubbles(older ? older.concat(msgs) : msgs, onDone, older ? rest : { ...rest, partial: true, windowLen });
+      });
+      return;
+    }
+    let frag = document.createDocumentFragment();
+    // 历史里的图片按需取，坐标在【渲染时】快照（同子代理卡的 flowSid）：格子会留在 DOM 里跨越会话切换，
+    // 进入可视区时再读会按别的会话去取。cwd 走驾驶轴，与 loadHistory 的 session:history 同一个值。
+    const imageScope = { sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId), instanceId: displayedInstanceId };
+    // 历史卡片「展开全文」的会话坐标：同图片；子代理里的卡带上那次 Agent 调用的 id，服务端到子代理文件里找
+    const histFullScope = msg => ({ sessionId: imageScope.sessionId, cwd: imageScope.cwd, agentToolUseId: msg.parentToolUseId || null });
     // fragment 是线性构建的：基准 seed 一次之后顺着往下带，不必每条反向扫。
     //  · 全量加载：null —— 这批就是整个会话的开头。
     //  · 增量追平：#messages 尾巴的戳 —— 接上前一批。
-    const stampIntoFrag = messageTimeline.beginFragment(frag, {
-      seedPrevTs: fullReload ? null : messageTimeline.lastTimestampIn(messagesEl),
+    //  · 先画的最近一段：切点前最后一条气泡的戳，日期行和一次画完时一样；更早那段换 frag 时另起，基准 null。
+    let stampIntoFrag = messageTimeline.beginFragment(frag, {
+      seedPrevTs: cut ? seedPrevTs : fullReload ? null : messageTimeline.lastTimestampIn(messagesEl),
     });
     const codeBlocks = [];
     // histToolCards/histSubCards 是模块级持久 Map（跨 tick 配对，见其声明处注释），本函数只读写不新建。
@@ -8391,13 +6233,21 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         appendNode(bar, msg);
         return;
       }
+      // /compact 的压缩摘要（O115）：history.js 换成了这个标记——与 live 侧 system「上下文已压缩」同一观感，
+      // 不是用户气泡（摘要是给模型的上下文，终端主视图也不显示它）
+      if (msg?.kind === 'compact_summary') {
+        const bar = el('<div class="msg-frame text-center text-xs text-ink-faint" data-testid="compact-marker"></div>');
+        bar.textContent = t('上下文已压缩');
+        appendNode(bar, msg);
+        return;
+      }
       if (msg?.kind === 'thinking') {
         const wrap = el(`
           <details class="msg-frame thinking text-xs text-ink-faint">
             <summary class="px-3 py-1.5">${t('💭 思考过程')}</summary>
             <pre class="t-body px-3 pb-2 whitespace-pre-wrap"></pre>
           </details>`);
-        wrap.querySelector('.t-body').textContent = msg.content || '';
+        wrap.querySelector('.t-body').textContent = localizeServerThinkingText(msg.content);
         appendNode(wrap, msg);
         return;
       }
@@ -8416,12 +6266,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           </details>`);
         setStatusIcon(card.querySelector('.t-status'), 'pending');
         card.dataset.toolName = msg.name || ''; // tool_result 无 name，结果特化渲染从卡上取
+        if (msg.toolUseId) card.dataset.toolUseId = msg.toolUseId; // 同 live
         const inCode = card.querySelector('.t-in code');
         if (inCode) {
           if (String(msg.inputSummary || '').trim() === '{}') {
             card.querySelector('.t-in')?.classList.add('hidden'); // 空对象输入不显（同 live）
           } else {
             inCode.textContent = formatToolSummary(msg.inputSummary || '');
+            inCode.className = toolInputHighlightClass(inCode.textContent);
             codeBlocks.push(inCode);
           }
         }
@@ -8437,6 +6289,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             // 同 live 的 adoptSpawnCard：接管状态/输入/结果三槽 + 改写 histToolCards 指向，
             // 让本文件下方 tool_result 分支（setStatusIcon / .t-out / dataset.toolName）零改动生效。
             sa.el.dataset.toolName = msg.name || '';
+            sa.el.dataset.toolUseId = msg.toolUseId;
             setStatusIcon(sa.el.querySelector('.t-status'), 'pending');
             // 同 live 的 adoptSpawnCard：只显 description，不铺原始输入 JSON
             const histInEl = sa.el.querySelector('.t-in');
@@ -8448,7 +6301,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             histToolCards.set(msg.toolUseId, sa.el);
           }
         }
-        if (!histMergedSpawn) appendNode(card, msg);
+        if (!histMergedSpawn) {
+          appendNode(card, msg);
+          const widgetNode = msg.widget ? widgets.render(msg.widget) : null; // 同 live：图紧跟工具卡
+          if (widgetNode) appendNode(widgetNode, msg);
+        }
         return;
       }
       if (msg?.kind === 'tool_result') {
@@ -8468,22 +6325,35 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           const code = orphan.querySelector('.t-out code');
           if (code) {
             code.textContent = formatToolSummary(msg.outputSummary || '');
+            code.className = toolOutputHighlightClass(code.textContent);
             codeBlocks.push(code);
           }
+          if (msg.toolUseId && isToolSummaryTruncated(msg.outputSummary)) attachToolFullExpand(orphan, msg.toolUseId, histFullScope(msg));
+          const orphanShots = transcriptImages.render(msg.images, imageScope);
+          if (orphanShots) orphan.querySelector('.t-out')?.parentElement.appendChild(orphanShots);
           appendNode(orphan, msg);
           return;
         }
-        setStatusIcon(card.querySelector('.t-status'), msg.ok === false ? 'error' : 'ok');
+        // AskUserQuestion 同 live：按 CLI 文案分已回答 / 没回答；旧 transcript 的 deny 格式答案不再显成 ❌（#455）
+        const askView = card.dataset.toolName === 'AskUserQuestion' ? askQuestionResultView({ ok: msg.ok, text: msg.outputSummary }) : null;
+        setStatusIcon(card.querySelector('.t-status'), askView ? askView.kind : msg.ok === false ? 'error' : 'ok');
         if (msg.outputSummary) {
           const out = card.querySelector('.t-out');
           const code = out.querySelector('code') || out;
           // Task 清单工具结果 → ☐/◐/☒ 清单文本（同 live；历史是 block.content 文本形态）
           const taskText = msg.ok !== false ? renderTaskToolResultText(card.dataset.toolName, msg.outputSummary) : null;
-          code.textContent = taskText ?? formatToolSummary(msg.outputSummary);
-          if (!taskText && code !== out) codeBlocks.push(code);
+          code.textContent = taskText ?? formatToolSummary(askView ? askView.text : msg.outputSummary);
+          if (!taskText && code !== out) {
+            code.className = toolOutputHighlightClass(code.textContent);
+            codeBlocks.push(code);
+          }
           if (taskText) card.open = true; // 清单即结果本体（同 live）
           out.classList.remove('hidden');
+          // 历史卡片的「展开全文」：全文只能从 transcript 取，请求带上这个会话的坐标（验收 O55）
+          if (!taskText && msg.toolUseId && isToolSummaryTruncated(msg.outputSummary)) attachToolFullExpand(card, msg.toolUseId, histFullScope(msg));
         }
+        const shots = transcriptImages.render(msg.images, imageScope);
+        if (shots) (card.querySelector('.t-out')?.parentElement || card).appendChild(shots);
         histToolCards.delete(msg.toolUseId);
         // 主链 Agent 完成 → 子卡标题「已完成」；带上 sa.type，不然会把已提取的具体类型冲成泛泛的「子 agent」
         if (!msg.parentToolUseId && histSubCards.has(msg.toolUseId)) {
@@ -8504,22 +6374,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         appendNode(bubble, msg);
         return;
       }
-      bubble.innerHTML = render(msg.content || '');
-      bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
-      injectCodeCopyButtons(bubble);
-      if (isUser) foldLongUserBubble(bubble, msg.content || '');
+      if (isUser) {
+        if (msg.content) appendUserText(bubble, msg.content);
+      } else {
+        bubble.innerHTML = render(msg.content || '');
+        bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
+        injectCodeCopyButtons(bubble);
+      }
       // E18：历史附件（history.js 解析 [附件] 块所得）→ 可点击 chip，按需拉原图；纯附件消息（content 空）
       // 渲染 chip-only 气泡、跳过复制按钮（复制空文本无意义）
       if (isUser && Array.isArray(msg.attachments) && msg.attachments.length) {
         bubble.appendChild(buildAttachmentWrap(msg.attachments, Boolean(msg.content)));
       }
+      // 终端 / 桌面端里贴进对话的图（transcript 里的图片块，不是 CCM 上传的附件）
+      const pasted = isUser ? transcriptImages.render(msg.images, imageScope) : null;
+      if (pasted) bubble.appendChild(pasted);
       if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left', msg.uuid);
       if (isUser && msg.origin === 'auto-continuation') tagAutoContinueBubble(bubble); // 与 live 的 user_message 同一判据
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用（jumpToUnreadAnchor）：仅主链用户消息/assistant文字回复计入，子agent/侧链在上面已提前 return
-      if (msg.uuid) {
-        bubble.dataset.uuid = msg.uuid;
-        bindBubbleLongPress(bubble, isUser ? 'user' : 'assistant');
-      }
+      if (msg.uuid) bubble.dataset.uuid = msg.uuid;
       // 历史条目的 timestamp 是 transcript 原样透传的 ISO 串（src/sessions/history.js）。
       // 节点先进游离的 frag，故 prevTs 优先读 frag、空了再回落 #messages（增量追加场景）。
       stampIntoFrag(bubble, msg.timestamp, msg.role);
@@ -8528,35 +6401,131 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 中断检查用「渲染发起时 #messages 归属哪个实例」的快照；bindView 是唯一整体改写 #messages 的地方，
     // displayedInstanceId 代表此刻 DOM 安全可写给谁。分块跨越一次切视图时直接丢弃 frag，不再调度、不
     // appendChild——frag/codeBlocks/histSubCards/histToolCards 全是本次调用的局部变量，中止后自然被 GC，
-    // 不需要额外清理；用户若切回同一会话，因没有 sessionDomCache 缓存会自然触发一次完整重渲染。
+    // 不需要额外清理；用户切回同一会话会重新完整加载：提示条还带着 data-history-pending，bindView 不会把
+    // 这份半成品存进 sessionDomCache（#307）。
     //
     // 注意：不得放宽为「同 sessionId 即可续渲」——同会话 instance 置换时 bindView 会 clearView + 重新
-    // loadHistory，旧 frag 若仍落地会与新一轮历史叠加成重复气泡。跨 instance 一律中断，由新 bindView 负责。
+    // loadHistory（同样因为半成品不进缓存），旧 frag 若仍落地会与新一轮历史叠加成重复气泡。跨 instance 一律中断，由新 bindView 负责。
     const targetInstanceId = displayedInstanceId;
-    let i = 0;
+    const targetSessionId = displayedSessionId;
+    // 切成两段时先画 [cut, n)、再画 [0, cut)：i 是下一条的下标，stop 是这一段的上界，rows 是这一段从哪个数组里取
+    // （有 earlier 时更早那段是 older 接上 msgs[0..cut)），rows[0] 在窗口里排第 base 条（从 0 数）
+    let rows = msgs;
+    let base = windowLen - msgs.length;
+    let i = cut;
+    let stop = msgs.length;
+    let recentFirst = null; // 最近一段插进去之后它的第一个节点；非 null = 正在画更早那段，插在它前面、拿它量补偿
+    const renderedCount = () => (recentFirst ? msgs.length - cut + i : i - cut);
+    // 全量重载完还没配上 tool_result 的工具卡：会话此刻没在跑（没有在途轮、也不是终端在驾驶），结果就不会再来了。
+    // 重启后过期的审批留下的正是这种 tool_use——画成「进行中」会让那一行永远转着（验收 O30）。标中性终态「已中止」。
+    // 两段时每段插入后各标一次（配对不跨切点，最近一段里没配上的，更早那段也配不上），在不在跑按第一次插入时的算
+    let abortUnpaired = null;
+    const markUnpairedAborted = () => {
+      if (abortUnpaired === null) abortUnpaired = fullReload && !cardsOnly && !_turnRunning && !turnRunningAtRequest && !mirrorReadonlySid;
+      if (!abortUnpaired) return;
+      for (const card of histToolCards.values()) setStatusIcon(card.querySelector('.t-status'), 'aborted');
+    };
+    // 更早那段插到最近一段前面，上方多出一大截会把视口顶走：按 recentFirst 插入前后的位置差把 scrollTop 补回去。
+    // 量的是实际位移：浏览器自己做了滚动锚定（Chrome 的 overflow-anchor）时差值是 0，不会补两遍；Safari 不锚定，全靠这一下。
+    // 插入和补偿在同一个任务里，中间不出帧，看不到跳动。引起的 scroll 事件算程序滚动，不当成用户看到了未读（见 scrollBottom）
+    const insertEarlier = () => {
+      const before = recentFirst.getBoundingClientRect().top;
+      programmaticScrollUntil = Date.now() + PROGRAMMATIC_SCROLL_WINDOW_MS;
+      messagesEl.insertBefore(frag, recentFirst);
+      const shift = recentFirst.getBoundingClientRect().top - before;
+      if (shift) messagesEl.scrollTop += shift;
+    };
     function processChunk() {
       // ★ 中断也必须通知收尾。onDone 是 flushHeldHistoryAppends 的唯一调用点，早年这里直接 return
       // 把它一并跳过了：闸门既不 release 也不 abort，永久开着，此后该实例每条 history_append 都被
       // 静默吞掉——终端在跑、手机再也不刷新、无任何报错。此刻视图已切走，flush 出来的事件会被
       // onHistoryAppend 的 viewingInstanceId 守卫正常丢弃，所以只关闸、不会污染新视图。
-      if (displayedInstanceId !== targetInstanceId) { onDone?.(); return; }
-      const { end, done } = nextHistoryRenderChunk({ processed: i, total: msgs.length, chunkSize: HISTORY_RENDER_CHUNK_SIZE });
-      for (; i < end; i++) renderOne(msgs[i]);
+      if (displayedInstanceId !== targetInstanceId) {
+        // #307 观测：这一趟画的东西整段作废，由新视图重新加载（见上方注释）
+        logClientEvent('recv', `[HISTORY_RENDER] 渲染途中实例变了，放弃本次历史渲染 session=${targetSessionId} instance=${targetInstanceId}→${displayedInstanceId} 已渲染 ${renderedCount()}/${windowLen}`);
+        if (displayedSessionId === targetSessionId) offerHistoryReload(noticeBar);
+        onDone?.();
+        return;
+      }
+      // 实例没变、但同一实例上又发起了一次全量加载（手动「重新加载」）：上面的守卫拦不住，这一轮整段作废——
+      // 不再 renderOne（它会写进新一轮刚清空的配对表）、不插 frag。也不调 onDone：闸门已归新一轮，
+      // 旧 handle 的 release 本来就拿不到东西，crashNotices.restore 反而会在新一轮半路多补一份（#354 review）
+      if (superseded?.()) return;
+      const { end, done } = nextHistoryRenderChunk({ processed: i, total: stop, chunkSize: HISTORY_RENDER_CHUNK_SIZE });
+      for (; i < end; i++) {
+        try {
+          renderOne(rows[i]);
+        } catch (error) {
+          // #307 观测：分块链在这里断了，后面的块不再调度、frag 不插入、onDone 不调（历史闸要等看门狗）。
+          // 根因未修：照旧抛出去（全局错误上报照常记「前端错误」），只多记一条带坐标的日志、给原地重新加载。
+          logClientEvent('error', `[HISTORY_RENDER] 渲染第 ${base + i + 1}/${windowLen} 条历史时抛错，后面的都没画出来 session=${targetSessionId} instance=${targetInstanceId} 当前=${displayedInstanceId} 已渲染 ${renderedCount()}/${windowLen}：${error?.message || error}`);
+          if (displayedSessionId === targetSessionId) offerHistoryReload(noticeBar);
+          throw error;
+        }
+      }
       if (!done) {
         scheduleIdle(processChunk, { timeout: HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS });
         return;
       }
-      if (!cardsOnly) leaveStartScreen();
-      messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow（分块只让解析让出主线程，插入仍是一次性）
-      // cardsOnly 下 frag 恒空：调用方已过滤成「只有 parentToolUseId 的条目」，appendNode 全部路由进卡
-      // 历史已落地：把 clearView 保住的未确认气泡与刚回来的历史收敛成一条（见函数注释）。
-      // 必须排在 scrollBottom 之前——它可能移动/删除气泡，位置定下来再落底才不会滚错。
-      if (fullReload) settleCarriedPendingBubbles(msgs);
-      if (!cardsOnly) scrollBottom(true);
-      if (codeBlocks.length) {
-        const doHighlight = () => codeBlocks.forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
-        scheduleIdle(doHighlight, { timeout: 2000 });
+      // 打开会话埋点：只有 loadHistory 的整段加载带凭据（增量追平、镜像整窗替换都不算）；
+      // 凭据不是当前这次打开的（排在空闲里的高亮跑到时，同一个会话可能已经又开了一次），perfTrace 自己不记
+      if (recentFirst) {
+        // 等更早那段要一个往返，期间最近一段可能已被换掉（闸门看门狗放行了整窗替换、会话被关换成空表面）：没有可接的了
+        if (!recentFirst.isConnected) {
+          logClientEvent('recv', `[HISTORY_RENDER] 最近一段已不在页面上，更早那段不插了 session=${targetSessionId} instance=${targetInstanceId}`);
+          onDone?.();
+          return;
+        }
+        insertEarlier();
+        markUnpairedAborted();
+        // 补偿读了位置，插入引起的排版已经算进这一段
+        if (perfOpen) perfTrace.openStep(perfOpen, 'backfill', { count: stop });
+      } else {
+        if (!cardsOnly) leaveStartScreen();
+        const first = frag.firstChild;
+        messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow（分块只让解析让出主线程，插入仍是一次性）
+        // cardsOnly 下 frag 恒空：调用方已过滤成「只有 parentToolUseId 的条目」，appendNode 全部路由进卡
+        // 历史已落地：把 clearView 保住的未确认气泡与刚回来的历史收敛成一条（见函数注释）。
+        // 必须排在 scrollBottom 之前——它可能移动/删除气泡，位置定下来再落底才不会滚错。
+        // 切成两段时在最近一段插入后就做：刚发出的那条只会在最近一段里
+        if (fullReload) settleCarriedPendingBubbles(msgs);
+        markUnpairedAborted();
+        if (!cardsOnly) scrollBottom(true);
+        // 落底读了 scrollHeight，插入引起的排版已经算进这一段
+        if (perfOpen) perfTrace.openStep(perfOpen, 'insert', cut ? { count: msgs.length - cut } : undefined);
+        if (cut) {
+          recentFirst = first;
+          frag = document.createDocumentFragment();
+          stampIntoFrag = messageTimeline.beginFragment(frag, { seedPrevTs: null });
+          i = 0;
+          stop = cut;
+          if (!earlier) { scheduleIdle(processChunk, { timeout: HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS }); return; }
+          // 更早那段到了接在 msgs[0..cut) 前面一起画（照旧排在空闲里）；没补上就只画 msgs[0..cut)。
+          // 切走、被顶替由 processChunk 开头那两道照常拦
+          earlier.then(older => {
+            if (older) {
+              rows = older.concat(msgs.slice(0, cut));
+              stop = rows.length;
+              base = 0;
+              windowLen = older.length + msgs.length; // 两次之间截顶窗口滑过时，更早那段比当初报的短
+            } else partial = true;
+            scheduleIdle(processChunk, { timeout: HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS });
+          });
+          return;
+        }
       }
+      if (partial) offerHistoryReload(noticeBar);
+      else noticeBar?.removeAttribute('data-history-pending');
+      if (codeBlocks.length) {
+        const doHighlight = () => {
+          const t0 = performance.now();
+          codeBlocks.forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
+          if (!perfOpen) return;
+          perfTrace.openStep(perfOpen, 'highlight', { blocks: codeBlocks.length, ms: performance.now() - t0 });
+          perfTrace.openEnd(perfOpen, 'done');
+        };
+        scheduleIdle(doHighlight, { timeout: 2000 });
+      } else if (perfOpen) perfTrace.openEnd(perfOpen, 'done');
       onDone?.(); // DOM 真正稳定（frag 已插入）之后才通知——未读胶囊的 topLevelBubbles() 查询依赖这个时机
     }
     processChunk();
@@ -8685,6 +6654,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
 
   function applyMirror(readonly, sessionId, stale = false, observedCli, autonomous = false, waiting = false) {
+    const prevRowLock = mirrorRowLock();
     const wasEffective = Boolean(mirrorReadonlySid);
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
     if (effective && !wasEffective) {
@@ -8706,9 +6676,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // observed CLI state 只是镜像展示层，不能写回 Web 实例偏好；未知字段也必须保持未知。
       renderCliPanelState();
     } else if (wasEffective) {
-      restoreWebPanelState();
+      const external = instancesList.find(i => i.instanceId === displayedInstanceId)?.externalObserved;
+      if (external) {
+        mirrorObservedCli = external;
+        renderCliPanelState();
+      } else {
+        restoreWebPanelState();
+        mirrorObservedCli = { model: null, permissionMode: null, effort: null };
+      }
       mirrorWebPanelSnapshot = null;
-      mirrorObservedCli = { model: null, permissionMode: null, effort: null };
       _mirrorComposerHintLast = { text: '', at: 0 }; // 解锁后清节流，下次再锁可立刻提示
     } else {
       // 第三分支：本来就不在镜像态、现在也不在——最常见路径，每次 readonly:false 广播都会走这里。
@@ -8737,6 +6713,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     // 镜像/解锁都走主按钮状态机：镜像时 mode=resume，解锁恢复 send/stop
     updateSendButtonState();
+    refreshSessionStatusChips(); // 抽屉里被锁住的那一行跟着标/撤终端态（O86）
+    // #289 方案 F：行上终端态以注册表快照为准，快照最多晚 12 秒。锁真正转变时立刻 revalidate 那一行所在目录，
+    // 一个往返内换成服务端给的权威态与来源。锁消失时按变化前那把锁找行；行不在已渲染的目录里就不管，
+    // 下一轮周期刷新或重开抽屉兜住。
+    const rowLock = mirrorRowLock();
+    if (mirrorRowLockChanged(prevRowLock, rowLock) && isSessionPanelRevalidateActive() && socket.connected) {
+      const sids = [...new Set([prevRowLock?.sessionId, rowLock?.sessionId].filter(Boolean))];
+      for (const section of dirSectionNodes.values()) {
+        if (sids.some(sid => section.subtree.querySelector(`[data-testid="session-row"][data-session-id="${CSS.escape(sid)}"]`))) {
+          section.revalidate?.();
+        }
+      }
+    }
   }
 
   // 输入 pill 捕获点击：disabled 的 textarea/按钮自身常不派发 click，父级 pointerdown 仍能收到。
@@ -8935,13 +6924,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         setTimeout(() => { if (span) span.textContent = t('复制'); }, 1500);
       };
       row.appendChild(btn);
-      // UX-012：改写重发放在用户气泡，操作对象与位置一致
+      // UX-012 / #362：填入输入框放在用户气泡；只回填原文，不 rewind / 不改历史
       const rewrite = el(`
-        <button class="msg-action-btn hit-44" title="${t('改写后重发')}">
+        <button class="msg-action-btn hit-44" title="${t('将原文填入输入框（不回退历史）')}">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
           </svg>
-          <span>${t('改写重发')}</span>
+          <span>${t('填入输入框')}</span>
         </button>
       `);
       rewrite.onclick = () => {
@@ -9049,8 +7038,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     bar.appendChild(speakBtn);
 
     // 对话轴分叉的可见入口。对齐 Claude Desktop 1.52386.6——它把「Fork from here」放在
-    // assistant 消息的操作栏里，与复制/朗读同排。本仓此前只有长按一条路：没有任何视觉提示，
-    // 且 bindBubbleLongPress 只绑 touch 事件，桌面鼠标按不出来。
+    // assistant 消息的操作栏里，与复制/朗读同排。2026-10-26 起它是唯一入口（气泡长按还给了系统选字，
+    // 见 requestSessionFork 头注）。
     //
     // 【为什么判 anchorUuid】没有锚点就分叉不了（requestSessionFork 开头直接 return）。
     // 流式气泡由 getStream 建、不带 dataset.uuid，旧 transcript 里也有缺 uuid 的条目——
@@ -9067,11 +7056,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 确认框在 requestSessionFork 里，haptic 同理——按钮可见不等于一键执行。
       // uuid 在点击时由该函数从 container.dataset 读，不用这里的 anchorUuid：
       // 气泡的 dataset 才是权威值，且历史回显路径是先挂操作栏、后补 uuid。
-      forkBtn.onclick = () => requestSessionFork(container, 'assistant');
+      forkBtn.onclick = () => requestSessionFork(container);
       bar.appendChild(forkBtn);
     }
 
-    // UX-012：编辑已迁到用户气泡「改写重发」
+    // UX-012 / #362：编辑已迁到用户气泡「填入输入框」
 
     container.appendChild(bar);
   }
@@ -9085,7 +7074,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!fold) return;
     textEl.classList.add('overflow-hidden');
     textEl.style.maxHeight = '8rem';
-    const btn = el(`<button class="text-xs text-accent mt-1 block">${t('展开')}</button>`);
+    // #395：长用户消息「展开」挂 hit-44，补足 44px 触控热区（同屏工具卡「展开全文」另案）
+    const btn = el(`<button type="button" class="hit-44 text-xs text-accent mt-1 block">${t('展开')}</button>`);
     let expanded = false;
     btn.onclick = () => {
       expanded = !expanded;
@@ -9095,24 +7085,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     textEl.after(btn);
   }
 
-  // 历史回显气泡（innerHTML 渲染过 markdown）：把渲染产物包进一层限高容器 + 「展开」按钮，
-  // 与 foldLongUserText 视觉一致。不重写已渲染的 innerHTML（避免二次 markdown 解释风险）。
-  function foldLongUserBubble(bubble, rawText) {
-    if (!bubble) return;
-    const { fold } = userBubbleFold(rawText);
-    if (!fold) return;
-    // 把气泡里已渲染的 DOM 节点平移进一个限高包装层
-    const wrap = el(`<div class="overflow-hidden" style="max-height:8rem"></div>`);
-    while (bubble.firstChild) wrap.appendChild(bubble.firstChild);
-    bubble.appendChild(wrap);
-    const btn = el(`<button class="text-xs text-accent mt-1 block">${t('展开')}</button>`);
-    let expanded = false;
-    btn.onclick = () => {
-      expanded = !expanded;
-      if (expanded) { wrap.style.maxHeight = 'none'; wrap.classList.remove('overflow-hidden'); btn.textContent = t('收起'); }
-      else { wrap.style.maxHeight = '8rem'; wrap.classList.add('overflow-hidden'); btn.textContent = t('展开'); }
-    };
-    wrap.after(btn);
+  // 用户气泡的文字：一律纯文本，保留换行与连续空白（验收 O25 / O90）。终端里看到的就是用户原样打的字；
+  // 原来和助手回复共用 markdown + sanitize，<Header> 被吞、<b> 变粗体、**…** 变加粗、连续空格被压成一个，
+  // 用户会以为自己的话被截断了。乐观占位、在线新建、历史渲染三个建出点共用这一个构建器，字段漂开会认领失败。
+  function appendUserText(bubble, text) {
+    const textNode = el(`<div class="whitespace-pre-wrap break-words" data-testid="user-text"></div>`);
+    textNode.textContent = text;
+    bubble.appendChild(textNode);
+    foldLongUserText(textNode, text);
+    return textNode;
   }
 
   function showLoadingCard() {
@@ -9135,291 +7116,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
   // esc / ansiToHtml 已抽到 logic.js（顶部 import）。
 
-  // 这张抽屉有两个来源：顶栏 🖥（直接开在聊天页上，关掉就该回聊天页）与「排查」页的「会话日志」
-  // （开之前收了设置 sheet，关掉要把人送回那一页）。null = 不是从设置切进来的。
-  // 三条关法（✕ / 点遮罩 / 再点顶栏按钮）必须走同一个函数：同一张面板两种关法落到两个地方，
-  // 正是这个仓库踩过不止一次的坑。
-  let consoleFrom = null;
-  function openConsole({ from = null } = {}) {
-    if (!consoleModal) return;
-    consoleFrom = from;
-    if (from) general.close(); // 设置 sheet 与本抽屉同 z-40，叠着会互相拦点击
-    openSheet(consoleModal);
-    loadConsoleLogs();
-  }
-  function closeConsole() {
-    if (consoleModal) closeSheet(consoleModal);
-    if (!consoleFrom) return;
-    const back = consoleFrom;
-    consoleFrom = null;
-    reopenGeneralAt(back);
-  }
-
-  if (btnConsole) {
-    btnConsole.onclick = () => {
-      if (!consoleModal) return;
-      if (consoleModal.classList.contains('sheet-open')) closeConsole();
-      else openConsole();
-    };
-  }
-  // 「排查」页的会话日志入口：内容与顶栏那张是同一张抽屉，不另建一套渲染。
-  if ($('btnDiagSessionLog')) $('btnDiagSessionLog').onclick = () => openConsole({ from: 'diag' });
-
-  if (consoleClose) consoleClose.onclick = closeConsole;
-
-  if (consoleModal) {
-    consoleModal.onclick = (e) => {
-      if (e.target === consoleModal) closeConsole();
-    };
-  }
-
-  if (consoleClear) {
-    consoleClear.onclick = () => {
-      clientLogger.clear(); // 清内存缓冲 + 落盘空缓冲（否则重开又恢复已清的旧条目）
-      lastRenderedLogs = [];
-      if (consoleLogArea) consoleLogArea.innerHTML = '';
-    };
-  }
-
-  // 全部/交互/诊断 过滤：切换态 + 高亮当前按钮 + 本地重渲（数据已在服务端拉取过，无需重新请求）。
-  function updateConsoleFilterButtons() {
-    for (const btn of consoleFilterButtons) {
-      const active = btn.dataset.filter === consoleFilter;
-      btn.classList.toggle('bg-gray-700', active);
-      btn.classList.toggle('text-gray-200', active);
-      btn.classList.toggle('text-gray-500', !active);
-    }
-  }
-  for (const btn of consoleFilterButtons) {
-    btn.onclick = () => {
-      if (btn.dataset.filter === consoleFilter) return;
-      consoleFilter = btn.dataset.filter;
-      updateConsoleFilterButtons();
-      loadConsoleLogs();
-    };
-  }
-
-  // 「复制全部」：把当前抽屉可见日志拼成多行文本，发给电脑 / 贴给 Claude 排障——手机端唯一带走途径。
-  const consoleCopy = $('consoleCopy');
-  if (consoleCopy) {
-    consoleCopy.onclick = async () => {
-      const text = formatLogsForCopy(lastRenderedLogs);
-      if (!text) return;
-      const ok = await copyText(text);
-      const orig = consoleCopy.textContent;
-      consoleCopy.textContent = ok ? t('已复制') : t('复制失败');
-      setTimeout(() => { consoleCopy.textContent = orig; }, 1500);
-    };
-  }
-
-  function loadConsoleLogs(id) {
-    const instId = id || viewingInstanceId;
-    if (!instId) {
-      // 首页无选中实例：服务端日志按实例隔离故无从拉，但连接级(client_conn)日志无工作区归属、恒显——
-      // 仍渲染它们，否则首页打开日志抽屉一片空白、断连/重连痕迹全丢（logEntryVisibleForInstance 对 client_conn 恒 true）。
-      if (consoleLogArea) {
-        consoleLogArea.innerHTML = '';
-        renderLogList(filterConsoleEntries(clientLogger.entries().filter(e => logEntryVisibleForInstance(e, null)), consoleFilter));
-      }
-      return;
-    }
-    socket.emit('logs:get', { instanceId: instId }, (res) => {
-      if (!consoleLogArea) return;
-      // WS-019：迟到 ACK 守卫——发起后若已切到别的实例，丢弃本回调。否则 A 的日志回包会清空并覆盖共享的
-      // consoleLogArea（当前显示 B 的日志）。仅调试抽屉、只读、下次打开自愈，但迟到覆盖仍是可见错乱。
-      if (viewingInstanceId !== instId) return;
-      consoleLogArea.innerHTML = '';
-      let mergedLogs = [];
-      if (res && Array.isArray(res.logs)) {
-        mergedLogs = [...res.logs];
-      }
-      // 诊断时间线（镜像/排队/停止）：原始 {ts,subsystem,event,detail} 经 formatDiagLogEntry 译成
-      // 判定过的一句话，与交互日志同一时间线合并展示，靠 diag_ 前缀 type 供过滤/着色区分。
-      if (res && Array.isArray(res.diagLogs)) {
-        mergedLogs = mergedLogs.concat(res.diagLogs.map(formatDiagLogEntry));
-      }
-      // 只合并属于本实例(或连接级恒显)的 client 日志——修切工作区残留上个区日志（clientLogBuffer 全局无隔离）。
-      // 服务端日志(res.logs)已按 sessionId 隔离、无 instanceId 字段，不经此过滤。
-      mergedLogs = mergedLogs.concat(clientLogger.entries().filter(e => logEntryVisibleForInstance(e, instId)));
-      mergedLogs.sort((a, b) => a.ts - b.ts);
-      mergedLogs = filterConsoleEntries(mergedLogs, consoleFilter);
-      if (mergedLogs.length > 200) {
-        mergedLogs = mergedLogs.slice(mergedLogs.length - 200);
-      }
-      renderLogList(mergedLogs);
-    });
-  }
-
-  let consoleFilter = 'all'; // 交互日志抽屉过滤态：all|interaction|diag（切换即本地重渲，不重新请求服务端）
-  let lastRenderedLogs = []; // 抽屉当前渲染的条目快照——「复制全部」的所见即所得数据源
-  // 批量渲染日志：在恢复段(上次会话)与本次会话交界插一条「—— 本次会话 ——」分隔（isRestoredBoundary）。
-  // 实时 onEntry 追加的都是本次(非 restored)、永不触发分隔，故分隔只在此批量路径出现。
-  function renderLogList(entries) {
-    if (!consoleLogArea) return;
-    lastRenderedLogs = entries;
-    let prev = null;
-    for (const entry of entries) {
-      if (isRestoredBoundary(prev, entry)) {
-        const sep = document.createElement('div');
-        sep.className = 'text-center text-[10px] text-gray-600 select-none py-1';
-        sep.textContent = t('—— 本次会话 ——');
-        consoleLogArea.appendChild(sep);
-      }
-      appendLogEntry(entry); // 批量路径每条 soft；循环后一次 force 落底（打开抽屉/切换过滤）
-      prev = entry;
-    }
-    // 打开即看最新：全量/过滤重渲结束后强制贴底（实时 onEntry 仍走 soft stick）
-    consoleLogArea.scrollTop = consoleLogArea.scrollHeight;
-  }
-
-  function appendLogEntry(p, { force = false } = {}) {
-    if (!p || !consoleLogArea) return;
-    // 布局契约：纵向 row + 可换行 meta + 满宽 body（见 logic.js consoleLogEntryLayout）。
-    // 旧横向 flex 会在窄屏被 chip 挤成一字宽竖排。
-    const layout = consoleLogEntryLayout();
-    const row = document.createElement('div');
-    row.className = layout.row;
-
-    const meta = document.createElement('div');
-    meta.className = layout.meta;
-
-    const tsStr = p.ts ? new Date(p.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
-    const tsSpan = document.createElement('span');
-    tsSpan.className = 'text-gray-500 select-none shrink-0 font-semibold';
-    tsSpan.textContent = `[${tsStr}]`;
-    meta.appendChild(tsSpan);
-
-    const badgeSpan = document.createElement('span');
-    badgeSpan.className = 'px-1 py-0.5 rounded text-[9px] uppercase font-bold tracking-wider shrink-0';
-    let badgeText;
-    let textClass;
-
-    switch (p.type) {
-      case 'user_in':
-        badgeSpan.className += ' bg-blue-950/60 text-blue-400 border border-blue-800/40';
-        badgeText = 'user→srv';
-        textClass = 'text-blue-100/90';
-        break;
-      case 'user_out':
-        badgeSpan.className += ' bg-cyan-950/60 text-cyan-400 border border-cyan-800/40';
-        badgeText = 'srv→cli';
-        textClass = 'text-cyan-100/90';
-        break;
-      case 'agent_send':
-        badgeSpan.className += ' bg-purple-950/60 text-purple-400 border border-purple-800/40';
-        badgeText = 'agt→sdk';
-        textClass = 'text-purple-100/90';
-        break;
-      case 'agent_result':
-        badgeSpan.className += ' bg-emerald-950/60 text-emerald-400 border border-emerald-800/40';
-        badgeText = 'sdk→agt';
-        textClass = 'text-emerald-100/90';
-        break;
-      case 'sys_info':
-        badgeSpan.className += ' bg-rose-950/60 text-rose-400 border border-rose-800/40';
-        badgeText = 'sys-info';
-        textClass = 'text-rose-100/90';
-        break;
-      case 'client_conn':
-        badgeSpan.className += ' bg-amber-950/60 text-amber-400 border border-amber-800/40';
-        badgeText = 'cli-conn';
-        textClass = 'text-amber-100/90';
-        break;
-      case 'client_send':
-        badgeSpan.className += ' bg-blue-950/60 text-blue-400 border border-blue-800/40';
-        badgeText = 'web-send';
-        textClass = 'text-blue-100/90';
-        break;
-      case 'client_recv':
-        badgeSpan.className += ' bg-indigo-950/60 text-indigo-400 border border-indigo-800/40';
-        badgeText = 'web-recv';
-        textClass = 'text-indigo-100/90';
-        break;
-      case 'client_stream':
-        badgeSpan.className += ' bg-teal-950/60 text-teal-400 border border-teal-800/40';
-        badgeText = 'stream';
-        textClass = 'text-teal-100/90';
-        break;
-      // 诊断时间线（镜像/排队/停止）：徽标按子系统身份着色，正文按 severity 着色（见下方覆盖），
-      // 不是像上面几类那样身份色/正文色绑死——这样超时/失败这类事件能在一堆中性事件里视觉跳出来。
-      case 'diag_mirror':
-        badgeSpan.className += ' bg-indigo-950/60 text-indigo-400 border border-indigo-800/40';
-        badgeText = 'mirror';
-        textClass = 'text-gray-300';
-        break;
-      case 'diag_queue':
-        badgeSpan.className += ' bg-orange-950/60 text-orange-400 border border-orange-800/40';
-        badgeText = 'queue';
-        textClass = 'text-gray-300';
-        break;
-      case 'diag_interrupt':
-        badgeSpan.className += ' bg-red-950/60 text-red-400 border border-red-800/40';
-        badgeText = 'interrupt';
-        textClass = 'text-gray-300';
-        break;
-      case 'diag_control':
-        badgeSpan.className += ' bg-slate-800 text-slate-400 border border-slate-600/40';
-        badgeText = 'control';
-        textClass = 'text-gray-300';
-        break;
-      case 'diag_statusline':
-        badgeSpan.className += ' bg-cyan-950/60 text-cyan-400 border border-cyan-800/40';
-        badgeText = 'usage';
-        textClass = 'text-gray-300';
-        break;
-      default:
-        badgeSpan.className += ' bg-gray-800 text-gray-400 border border-gray-700';
-        badgeText = p.type || 'log';
-        textClass = 'text-gray-300';
-    }
-    // 诊断事件正文按 severity 覆盖着色（身份色留在徽标上，见上面 diag_* 分支注释）
-    if (p.severity === 'danger') textClass = 'text-red-300';
-    else if (p.severity === 'warning') textClass = 'text-amber-300';
-    badgeSpan.textContent = badgeText;
-    meta.appendChild(badgeSpan);
-
-    // 模型 ID 独立 chip（紧邻 type 角标）：仅当 entry 带 model 时渲染；中性配色区别于 type 语义色。
-    // 网关映射场景（同 syncModelUI）：候选项确有 resolvedModel 才覆盖显示真实模型名，否则保留原始
-    // p.model 原样显示，不回落 displayName——诊断日志的价值在于忠实记录"那一刻实际记的值"。
-    // title 悬停在覆盖时补显原始档位名，便于对照 setModel 实际请求的是哪个别名。
-    if (p.model) {
-      const gatewayName = resolveGatewayModelName(p.model, modelsList);
-      const displayText = gatewayName || p.model;
-      const modelSpan = document.createElement('span');
-      modelSpan.className = 'px-1 py-0.5 rounded text-[9px] font-bold shrink-0 bg-slate-800 text-slate-300 border border-slate-600/50 max-w-[120px] truncate';
-      modelSpan.textContent = displayText;
-      modelSpan.title = gatewayName ? `${p.model} → ${gatewayName}` : p.model;
-      meta.appendChild(modelSpan);
-    }
-    // 思考强度 / 权限档 chip（那一刻的档位）：只要 entry 带该字段就渲染，默认值（model-default/default）
-    // 也照显——每条数据流记录都完整列出模型 + 强度 + 权限档。字段缺失（如 sys_info 不带这俩）仍跳过、不画空 chip。
-    const metaChip = (val, cls, prefix) => {
-      if (!val) return;
-      const c = document.createElement('span');
-      c.className = `px-1 py-0.5 rounded text-[9px] font-bold shrink-0 ${cls}`;
-      c.textContent = prefix + val;
-      meta.appendChild(c);
-    };
-    metaChip(p.effort, 'bg-indigo-950/60 text-indigo-300 border border-indigo-700/40', '🧠');
-    metaChip(p.permissionMode, 'bg-amber-950/60 text-amber-300 border border-amber-700/40', '🔑');
-
-    row.appendChild(meta);
-
-    const textSpan = document.createElement('span');
-    textSpan.className = `${layout.body} ${textClass}`;
-    textSpan.textContent = (p.text || '').replace(/\\n/g, '\n');
-    row.appendChild(textSpan);
-
-    // 在 append 前判定 stick：append 后 scrollHeight 会涨，贴底用户的 dist 可能瞬时变大并误判为「不在底部」。
-    const stick = shouldStickScrollToBottom({
-      scrollHeight: consoleLogArea.scrollHeight,
-      scrollTop: consoleLogArea.scrollTop,
-      clientHeight: consoleLogArea.clientHeight,
-      force,
-    });
-    consoleLogArea.appendChild(row);
-    if (stick) consoleLogArea.scrollTop = consoleLogArea.scrollHeight;
-  }
+  const consolePanel = createConsoleModal(appContext, {
+    $, btnConsole, clientLogger, closeSheet, consoleClear, consoleClose, consoleFilterButtons,
+    consoleLogArea, consoleModal, copyText, openSheet, reopenGeneralAt, setGestureDismiss, socket,
+    getGeneral: () => general, getModelsList: () => modelsList,
+    getViewingInstanceId: () => viewingInstanceId,
+  });
+  const { appendDiagLog, appendLogEntry, appendSessionLog, loadConsoleLogs } = consolePanel;
 
   let scrollPending = false;
   // 未读胶囊自动确认已读（见上方 messagesEl scroll 监听）要能分辨"这次滚动是不是我自己（scrollBottom）

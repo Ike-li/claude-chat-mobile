@@ -15,7 +15,7 @@
 //
 // 换成假 HOME 之后，就算 getProjectDir 再塌成 ''，删的也只是本文件自己 mkdtemp 出来的空壳目录。
 // 下面那个 rmProjectDir 护栏仍然保留：假 HOME 是"炸不到人"，护栏是"根本不许炸"，两层不冲突。
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, utimesSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, utimesSync, appendFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 
@@ -57,7 +57,7 @@ function writeJSONL(dir, id, entries) {
 test('SDK 快路径: 字段映射 id/title/lastUsedAt，dir 传原始 cwd，不返回 model/entrypoint', async () => {
   const cwd = '/sdk/quick';
   const dir = join(CLAUDE_DIR, getProjectDir(cwd));
-  // sid-1/sid-2 写真实 jsonl（归属本 cwd）；sid-ghost 不写——模拟 SDK dir 匹配混入的祖先目录会话
+  // sid-1/sid-2 写真实 jsonl（归属本 cwd）；sid-ghost 不写——模拟 SDK 混入的别处会话（worktree 展开已关，过滤仍兜底）
   writeJSONL(dir, 'sid-1', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
   writeJSONL(dir, 'sid-2', [{ type: 'user', message: { role: 'user', content: 'yo' } }]);
   let captured;
@@ -75,14 +75,14 @@ test('SDK 快路径: 字段映射 id/title/lastUsedAt，dir 传原始 cwd，不�
     assert.equal(captured.dir, cwd);
     // 小 limit 也按硬顶+1 取候选，便于按消息时间重排（默认 6 条时 resume 刷 mtime 的旧会话不占满窗口）
     assert.equal(captured.limit, MAX_SESSION_LIMIT + 1);
-    // ③ 归属过滤：jsonl 不在本 cwd 项目目录的会话滤掉（SDK dir 匹配含祖先目录——worktree 查询会混入
-    //    主仓会话；与 session:switch 的 sessionFileExists 归属校验同一语义，列表≡可切换）
+    // ③ 归属过滤：jsonl 不在本 cwd 项目目录的会话滤掉（兜底编码撞名等；worktree 展开混入已在源头关掉，见 #451；
+    //    与 session:switch 的 sessionFileExists 归属校验同一语义，列表≡可切换）
     assert.equal(sessions.length, 2);
     assert.deepEqual(sessions.map(s => s.id).sort(), ['sid-1', 'sid-2']);
     const s1 = sessions.find(s => s.id === 'sid-1');
     assert.equal(s1.title, 'CLI /resume 同款标题');
-    // 空 summary 兜底 '(无标题)'
-    assert.equal(sessions.find(s => s.id === 'sid-2').title, '(无标题)');
+    // 空 summary 回落该 jsonl 的 readHeadMeta（与搜索、通知横幅同口径），读不到才是占位（验收 O58）
+    assert.equal(sessions.find(s => s.id === 'sid-2').title, 'yo');
     // deadweight 字段快路径不返回（前端不消费、SDK 也不给）
     assert.equal(s1.model, undefined);
     assert.equal(s1.entrypoint, undefined);
@@ -189,6 +189,22 @@ test('SDK 漏报的会话（无 summary）仍须出现在列表里——本地 s
   }
 });
 
+// 验收 O58：首条消息以 HTML 标签开头的会话，SDK 提不出 summary、整条漏报；补齐时原来一律写占位，
+// 抽屉里是「(无标题)」，搜索却能按原文搜到它——搜索用的就是 readHeadMeta。标题回落同一份。
+test('SDK 漏报但有首条 user 文本的会话：补齐时标题回落 readHeadMeta，不写占位', async () => {
+  const cwd = '/sdk/no-summary-html';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  writeJSONL(dir, 'sid-html', [{ type: 'user', message: { role: 'user', content: '<div>改一下这个页面的布局</div>' } }]);
+  __setSdkListSessionsForTest(async () => []);
+  try {
+    const { sessions } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 10 });
+    assert.equal(sessions.find(s => s.id === 'sid-html')?.title, '<div>改一下这个页面的布局</div>');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
 test('补齐不改变既有归属过滤：SDK 报了但盘上没有的幽灵仍被滤掉', async () => {
   const cwd = '/sdk/no-summary-ghost';
   const dir = join(CLAUDE_DIR, getProjectDir(cwd));
@@ -287,6 +303,58 @@ test('搜索: query 不把 SDK 窗当候选集——窗外旧会话仍能命中'
   }
 });
 
+// #451：SDK listSessions 的 includeWorktrees 缺省 true，会跑 git worktree list 再把每棵 worktree 的会话都返回。
+// 成员目录的并入本模块自己做（listProjectMemberDirs），SDK 再展开一次只会让别棵树的会话占掉候选窗、随后被归属过滤丢掉。
+test('SDK 快路径与搜索 overlay: 两处 listSessions 都关掉 worktree 展开', async () => {
+  const cwd = '/sdk/no-worktree-expand';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  writeJSONL(dir, 'w-1', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
+  const calls = [];
+  __setSdkListSessionsForTest(async (opts) => { calls.push(opts); return [{ sessionId: 'w-1', summary: 'hi', lastModified: Date.now() }]; });
+  try {
+    await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    const listCalls = calls.splice(0);
+    await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5, query: 'hi' });
+    const searchCalls = calls.splice(0);
+    assert.ok(listCalls.length > 0 && searchCalls.length > 0, '列表和搜索都该走到 SDK listSessions，否则下面的断言是空过');
+    for (const [where, got] of [['列表快路径', listCalls], ['搜索 overlay', searchCalls]]) {
+      assert.ok(got.every(o => o.includeWorktrees === false),
+        `${where}没关 includeWorktrees：别棵 worktree 的会话会挤占本目录的候选窗，实际传参 ${JSON.stringify(got)}`);
+    }
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+// PR #333 review：抽屉「加载更多」到 500 时显示的是 SDK summary（/rename 后的标题）。搜索的 overlay 只要 51 条的话，
+// 第 52 名以后改过名的会话在抽屉里看得到新标题、按它却搜不到。overlay 要覆盖到浏览窗的硬顶。
+test('搜索: 排在 51 名以外、/rename 过的会话按抽屉显示的标题也搜得到', async () => {
+  const cwd = '/sdk/search-overlay-beyond-51';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const nowSec = Date.now() / 1000;
+  const ids = [];
+  for (let i = 0; i < 120; i++) {
+    const id = `r${String(i).padStart(3, '0')}`;
+    ids.push(id);
+    writeJSONL(dir, id, [{ type: 'user', timestamp: new Date(Date.now() - i * 1000).toISOString(), message: { role: 'user', content: `prompt ${i}` } }]);
+    utimesSync(join(dir, `${id}.jsonl`), nowSec - i, nowSec - i);
+  }
+  // 照 SDK 的行为：按新→旧最多给 limit 条
+  __setSdkListSessionsForTest(async (opts) => ids.slice(0, opts.limit).map((id, i) => ({
+    sessionId: id,
+    summary: id === 'r100' ? 'Renamed Far Away' : `prompt ${i}`,
+    lastModified: Date.now() - i * 1000,
+  })));
+  try {
+    const found = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 50, query: 'Renamed Far' });
+    assert.deepEqual(found.sessions.map(s => s.id), ['r100'], '抽屉里显示得出的新标题，搜索却搜不到');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
 test('搜索: 按抽屉可见的 SDK summary 能命中，firstUser 也能命中，展示用 summary', async () => {
   const cwd = '/sdk/search-summary-overlay';
   const dir = join(CLAUDE_DIR, getProjectDir(cwd));
@@ -364,6 +432,165 @@ test('peekSessionListTitle: getSessionInfo 无 summary → 回落 jsonl 的 ai-t
     assert.equal(await peekSessionListTitle(cwd, 'sid-fb'), '头窗 AI 标题');
   } finally {
     __setSdkGetSessionInfoForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+// 编码撞名（2026-10-10 review P1）：SDK 按目录列，同一个 project 目录里两个 cwd 的会话会一起回来。
+// 只按「jsonl 在不在本目录」过滤挡不住——两边的 jsonl 都在这个目录里。
+test('SDK 快路径: 编码撞名时只留 transcript 记的是本 cwd 的会话，total 也按自己的算', async () => {
+  const cwd = '/sdk/a-b';
+  const other = '/sdk/a/b';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  assert.equal(getProjectDir(other), getProjectDir(cwd), '夹具前提：两个 cwd 编码后同名');
+  const ts = '2026-10-10T00:00:00Z';
+  writeJSONL(dir, 'mine', [{ type: 'user', cwd, timestamp: ts, message: { role: 'user', content: 'hi' } }]);
+  writeJSONL(dir, 'theirs', [{ type: 'user', cwd: other, timestamp: ts, message: { role: 'user', content: 'yo' } }]);
+  __setSdkListSessionsForTest(async () => [
+    { sessionId: 'mine', summary: '我的', lastModified: 1000 },
+    { sessionId: 'theirs', summary: '别人的', lastModified: 2000 },
+  ]);
+  try {
+    const { sessions, total } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.deepEqual(sessions.map(s => s.id), ['mine'], '别的文件夹的会话混进了列表，点开就在这里 resume');
+    assert.equal(total, 1);
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+// ── 列表缓存：按目录内容判失效，不按年龄（2026-10-31 性能计划 2d）──────────────────────────
+// 抽屉每 12s 对每个工作区重验一次 session:list。缓存原先按 4s 年龄失效，于是每次重验都整目录重扫
+// （实测本机 13 个工作区一轮约 350ms），而这期间绝大多数目录一个字节都没变。反过来，4s 内又挡住了
+// 刚落盘的新消息、新会话。下面四条：没变就不重扫；jsonl 名单、大小、mtime 一变，或只有旁路标题变，
+// 下一次列表就是新的。后三条用真 SDK listSessions（不 stub），让「SDK 读了哪些文件」由 SDK 自己作答。
+
+// 真 CLI transcript 行的最小形态：真 SDK 要 uuid / sessionId / 主链字段才认它是一条会话
+const cliLine = (sessionId, type, text, timestamp) => ({
+  type, uuid: `${sessionId}-${type}-${timestamp}`, parentUuid: null, isSidechain: false, sessionId, timestamp,
+  message: type === 'user' ? { role: 'user', content: text } : { role: 'assistant', content: [{ type: 'text', text }] },
+});
+
+test('列表缓存: 目录没变时，过了 12s 的重验也不重扫', async (t) => {
+  const cwd = '/cache/idle';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  writeJSONL(dir, 'idle-1', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
+  let scans = 0;
+  __setSdkListSessionsForTest(async () => { scans++; return [{ sessionId: 'idle-1', summary: '闲置', lastModified: 1000 }]; });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  try {
+    const first = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    t.mock.timers.tick(13_000);
+    const again = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(scans, 1, '目录一个字节没变，12s 后的重验又整目录重扫了一遍');
+    assert.deepEqual(again, first);
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+test('列表缓存: 会话里刚写进一条消息，下一次列表就是新的活动时间', async () => {
+  const cwd = '/cache/append';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const sid = '0a0a0a0a-1111-4222-8333-444444444444';
+  const t0 = '2026-10-31T01:00:00.000Z';
+  const t1 = '2026-10-31T01:05:00.000Z';
+  writeJSONL(dir, sid, [cliLine(sid, 'user', '首条', t0)]);
+  try {
+    const before = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(before.sessions[0]?.lastUsedAt, Date.parse(t0), '夹具前提：真 SDK 列出了这条会话');
+    appendFileSync(join(dir, `${sid}.jsonl`), `${JSON.stringify(cliLine(sid, 'assistant', '回复', t1))}\n`);
+    const after = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(after.sessions[0]?.lastUsedAt, Date.parse(t1), '文件已经追加了新消息，列表还是缓存里的旧活动时间');
+  } finally {
+    rmProjectDir(dir);
+  }
+});
+
+test('列表缓存: 终端里新开的会话，下一次列表就出现', async () => {
+  const cwd = '/cache/new-session';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const a = '0b0b0b0b-1111-4222-8333-444444444444';
+  const b = '0c0c0c0c-1111-4222-8333-444444444444';
+  writeJSONL(dir, a, [cliLine(a, 'user', '旧会话', '2026-10-31T01:00:00.000Z')]);
+  try {
+    const before = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.deepEqual(before.sessions.map(s => s.id), [a]);
+    writeJSONL(dir, b, [cliLine(b, 'user', '新会话', '2026-10-31T01:05:00.000Z')]);
+    const after = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.deepEqual(after.sessions.map(s => s.id), [b, a], '盘上已经有了新会话，列表还是缓存里的旧名单');
+  } finally {
+    rmProjectDir(dir);
+  }
+});
+
+// 桌面端改名只写 `<项目目录>/<会话 id>/custom-title.json`，jsonl 一个字节不动；SDK 在 jsonl 尾部没有
+// custom-title 时读它当标题（本机有 91 个这样的旁路文件）。只看 jsonl 的缓存会把旧标题一直留到别的会话写盘。
+test('列表缓存: 桌面端只改了旁路标题，下一次列表就是新标题', async () => {
+  const cwd = '/cache/sidecar-title';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const sid = '0d0d0d0d-1111-4222-8333-444444444444';
+  writeJSONL(dir, sid, [cliLine(sid, 'user', '首条提问', '2026-10-31T01:00:00.000Z')]);
+  try {
+    const before = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(before.sessions[0]?.title, '首条提问', '夹具前提：真 SDK 列出了这条会话');
+    mkdirSync(join(dir, sid), { recursive: true });
+    writeFileSync(join(dir, sid, 'custom-title.json'), JSON.stringify({ customTitle: '桌面端改的名' }));
+    const after = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(after.sessions[0]?.title, '桌面端改的名', '旁路标题已经改了，列表还是缓存里的旧标题');
+  } finally {
+    rmProjectDir(dir);
+  }
+});
+
+// SDK 抛错时回落的是降级结果：自造扫盘不读旁路标题，搜索也没有 SDK summary 当匹配键。这种结果不能
+// 按目录指纹一直存着——SDK 恢复了而目录没变，就会一直给降级结果（PR #490 Codex review）。
+test('列表缓存: SDK 失败一次回落扫盘，过几秒 SDK 恢复了，目录没变也拿到 SDK 的结果', async (t) => {
+  const cwd = '/cache/degraded-browse';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const sid = '0e0e0e0e-1111-4222-8333-444444444444';
+  writeJSONL(dir, sid, [cliLine(sid, 'user', '首条提问', '2026-10-31T01:00:00.000Z')]);
+  let sdkDown = true;
+  __setSdkListSessionsForTest(async () => {
+    if (sdkDown) throw new Error('SDK boom');
+    return [{ sessionId: sid, summary: '桌面端改的名', lastModified: 1000 }];
+  });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  try {
+    const degraded = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(degraded.sessions[0]?.title, '首条提问', '夹具前提：SDK 抛错时走了回落扫盘');
+    sdkDown = false;
+    t.mock.timers.tick(5_000);
+    const recovered = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.equal(recovered.sessions[0]?.title, '桌面端改的名', 'SDK 已经恢复，列表还是 SDK 失败那次的降级结果');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+test('列表缓存: 搜索时 SDK 失败一次，过几秒 SDK 恢复了，同一个词能按 SDK 标题搜到', async (t) => {
+  const cwd = '/cache/degraded-search';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const sid = '0f0f0f0f-1111-4222-8333-444444444444';
+  writeJSONL(dir, sid, [cliLine(sid, 'user', '首条提问', '2026-10-31T01:00:00.000Z')]);
+  let sdkDown = true;
+  __setSdkListSessionsForTest(async () => {
+    if (sdkDown) throw new Error('SDK boom');
+    return [{ sessionId: sid, summary: '桌面端改的名', lastModified: 1000 }];
+  });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  try {
+    const degraded = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5, query: '桌面端' });
+    assert.deepEqual(degraded.sessions.map(s => s.id), [], '夹具前提：没有 SDK summary 时这个词搜不到');
+    sdkDown = false;
+    t.mock.timers.tick(5_000);
+    const recovered = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5, query: '桌面端' });
+    assert.deepEqual(recovered.sessions.map(s => s.id), [sid], 'SDK 已经恢复，同一个词还是 SDK 失败那次的空结果');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
     rmProjectDir(dir);
   }
 });

@@ -1,11 +1,14 @@
 // tests/infra/newuser/prepare.mjs —— 生成「新用户内网电脑」容器要用的运行产物（宿主机侧，仓库根执行）。
 //
-//   node tests/infra/newuser/prepare.mjs <运行目录> <宿主机 LAN IP> [git ref=HEAD]
+//   node tests/infra/newuser/prepare.mjs <运行目录> <宿主机 LAN IP> [git ref=HEAD] [--settings <路径>]
+//
+// --settings 可写在任意位置，换一份 claude CLI 配置来源（验收套件用它喂自己的那份）；缺省是仓库根的
+// .claude/settings.docker.json。位置参数的含义不受影响。
 //
 // 产物全部落在 <运行目录>（放仓库外，含中转凭据副本）：
 //   claude-chat-mobile.tar.gz  与 GitHub 源码归档同一套裁剪（`git archive` 读树里的 export-ignore，package.json 原样），
 //                              只是打的是当前分支/工作树而不是 master——要验的就是还没发版的改动
-//   settings.json              .claude/settings.docker.json 的副本，ANTHROPIC_BASE_URL 的 127.0.0.1 改成 host.docker.internal
+//   settings.json              配置来源的副本，ANTHROPIC_BASE_URL 的 127.0.0.1 改成 host.docker.internal
 //   cf/{jwks.json,cf.env,edge.conf}  假 Cloudflare 边缘：一次性 RS256 密钥、JWKS、7 天有效的 Access JWT
 //   compose.env                docker compose --env-file 用
 import { execFileSync } from 'node:child_process';
@@ -14,12 +17,17 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { SignJWT, calculateJwkThumbprint, exportJWK, generateKeyPair } from 'jose';
 
-const [runDirArg, hostIp, refArg = 'HEAD'] = process.argv.slice(2);
-if (!runDirArg || !hostIp) {
-  console.error('用法: node tests/infra/newuser/prepare.mjs <运行目录> <宿主机 LAN IP> [git ref | worktree]');
+// 先把 --settings 和它的值摘掉，剩下的才是位置参数。
+const argv = process.argv.slice(2);
+const settingsAt = argv.indexOf('--settings');
+const [, settingsArg] = settingsAt === -1 ? [] : argv.splice(settingsAt, 2);
+const [runDirArg, hostIp, refArg = 'HEAD'] = argv;
+if (!runDirArg || !hostIp || (settingsAt !== -1 && !settingsArg)) {
+  console.error('用法: node tests/infra/newuser/prepare.mjs <运行目录> <宿主机 LAN IP> [git ref | worktree] [--settings <路径>]');
   process.exit(2);
 }
 const REPO = resolve(import.meta.dirname, '..', '..', '..');
+const settingsSrc = settingsArg ? resolve(settingsArg) : join(REPO, '.claude/settings.docker.json');
 // `worktree` = 打当前工作树（含未提交修改）：git archive 只认树对象，`git stash create` 把工作树做成一个
 // 悬空提交对象、不动 stash 列表；没有改动时返回空，退回 HEAD。export-ignore 从该树自己的 .gitattributes 读。
 const ref = refArg === 'worktree'
@@ -40,7 +48,7 @@ const tarball = join(runDir, 'claude-chat-mobile.tar.gz');
 execFileSync('git', ['archive', '--format=tar.gz', '--prefix=claude-chat-mobile-master/', '-o', tarball, ref], { cwd: REPO, stdio: 'inherit' });
 
 // 2. claude CLI 凭据副本：容器里 127.0.0.1 是它自己，中转在宿主机
-const settings = JSON.parse(readFileSync(join(REPO, '.claude/settings.docker.json'), 'utf8'));
+const settings = JSON.parse(readFileSync(settingsSrc, 'utf8'));
 const base = settings.env?.ANTHROPIC_BASE_URL || '';
 settings.env.ANTHROPIC_BASE_URL = base.replace(/\/\/(127\.0\.0\.1|localhost)(?=[:/]|$)/, '//host.docker.internal');
 const settingsOut = join(runDir, 'settings.json');
@@ -77,6 +85,7 @@ writeFileSync(join(runDir, 'compose.env'), `NEWUSER_RUN_DIR=${runDir}\nNEWUSER_H
 
 console.log(`运行目录: ${runDir}
 tarball:  ${tarball}（${ref}，v${version}）
+settings: ${settingsSrc}
 ANTHROPIC_BASE_URL → ${settings.env.ANTHROPIC_BASE_URL}
 假边缘:   Host=${CF_ACCESS_HOSTNAME} issuer=${issuer} kid=${jwk.kid.slice(0, 12)}…
 

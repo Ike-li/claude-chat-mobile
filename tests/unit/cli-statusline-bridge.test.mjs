@@ -31,6 +31,7 @@ import {
   readCliStatusSnapshot,
   readStatuslineInstallState,
   selectStatusReplay,
+  setupFailureCode,
   selectStatusOwner,
   selectStatusSource,
   snapshotFilePath,
@@ -560,8 +561,51 @@ test('安装态：command 没变但 refreshInterval 被改过 → 同样是 drif
   assert.equal(readStatuslineInstallState({ home }).state, 'drifted');
 });
 
+// 验收 AC-16-12 同类：读不出时说清是哪个文件。验收 O62：用户原本没配 statusLine 时仍给「开启」，点了安装脚本才报
+// 「settings.statusLine must be configured before install」——configured 让面板提前知道。
+test('安装态：读不出时 unreadable 说清是哪个文件；configured 说用户自己配没配 statusLine', () => {
+  const home = statuslineHome();
+  assert.equal(readStatuslineInstallState({ home }).configured, false, 'settings.json 都没有：没配');
+  writeFileSync(settingsPathOf(home), JSON.stringify({ env: {} }));
+  const bare = readStatuslineInstallState({ home });
+  assert.equal(bare.state, 'not-installed');
+  assert.equal(bare.configured, false, '没有 statusLine：装不了，面板不该给「开启」');
+  assert.equal(bare.unreadable, null);
+  writeFileSync(settingsPathOf(home), JSON.stringify({ statusLine: { command: 'mine' } }));
+  assert.equal(readStatuslineInstallState({ home }).configured, true);
+  mkdirSync(dirname(manifestPathOf(home)), { recursive: true });
+  writeFileSync(manifestPathOf(home), '{ 坏的');
+  const badManifest = readStatuslineInstallState({ home });
+  assert.equal(badManifest.state, 'unknown');
+  assert.equal(badManifest.unreadable, 'manifest');
+  writeFileSync(settingsPathOf(home), '{ 坏的');
+  assert.equal(readStatuslineInstallState({ home }).unreadable, 'settings');
+});
+
+// #241 review：command 是空串或只有空白时，安装脚本照样拒（must be a non-empty string），面板却当成配过、给「开启」。
+// configured 要与安装脚本的判据一致。
+test('安装态：statusLine.command 是空串或只有空白 → configured 为 false（安装脚本同样会拒）', () => {
+  const home = statuslineHome();
+  for (const command of ['', '   ', '\t\n']) {
+    writeFileSync(settingsPathOf(home), JSON.stringify({ statusLine: { command } }));
+    assert.equal(readStatuslineInstallState({ home }).configured, false, JSON.stringify(command));
+  }
+});
+
 test('安装态：settings.json 是坏 JSON → unknown（读不出来就说读不出来，不谎报没装）', () => {
   const home = statuslineHome();
   writeFileSync(settingsPathOf(home), '{ 这不是 JSON');
   assert.equal(readStatuslineInstallState({ home }).state, 'unknown');
+});
+
+// 验收 O125：安装器拒装时在 stdout 写一行 {"error":"<原因码>"}，server 透传给面板按码出文案。
+// 成功时 stdout 也是一行 JSON（安装结果），那不是失败原因，不能被当成码。
+test('setupFailureCode：只认安装器失败时的 {"error":…}，别的 JSON / 杂行一律 null', () => {
+  assert.equal(setupFailureCode('{"error":"statusline_not_configured"}\n'), 'statusline_not_configured');
+  assert.equal(setupFailureCode('some log line\n{"error":"statusline_not_configured"}\n'), 'statusline_not_configured');
+  assert.equal(setupFailureCode('{"state":"installed","idempotent":true}\n'), null);
+  assert.equal(setupFailureCode('not json\n'), null);
+  assert.equal(setupFailureCode(''), null);
+  assert.equal(setupFailureCode(undefined), null);
+  assert.equal(setupFailureCode('{"error":42}\n'), null, '原因码只收字符串');
 });

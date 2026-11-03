@@ -7,7 +7,8 @@
 // 同源的还有 -rendering（ANSI/环形缓冲）、-session（会话态聚合）、-ui-state（UI 判定）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';
+import { setLang } from '../../app/public/js/i18n.js';
+import { esc, formatToolSummary, localizeServerThinkingText, toolOutputHighlightClass, toolInputHighlightClass, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';
 
 test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
@@ -18,6 +19,40 @@ test('esc: 转义 HTML 元字符', () => {
 
 // 工具卡片摘要可读化：agent 侧 stringify 是紧凑单行，手机展开一坨难读。
 // formatToolSummary 只负责「能 parse 的 JSON → 缩进 pretty；非 JSON/空 → 原样」，不碰 DOM/hljs。
+// 验收 O131（R9 AC-06-06）：截断尾巴是服务端写进摘要的中文原文（shared/tool-summary.js），英文界面照样显示「…（已截断）」，
+// 同一张卡的按钮却已是「Show full text」。显示时按界面语言换掉；嗅探仍认原文（isToolSummaryTruncated，#288）。
+test('formatToolSummary: 英文界面把服务端的截断尾巴换成 …(truncated)，中文界面原样', () => {
+  try {
+    setLang('en');
+    assert.equal(formatToolSummary('row-00\nrow-01 …（已截断）'), 'row-00\nrow-01 …(truncated)');
+    assert.equal(formatToolSummary('{"a":"xx …（已截断）'), '{"a":"xx …(truncated)', '截断残缺的 JSON 走原样分支，尾巴也要换');
+    assert.equal(formatToolSummary('正文里提到 …（已截断） 但没在末尾'), '正文里提到 …（已截断） 但没在末尾', '只认末尾那一处');
+    setLang('zh');
+    assert.equal(formatToolSummary('row-01 …（已截断）'), 'row-01 …（已截断）');
+  } finally { setLang('zh'); }
+});
+
+// #341 review：没截断的工具内容也可能恰好以这几个字结尾（命令打印、搜索这句话），「展开全文」拿回的全文也走 formatToolSummary。
+// 有截断元数据时以它为准：明说没截断就一个字不改；没有元数据（历史、输入摘要）才按尾巴认，与 isToolSummaryTruncated 同口径。
+test('formatToolSummary: 明说没截断（truncated: false）时，以同样几个字结尾的原文不被翻译', () => {
+  try {
+    setLang('en');
+    assert.equal(formatToolSummary('grep 命中：row …（已截断）', { truncated: false }), 'grep 命中：row …（已截断）');
+    assert.equal(formatToolSummary('row-01 …（已截断）', { truncated: true }), 'row-01 …(truncated)');
+  } finally { setLang('zh'); }
+});
+
+test('localizeServerThinkingText: 历史思考块里服务端写的截断尾巴与脱敏占位，英文界面下换成英文（验收 O131 同类）', () => {
+  try {
+    setLang('en');
+    assert.equal(localizeServerThinkingText('想了很久 …（已截断）'), '想了很久 …(truncated)');
+    assert.equal(localizeServerThinkingText('（思考内容已脱敏）'), '(thinking redacted)');
+    assert.equal(localizeServerThinkingText('普通思考'), '普通思考');
+    setLang('zh');
+    assert.equal(localizeServerThinkingText('（思考内容已脱敏）'), '（思考内容已脱敏）');
+  } finally { setLang('zh'); }
+});
+
 test('formatToolSummary: 紧凑 JSON 对象 → 2 空格缩进', () => {
   const raw = '{"file_path":"/a.js","old_string":"x"}';
   assert.equal(formatToolSummary(raw), '{\n  "file_path": "/a.js",\n  "old_string": "x"\n}');
@@ -540,4 +575,25 @@ test('pickPasteImageFiles: items 里混进 null/空对象时跳过而不是抛�
       { kind: 'file', type: 'image/png', getAsFile: () => img },
     ],
   }), [img]);
+});
+
+// 验收 O55 附带：工具输出原来一律交给 hljs 自动识别语言，纯文本日志常被认成 css / vbnet 上色，读起来像代码。
+// 只有能解析的 JSON（formatToolSummary 会把它展开）按 json 高亮，其余一律不高亮（hljs 认 nohighlight 跳过）。
+test('toolOutputHighlightClass：JSON 才高亮，纯文本与残缺 JSON 不高亮', () => {
+  assert.equal(toolOutputHighlightClass('{"ok":true}'), 'language-json');
+  assert.equal(toolOutputHighlightClass('  [1, 2]\n'), 'language-json');
+  assert.equal(toolOutputHighlightClass('line 1 of the build log\nDim x As Integer'), 'nohighlight');
+  assert.equal(toolOutputHighlightClass('body { color: red }'), 'nohighlight');
+  assert.equal(toolOutputHighlightClass('{"cut": "trunc …（已截断）'), 'nohighlight');
+  assert.equal(toolOutputHighlightClass(''), 'nohighlight');
+});
+
+// 输入块原来也一律交给 hljs 自动识别：每块把 36 种语法全试一遍，一次打开几百块就是秒级长任务，还常认成 swift / css。
+// 输入摘要是服务端 stringify 的 JSON，截断了也还是 JSON（词法高亮不在乎残缺），所以与输出不同：截断的照样按 json
+test('toolInputHighlightClass：JSON 形态（含截断的）按 json 高亮，其余不高亮', () => {
+  assert.equal(toolInputHighlightClass('{\n  "command": "npm test"\n}'), 'language-json');
+  assert.equal(toolInputHighlightClass('[{"q":1}]'), 'language-json');
+  assert.equal(toolInputHighlightClass('{"file_path":"a.js","content":"line1\\nli …（已截断）'), 'language-json');
+  assert.equal(toolInputHighlightClass('npm test'), 'nohighlight');
+  assert.equal(toolInputHighlightClass(''), 'nohighlight');
 });

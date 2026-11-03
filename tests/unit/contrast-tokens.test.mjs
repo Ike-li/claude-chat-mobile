@@ -37,9 +37,20 @@ function tokenMap(block) {
 }
 
 const lightRoot = css.match(/:root\s*\{([^}]+)\}/)?.[1] || '';
-const darkRoot = css.match(/prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]+)\}/)?.[1] || '';
+// 深色 token 真相源是 :root[data-theme="dark"]（手动深色与系统深色共用同一套变量块）
+const darkRoot = css.match(/:root\[data-theme=["']dark["']\]\s*\{([^}]+)\}/)?.[1]
+  || css.match(/prefers-color-scheme:\s*dark\)[^{]*\{\s*:root(?::not\([^)]+\))?\s*\{([^}]+)\}/)?.[1]
+  || '';
 const light = tokenMap(lightRoot);
 const dark = { ...light, ...tokenMap(darkRoot) }; // dark 覆盖同名
+
+// 深色 token 写了两份（手动 data-theme=dark / 跟随系统的媒体查询），上面的对比度断言只读第一份：
+// 两份一旦漂移，系统深色那一份就再没人量。这里钉住两份逐项相同。
+test('#385 手动深色与系统深色两份 token 逐项一致', () => {
+  const systemDark = css.match(/prefers-color-scheme:\s*dark\)\s*\{\s*:root:not\(\[data-theme=["']light["']\]\)\s*\{([^}]+)\}/)?.[1] || '';
+  assert.ok(systemDark, '找不到跟随系统的深色 token 块');
+  assert.deepEqual(tokenMap(systemDark), tokenMap(darkRoot), '系统深色与手动深色 token 不一致');
+});
 
 test('UI-001 token 表可从 app.css 解析出浅色/深色关键色', () => {
   for (const k of ['surface', 'accent', 'cta', 'warning', 'danger', 'info']) {
@@ -73,3 +84,68 @@ test('UI-001 深色：danger 文字/surface ≥4.5', () => {
 test('UI-001 深色：info 文字/surface ≥4.5', () => {
   assert.ok(contrastRatio(dark.info, dark.surface) >= 4.5, contrastRatio(dark.info, dark.surface));
 });
+
+// 验收 O79（AC-21-03）：次要文字（text-ink-faint 的时间戳、副标题、小按钮）深色下只有 3.5–3.9:1。它是小字（10–11px），
+// AA 要求 4.5。ink-faint 会落在 surface / canvas / surface-sunk / 用户气泡四种底上，四种都要过。
+for (const [name, theme] of [['浅色', light], ['深色', dark]]) {
+  test(`O79 ${name}：ink-faint 小字在 surface / canvas / surface-sunk / user-bubble 上都 ≥4.5`, () => {
+    for (const bg of ['surface', 'canvas', 'surface-sunk', 'user-bubble']) {
+      const ratio = contrastRatio(theme['ink-faint'], theme[bg]);
+      assert.ok(ratio >= 4.5, `ink-faint / ${bg} = ${ratio.toFixed(2)}`);
+    }
+  });
+}
+
+// #244 review：连接横幅的小字（断线多久那一行，10px）落在 color-mix(<tone> N%, surface) 的横幅底上，不是 surface。
+// 深色 warn 底上 ink-faint 只有约 4.18。从 app.css 里读出小字用的 token 与三种横幅底的配比，按 sRGB 线性混合算底色。
+function mixHex(a, pct, b) {
+  const ch = (h, i) => parseInt(h.slice(1 + i * 2, 3 + i * 2), 16);
+  return '#' + [0, 1, 2].map(i => Math.round(ch(a, i) * pct + ch(b, i) * (1 - pct)).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+const detailToken = css.match(/\.conn-banner__detail\s*\{[^}]*?color:\s*var\(--([a-z0-9-]+)\)/)?.[1];
+const bannerTones = [...css.matchAll(/\.conn-banner--([a-z]+)\s*\{[^}]*?background:\s*color-mix\(in srgb,\s*var\(--([a-z0-9-]+)\)\s*(\d+)%,\s*var\(--surface\)\)/g)]
+  .map(m => ({ tone: m[1], token: m[2], pct: Number(m[3]) / 100 }));
+for (const [name, theme] of [['浅色', light], ['深色', dark]]) {
+  test(`#244 ${name}：连接横幅的小字在 info / warn / success 三种横幅底上都 ≥4.5`, () => {
+    assert.ok(detailToken && theme[detailToken], `读不出 .conn-banner__detail 的颜色 token：${detailToken}`);
+    assert.equal(bannerTones.length, 3, JSON.stringify(bannerTones));
+    for (const { tone, token, pct } of bannerTones) {
+      const bg = mixHex(theme[token], pct, theme.surface);
+      const ratio = contrastRatio(theme[detailToken], bg);
+      assert.ok(ratio >= 4.5, `${tone}（${bg}）上 ${detailToken} = ${ratio.toFixed(2)}`);
+    }
+  });
+}
+
+// 验收 O102（AC-21-03）：语义色作为【文字】落在五种底上——surface / canvas / surface-sunk（未读 chip、代码块）/
+// user-bubble（用户消息「展开」）/ accent-wash（语言选中项「中文 ✓」）。浅色 accent 在 wash 上只有 4.15、
+// sunk 上 4.41；深色 danger 在 bubble 上 4.31；success 两套主题都不到 4.5（深色此前直接沿用浅色值）。
+for (const [name, theme] of [['浅色', light], ['深色', dark]]) {
+  test(`O102 ${name}：accent / danger / warning / info / success 文字在五种底上都 ≥4.5`, () => {
+    const fails = [];
+    for (const fg of ['accent', 'danger', 'warning', 'info', 'success']) {
+      for (const bg of ['surface', 'canvas', 'surface-sunk', 'user-bubble', 'accent-wash']) {
+        const ratio = contrastRatio(theme[fg], theme[bg]);
+        if (ratio < 4.5) fails.push(`${fg} / ${bg} = ${ratio.toFixed(2)}`);
+      }
+    }
+    assert.deepEqual(fails, []);
+  });
+
+  // 横幅主文案（「连接已断开…」与 ⚙）用的就是横幅自己的语气色，落在 color-mix 出来的淡底上：浅色 warn 只有 4.25。
+  test(`O102 ${name}：warn / success 横幅的主文案在自己的淡底上 ≥4.5`, () => {
+    for (const { tone, token, pct } of bannerTones.filter(b => b.tone !== 'info')) {
+      const bg = mixHex(theme[token], pct, theme.surface);
+      const ratio = contrastRatio(theme[token], bg);
+      assert.ok(ratio >= 4.5, `${tone}（${bg}）上 ${token} = ${ratio.toFixed(2)}`);
+    }
+  });
+
+  // 确认 sheet 的危险档按钮（彻底删除等）是白字压实底红：深色 danger 为了当文字够亮而提亮，当底色白字只剩 3.5。
+  // 实底另用 danger-solid（同 cta 的做法：深色实底仍用深一档的红）。
+  test(`O102 ${name}：danger-solid 实底上的白字 ≥4.5`, () => {
+    assert.ok(theme['danger-solid'], '缺 --danger-solid');
+    const ratio = contrastRatio('#FFFFFF', theme['danger-solid']);
+    assert.ok(ratio >= 4.5, `white / danger-solid = ${ratio.toFixed(2)}`);
+  });
+}

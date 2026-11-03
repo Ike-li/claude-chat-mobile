@@ -3,7 +3,6 @@
 // 共享的东西一律经 context 注入（样板见 app/event-dispatch.js），不许再落 app.js 顶层作用域。
 // 覆盖：context 的共享 DOM/state/依赖 · client-log 环形缓冲 · alerts 持久化偏好 · attachments 待发队列
 //       · createReplayBuffer（OOB 旁路 + 超时决策）· createUnreadTracker 手动未读生命周期
-//       · attachLongPress（位移/抬手取消，并吞掉紧随的 click）
 //       · createDrawerUnreadJump（未读行游标循环、折叠态先展开再补跳、子树重建后游标仍有效）
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -21,7 +20,6 @@ import { createSettingsController } from '../../app/public/js/app/settings.js';
 import { createSessionWorkspaceState } from '../../app/public/js/app/session-workspaces.js';
 import { createInteractionQueueState } from '../../app/public/js/app/approval-questions.js';
 import { createUnreadTracker } from '../../app/public/js/app/unread-tracker.js';
-import { attachLongPress } from '../../app/public/js/app/long-press.js';
 import { createDrawerUnreadJump } from '../../app/public/js/app/drawer-unread-jump.js';
 
 test('app context owns shared DOM, state, dependencies and the active socket', () => {
@@ -79,6 +77,40 @@ test('the HTML shell loads app.css and contains no inline style block', async ()
   assert.doesNotMatch(html, /<style(?:\s|>)/i);
   assert.match(css, /:root\s*\{/);
   assert.match(css, /\.msg-body\s*\{/);
+});
+
+test('the HTML shell links the prebuilt tw.css after app.css instead of compiling Tailwind in the browser', async () => {
+  const html = await readFile(new URL('../../app/public/index.html', import.meta.url), 'utf8');
+
+  const appCss = html.indexOf('<link rel="stylesheet" href="/css/app.css">');
+  const twCss = html.indexOf('<link rel="stylesheet" href="/css/tw.css">');
+  assert.ok(twCss !== -1, '外壳没链 tw.css：页面上所有 Tailwind 工具类都没有样式');
+  assert.ok(twCss > appCss, 'tw.css 排到了 app.css 前面：同特异性的规则改由 app.css 胜出，层叠顺序与此前 Play CDN 追加在 head 末尾时相反');
+  assert.doesNotMatch(html, /\/vendor\/tailwind\.js|\/js\/tw-config\.js/,
+    '外壳又在加载 Tailwind 运行时：启动时同步执行 400KB 脚本，之后每批 DOM 变化都全量扫一遍 class');
+});
+
+test('the HTML shell defers every head script except theme-boot and loads the minified socket.io client', async () => {
+  const html = await readFile(new URL('../../app/public/index.html', import.meta.url), 'utf8');
+  // 注释里的 <script> 只是说明文字，先剔掉。用 indexOf 切到没有为止，不用正则替换：替换一遍可能拼出新的 <!--
+  let head = html.slice(0, html.indexOf('</head>'));
+  for (let start = head.indexOf('<!--'); start !== -1; start = head.indexOf('<!--')) {
+    const end = head.indexOf('-->', start + 4);
+    head = head.slice(0, start) + (end === -1 ? '' : head.slice(end + 3));
+  }
+  const scripts = [...head.matchAll(/<script\b([^>]*)>/gi)].map(([, attrs]) => ({
+    src: /\ssrc="([^"]+)"/.exec(attrs)?.[1],
+    defer: /\sdefer\b/.test(attrs),
+    async: /\sasync\b/.test(attrs),
+  }));
+
+  const boot = scripts.find(s => s.src === '/js/theme-boot.js');
+  assert.ok(boot && !boot.defer && !boot.async, 'theme-boot.js 不再同步执行：首帧先按默认主题画出来再切，手动浅/深色下会闪');
+  // defer 才按文档顺序、排在 app.js（module）之前执行；async 不保证顺序，app.js 可能拿不到全局
+  assert.deepEqual(scripts.filter(s => s !== boot && (!s.defer || s.async)).map(s => s.src), [],
+    'head 里还有阻塞解析或不保证顺序的脚本：首帧要等它们下载、执行完');
+  assert.ok(scripts.some(s => s.src === '/socket.io/socket.io.min.js'), '外壳没加载压缩版 socket.io 客户端（153KB → 47KB）');
+  assert.doesNotMatch(html, /\/socket\.io\/socket\.io\.js/, '外壳还在加载未压缩的 socket.io.js');
 });
 
 test('alert controller owns persisted preferences while tap haptics remain unconditional', () => {
@@ -387,6 +419,13 @@ test('RTT monitor renders latency through app context and clears stale values', 
   assert.match(rtt.className, /text-warning/);
   assert.doesNotMatch(rtt.className, /\bhidden\b/);
 
+  // #379：同签名不重写 DOM（格式化标签相同 → 不碰 textContent）
+  const before = rtt.textContent;
+  rtt.textContent = 'STALE';
+  assert.equal(monitor.render(500), '500ms');
+  assert.equal(rtt.textContent, 'STALE', '同 label/tone/title 须跳过写入');
+  rtt.textContent = before;
+
   monitor.clear();
   assert.equal(rtt.textContent, '');
   assert.match(rtt.className, /hidden/);
@@ -451,6 +490,20 @@ test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => 
     assert.equal(buf.offer({ type: 'task_notification', instanceId: 'inst-1', epoch: 'e1', seq: 2 }), false);
     assert.equal(buf.bufferedCount('inst-1'), 1);
     assert.deepEqual(dispatched, []);
+  });
+
+  // 「会话已中断」面要在缓冲被 discard 之前读出排着队的崩溃原因（#329 review P2）
+  test('queued：只给当前缓冲实例的排队事件，且是副本', (t) => {
+    const { buf } = makeBuffer(t, { timeoutMs: 60_000 });
+    buf.begin('inst-1');
+    const err = { type: 'error', instanceId: 'inst-1', epoch: 'e1', seq: 3, payload: { processExited: true, message: 'SIGKILL' } };
+    buf.offer(err);
+    assert.deepEqual(buf.queued('inst-1'), [err]);
+    assert.deepEqual(buf.queued('inst-2'), []);
+    buf.queued('inst-1').length = 0;
+    assert.equal(buf.bufferedCount('inst-1'), 1);
+    buf.discard();
+    assert.deepEqual(buf.queued('inst-1'), []);
   });
 
   test("resolve('reload')：只推进基线、不派发缓冲事件", (t) => {
@@ -520,6 +573,7 @@ test('settings controller synchronizes alert preferences when opening the sheet'
       add: (...names) => names.forEach(name => values.add(name)),
       remove: (...names) => names.forEach(name => values.delete(name)),
       has: name => values.has(name),
+      contains: name => values.has(name),
     };
   };
   const sheetClasses = classes(['translate-y-full']);
@@ -532,7 +586,10 @@ test('settings controller synchronizes alert preferences when opening the sheet'
   const sheetBody = { scrollTop: 42 };
   const context = createAppContext({
     dom: {
-      settingsSheet: { classList: sheetClasses, scrollTop: 0 },
+      settingsSheet: {
+        classList: sheetClasses, scrollTop: 0, inert: false, dataset: {},
+        contains: () => false, hasAttribute: () => true, setAttribute: () => {}, focus: () => {},
+      },
       settingsSheetBody: sheetBody,
       settingsScrim: { classList: scrimClasses },
       prefAlertSound: sound,
@@ -541,8 +598,9 @@ test('settings controller synchronizes alert preferences when opening the sheet'
     },
   });
   const fakeDoc = {
-    documentElement: { classList: htmlClasses },
+    documentElement: { classList: htmlClasses, dataset: {} },
     body: { classList: bodyClasses },
+    activeElement: null,
   };
   const controller = createSettingsController(context, {
     alerts: { preferences: () => ({ sound: false, vibrate: true, foregroundComplete: false }), ensureAudio: () => {} },
@@ -561,11 +619,113 @@ test('settings controller synchronizes alert preferences when opening the sheet'
   assert.equal(htmlClasses.has('ccm-sheet-open'), true);
   assert.equal(sheetBody.scrollTop, 0);
 
+  assert.equal(context.dom.settingsSheet.inert, false, '打开后面板里的控件要能被 Tab 到');
+
   controller.close();
   assert.equal(sheetClasses.has('translate-y-full'), true);
   assert.equal(scrimClasses.has('hidden'), true);
+  assert.equal(context.dom.settingsSheet.inert, true, '收起的面板只是移出屏幕，不 inert 就还能被 Tab 到（验收 O77）');
   assert.equal(bodyClasses.has('ccm-sheet-open'), false);
   assert.equal(htmlClasses.has('ccm-sheet-open'), false);
+});
+
+test('settings scroll-lock is idempotent on repeated open/close', () => {
+  // #425：深链 / 再点入口会二次 open；若每次都 acquire，关一次就留下 ccm-sheet-open。
+  const classes = initial => {
+    const values = new Set(initial);
+    return {
+      add: (...names) => names.forEach(name => values.add(name)),
+      remove: (...names) => names.forEach(name => values.delete(name)),
+      has: name => values.has(name),
+      contains: name => values.has(name),
+    };
+  };
+  const sheetClasses = classes(['translate-y-full']);
+  const scrimClasses = classes(['hidden']);
+  const bodyClasses = classes([]);
+  const htmlClasses = classes([]);
+  const dataset = {};
+  const context = createAppContext({
+    dom: {
+      settingsSheet: {
+        classList: sheetClasses, scrollTop: 0, inert: false, dataset: {},
+        contains: () => false, hasAttribute: () => true, setAttribute: () => {}, focus: () => {},
+      },
+      settingsSheetBody: { scrollTop: 0 },
+      settingsScrim: { classList: scrimClasses },
+      prefAlertSound: {},
+      prefAlertVibrate: {},
+      prefAlertForeground: {},
+    },
+  });
+  const fakeDoc = {
+    documentElement: { classList: htmlClasses, dataset },
+    body: { classList: bodyClasses },
+    activeElement: null,
+  };
+  const controller = createSettingsController(context, {
+    alerts: { preferences: () => ({ sound: false, vibrate: false, foregroundComplete: false }), ensureAudio: () => {} },
+    autoBind: false,
+    doc: fakeDoc,
+  });
+
+  controller.open();
+  assert.equal(dataset.ccmSheetLocks, '1');
+  controller.open(); // 已开再开
+  assert.equal(dataset.ccmSheetLocks, '1', '重复 open 不得再加锁');
+  assert.equal(bodyClasses.has('ccm-sheet-open'), true);
+
+  controller.close();
+  assert.equal(bodyClasses.has('ccm-sheet-open'), false, '关一次必须解锁');
+  assert.equal(dataset.ccmSheetLocks, undefined);
+
+  controller.close(); // 已关再关
+  assert.equal(bodyClasses.has('ccm-sheet-open'), false, '重复 close 不得 underflow 再去动别人的锁');
+});
+
+test('settings Escape: 上层 sheet 已在捕获阶段处理（defaultPrevented）时不跟着关设置（#380）', () => {
+  const sheetClasses = new Set(['translate-y-full']);
+  const classList = set => ({
+    add: (...n) => n.forEach(x => set.add(x)),
+    remove: (...n) => n.forEach(x => set.delete(x)),
+    contains: n => set.has(n),
+  });
+  const context = createAppContext({
+    dom: {
+      settingsSheet: {
+        classList: classList(sheetClasses), scrollTop: 0, inert: false, dataset: {},
+        contains: () => false, hasAttribute: () => true, setAttribute: () => {}, focus: () => {},
+      },
+      settingsSheetBody: { scrollTop: 0 },
+      settingsScrim: { classList: classList(new Set(['hidden'])) },
+    },
+  });
+  const keydown = [];
+  const fakeDoc = {
+    documentElement: { classList: classList(new Set()), dataset: {} },
+    body: { classList: classList(new Set()) },
+    activeElement: null,
+    addEventListener: (type, fn) => { if (type === 'keydown') keydown.push(fn); },
+  };
+  const controller = createSettingsController(context, {
+    alerts: { preferences: () => ({ sound: false, vibrate: false, foregroundComplete: false }), ensureAudio: () => {} },
+    syncPrefs: false,
+    doc: fakeDoc,
+  });
+  const esc = extra => {
+    const ev = { key: 'Escape', defaultPrevented: false, preventDefault() { ev.defaultPrevented = true; }, ...extra };
+    keydown.forEach(fn => fn(ev));
+  };
+  assert.equal(keydown.length, 1, '设置控制器应挂上 keydown');
+
+  controller.open();
+  assert.equal(sheetClasses.has('translate-y-full'), false);
+  esc({ defaultPrevented: true }); // appConfirm 叠在设置上：sheets.js 已收掉栈顶并 preventDefault
+  assert.equal(sheetClasses.has('translate-y-full'), false, '上层 sheet 的 Esc 把设置面板也一起关了');
+  esc({ isComposing: true });
+  assert.equal(sheetClasses.has('translate-y-full'), false, '取消输入法候选的 Esc 关掉了设置');
+  esc();
+  assert.equal(sheetClasses.has('translate-y-full'), true, '设置自己在顶层时 Esc 应关闭');
 });
 
 test('session workspace state exposes isolated caches through app context', () => {
@@ -718,7 +878,8 @@ test.describe('createUnreadTracker：手动未读的生命周期', () => {
     const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: { a: T0 + 10 }, manual: {} }));
     const tracker = createUnreadTracker({ storage, now: () => T0 + 500 });
     for (const bad of [null, undefined, {}, 'x']) tracker.hydrate(bad);
-    assert.deepEqual(tracker.snapshot(), { baselineTs: T0, seen: { a: T0 + 10 }, manual: {} });
+    // folders：文件夹「全部标为已读」的水位，随 snapshot 走 read:sync（见下方 markAllRead 带文件夹那条）
+    assert.deepEqual(tracker.snapshot(), { baselineTs: T0, seen: { a: T0 + 10 }, manual: {}, folders: {} });
   });
 
   test('snapshot 供连上后上推本地表；返回副本，调用方改不动内部状态', () => {
@@ -751,144 +912,65 @@ test.describe('createUnreadTracker：手动未读的生命周期', () => {
     const tracker = createUnreadTracker({ storage: memoryStorage(), now: () => T0 });
     assert.doesNotThrow(() => { tracker.markEntered('s1'); tracker.markSeen('s1'); tracker.setManualUnread('s2', true); });
   });
-});
 
-// ---- attachLongPress：抽屉会话行的长按手势（触屏/鼠标走 Pointer Events 计时，桌面右键同效）----
-// 用 EventTarget + 注入计时器，不依赖 DOM：钉的是手势判定契约（到时触发 / 位移取消 / 抬手取消 /
-// 右键直达 / 触发后吞掉紧随的 click），不是浏览器细节。
-function fakePointerTarget() {
-  const el = new EventTarget();
-  el.fire = (type, init = {}) => {
-    const ev = new Event(type, { cancelable: true, bubbles: true });
-    Object.assign(ev, init);
-    el.dispatchEvent(ev);
-    return ev;
-  };
-  return el;
-}
+  // 文件夹长按「全部标为已读」（#300）：每个目标都要同时记 seen、清手动标记，逐条走 read:mark 的
+  // 「标为已读」形状上报——只记 seen 的话服务端那份旧 manual 不清，旧设备回连照样能把它合并回来。
+  test('markAllRead：一批会话全部变已读（含手动标未读的），落盘且逐条上报「标为已读」', () => {
+    const events = [];
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {}, manual: { m: T0 + 1 } }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 10, onChange: e => events.push(e) });
+    const rows = [{ id: 'a', lastUsedAt: T0 + 5 }, { id: 'm', lastUsedAt: T0 - 100 }];
+    assert.deepEqual(rows.map(r => tracker.isUnread(r, { isViewing: r.id === 'm' })), [true, true], '前提：一条按时间亮、一条是正看着却手动标的');
 
-function fakeTimers() {
-  const timers = new Map();
-  let nextId = 0;
-  return {
-    setTimer: (fn) => { nextId += 1; timers.set(nextId, fn); return nextId; },
-    clearTimer: (id) => { timers.delete(id); },
-    pending: () => timers.size,
-    flush: () => { for (const [id, fn] of [...timers]) { timers.delete(id); fn(); } },
-  };
-}
+    tracker.markAllRead(['a', 'm']);
 
-function mountLongPress(handler = () => {}) {
-  const el = fakePointerTarget();
-  const timers = fakeTimers();
-  const fired = [];
-  attachLongPress(el, ev => { fired.push(ev.type); handler(ev); }, {
-    holdMs: 500,
-    moveTolerance: 10,
-    setTimer: timers.setTimer,
-    clearTimer: timers.clearTimer,
-  });
-  return { el, timers, fired };
-}
-
-const DOWN = { button: 0, isPrimary: true, clientX: 10, clientY: 10 };
-
-test.describe('attachLongPress：长按/右键触发，位移与抬手取消，吞掉紧随的 click', () => {
-  test('按住不动到时 → 触发一次；随后的 click 被吞掉一次，再下一次点击照常', () => {
-    const { el, timers, fired } = mountLongPress();
-    el.fire('pointerdown', DOWN);
-    assert.equal(fired.length, 0, '到时前不触发');
-    assert.equal(timers.pending(), 1);
-    timers.flush();
-    assert.deepEqual(fired, ['pointerdown']);
-
-    el.fire('pointerup', { clientX: 10, clientY: 10 });
-    const swallowed = el.fire('click');
-    assert.equal(swallowed.defaultPrevented, true, '长按松手产生的 click 不能再当成「点开会话」');
-    const passed = el.fire('click');
-    assert.equal(passed.defaultPrevented, false, '只吞一次');
+    assert.deepEqual(rows.map(r => tracker.isUnread(r, { isViewing: r.id === 'm' })), [false, false]);
+    const persisted = JSON.parse(storage.dump());
+    assert.deepEqual(persisted.manual, {}, '手动标记清掉');
+    assert.deepEqual(persisted.seen, { a: T0 + 10, m: T0 + 10 });
+    assert.deepEqual(events, [
+      { sessionId: 'a', manual: false, at: T0 + 10 },
+      { sessionId: 'm', manual: false, at: T0 + 10 },
+    ], '复用单条「标为已读」的上报形状，服务端走同一条写入路径');
   });
 
-  test('指尖位移超过容差（纵向滚动 / 横向侧滑）→ 取消，不触发，click 照常', () => {
-    const { el, timers, fired } = mountLongPress();
-    el.fire('pointerdown', DOWN);
-    el.fire('pointermove', { clientX: 10, clientY: 40 });
-    assert.equal(timers.pending(), 0, '位移即撤销计时');
-    timers.flush();
-    assert.equal(fired.length, 0);
-    assert.equal(el.fire('click').defaultPrevented, false);
+  // 一个分组最多画出 500（浏览窗口硬顶）+ 100（稍后再看，受 MANUAL_CAP）+ 20（live 实例上限）行。
+  // 本地表装不下这一批时，同一批里先写的位点被挤掉，重新加载后那几行又亮——服务端那份同理，见 READ-01。
+  test('markAllRead 一次标完最大的分组：重新加载后同一批一条不少（表里原本已满也一样）', () => {
+    const old = Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`old-${i}`, T0 + i]));
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: old, manual: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 10_000 });
+    const batch = Array.from({ length: 620 }, (_, i) => ({ id: `group-${i}`, lastUsedAt: T0 + 5_000 }));
+    tracker.markAllRead(batch.map(s => s.id));
+
+    const reloaded = createUnreadTracker({ storage, now: () => T0 + 20_000 });
+    const relit = batch.filter(s => reloaded.isUnread(s)).length;
+    assert.equal(relit, 0, `重新加载后 ${relit} 行重新亮起未读`);
   });
 
-  test('容差内的抖动不取消', () => {
-    const { el, timers, fired } = mountLongPress();
-    el.fire('pointerdown', DOWN);
-    el.fire('pointermove', { clientX: 14, clientY: 17 });
-    assert.equal(timers.pending(), 1);
-    timers.flush();
-    assert.equal(fired.length, 1);
+  // 2026-10-26 真机：「全部标为已读」只标得到屏幕上那几行，更早的没加载出来，「显示更多」拉出一片未读。
+  // 现在另报一条文件夹水位，由服务端在 session:list 回执里折进每行（READ-01）。上报发不出去（离线）时
+  // 水位留在本地，随 read:sync 的 snapshot 带上去——与逐条位点同一条补偿路径。
+  test('markAllRead 带文件夹：逐条上报之外再报一条水位；水位落盘、进 snapshot', () => {
+    const events = [];
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {}, manual: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 10, onChange: e => events.push(e) });
+    tracker.markAllRead(['a'], '/repo');
+    assert.deepEqual(events, [
+      { sessionId: 'a', manual: false, at: T0 + 10 },
+      { folder: '/repo', at: T0 + 10 },
+    ]);
+    assert.deepEqual(tracker.snapshot().folders, { '/repo': T0 + 10 });
+    const reloaded = createUnreadTracker({ storage, now: () => T0 + 20 });
+    assert.deepEqual(reloaded.snapshot().folders, { '/repo': T0 + 10 }, '离线时报不出去，重开 app 后要靠这份去 read:sync');
   });
 
-  test('到时前抬手 / 系统接管（pointercancel）→ 取消', () => {
-    for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
-      const { el, timers, fired } = mountLongPress();
-      el.fire('pointerdown', DOWN);
-      el.fire(type, { clientX: 10, clientY: 10 });
-      assert.equal(timers.pending(), 0, type);
-      timers.flush();
-      assert.equal(fired.length, 0, type);
-    }
-  });
-
-  test('非主键（右键/中键 pointerdown）不计时；contextmenu 直接触发并阻止原生菜单', () => {
-    const { el, timers, fired } = mountLongPress();
-    el.fire('pointerdown', { ...DOWN, button: 2 });
-    assert.equal(timers.pending(), 0);
-    const ctx = el.fire('contextmenu');
-    assert.equal(ctx.defaultPrevented, true, '桌面右键：接管为本 app 的菜单');
-    assert.deepEqual(fired, ['contextmenu']);
-  });
-
-  test('计时器已触发后再来 contextmenu（Android 长按两者都发）→ 不重复触发', () => {
-    const { el, timers, fired } = mountLongPress();
-    el.fire('pointerdown', DOWN);
-    timers.flush();
-    const ctx = el.fire('contextmenu');
-    assert.equal(ctx.defaultPrevented, true);
-    assert.equal(fired.length, 1);
-  });
-
-  // 2026-09-07：桌面右键连按两次，第二次静默无反应。根因是 swallowNextClick 一个标志同时承担
-  // 两件生命周期不同的事——「吞掉长按松手补发的那次 click」（到下一次 click 或 pointerdown 为止）
-  // 与「去重 Android 长按补发的 contextmenu」（本次指针手势内）。右键既不走主键 pointerdown
-  // （button !== 0 提前 return）也不派发 click（派发的是 auxclick），两条清除路都不走，闩永久卡住。
-  // 修法：只有【计时器】那条路置闩——它同时是这两件事唯一正当的触发源，contextmenu 不该置。
-  test('★ 桌面右键连按两次 → 触发两次（此前第二次被 swallowNextClick 永久闩死）', () => {
-    const { el, fired } = mountLongPress();
-    el.fire('pointerdown', { ...DOWN, button: 2 });
-    assert.equal(el.fire('contextmenu').defaultPrevented, true);
-    el.fire('pointerup', { clientX: 10, clientY: 10 });
-
-    el.fire('pointerdown', { ...DOWN, button: 2 });
-    assert.equal(el.fire('contextmenu').defaultPrevented, true);
-    assert.deepEqual(fired, ['contextmenu', 'contextmenu'], '右键全程不产生 click，闩没有任何清除时机');
-  });
-
-  test('★ 右键触发后紧随的 click 照常放行（吞 click 只为长按松手，右键不产生 click）', () => {
-    const { el, fired } = mountLongPress();
-    el.fire('contextmenu');
-    assert.equal(fired.length, 1);
-    assert.equal(el.fire('click').defaultPrevented, false, '右键标记之后第一次左键点这一行不该被吃掉');
-  });
-
-  test('第二根手指（isPrimary=false）不参与；重复 pointerdown 只保留最后一个计时', () => {
-    const { el, timers, fired } = mountLongPress();
-    el.fire('pointerdown', { ...DOWN, isPrimary: false });
-    assert.equal(timers.pending(), 0);
-    el.fire('pointerdown', DOWN);
-    el.fire('pointerdown', DOWN);
-    assert.equal(timers.pending(), 1);
-    timers.flush();
-    assert.equal(fired.length, 1);
+  test('hydrate 不抹掉本地水位（服务端回执不搬这张表）', () => {
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {}, manual: {}, folders: { '/repo': T0 + 5 } }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 500 });
+    tracker.hydrate({ baselineTs: T0, seen: { s: T0 + 1 }, manual: {} });
+    assert.deepEqual(tracker.snapshot().folders, { '/repo': T0 + 5 });
+    assert.deepEqual(JSON.parse(storage.dump()).folders, { '/repo': T0 + 5 });
   });
 });
 

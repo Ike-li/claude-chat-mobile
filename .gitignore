@@ -1,5 +1,5 @@
-# 依赖
-/node_modules/
+# 依赖。不带尾斜杠：测试容器与 linked worktree 里 node_modules 是软链，带斜杠只匹配目录，软链会被当成未跟踪文件
+/node_modules
 
 # 环境变量与密钥（绝不提交）
 # 覆盖 .env / .env.local / .env.production / .env.*.local 等
@@ -37,6 +37,9 @@ ccm.config.json.*
 # 它若只存在于某一个 worktree，其余 worktree（含生产 server 所在的主树）就毫无防护。
 # 入库后 git 会把它带到每个 worktree 与每次 clone。settings.local.json 仍不入库（个人/凭据）。
 !/.claude/settings.json
+# 例外：rules/ 是从 CLAUDE.md 拆出来、按路径按需加载的 agent 指令，理由同上——
+# 不入库的话 worktree 与 clone 都拿不到（Claude Code 只为 worktree 回读主树的 skills/agents/commands，不含 rules）。
+!/.claude/rules/
 
 # 历史遗留守卫：常驻 worktree 现已改为仓库外的平级兄弟目录（../claude-chat-mobile-<分支名>，
 # 见 CLAUDE.md 分支纪律），本目录不再使用。留着以防日后有人在仓内建 worktree。
@@ -88,6 +91,11 @@ desktop/build/
 # 这个【故意不带点前缀】：它要被 actions/upload-artifact 捞走，而那个 action 默认
 # 排除隐藏文件（include-hidden-files: false），点开头会被静默漏掉。
 /tests/infra/e2e-durations-shard*.json
+
+# 验收套件的本机目录：真实配置、凭据（secrets.json）与每轮产物 runs/<UTC 时间戳>/。
+# 进仓的只有 tests/acceptance/local.example/ 里的占位模板，换电脑时跑 setup.mjs 从模板复制一份，
+# 这里的东西不会跟着 git 走。本仓是 public 的，tests/gates/check-config-gitignored.js 有哨兵锁住这行。
+/tests/acceptance/local/
 
 # 宣传产物（截图素材 + 对外的界面功能一览）：按控件粒度描述 UI，每次界面改动都会失效，
 # 而没有任何门禁能守住它们；宣传层本就不进主分支。不入库：否则会被 inventory 扫成未分类文件。

@@ -19,7 +19,7 @@
 
 - **公网入口**：固定域名，Cloudflare Access 把守（Email OTP 或 Google/Microsoft 2FA），公网**不带 `#token=`**。
 - **两个要一直跑着的进程**（桌面端会帮你拉；headless 自己保持）：
-  - server：`node app/server.js`，**经登录 shell（`zsh -lc` / `bash -lc`）启动**，保证 claude 的 PATH / 登录态与你终端一致。
+  - server：`node app/server.js`，桌面端**经登录 shell（`zsh -lc`）启动**，保证 claude 的 PATH / 登录态与你终端一致；headless 的 `npm start` 直接继承当前终端的环境。
   - tunnel：`cloudflared` 命名隧道，把 `:3000` 投到公网域名。
 - **鉴权分层**：公网走 Access JWT（服务端 `app/src/auth/cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
   > 设备审批不会只凭 socket peer 是 loopback 就跳过：server 还会检查 Host。按 Host 路由的入口（cloudflared、配了 `server_name` 的 nginx）上，公网请求带的就是公网 Host，仍需设备 token；只有本机样 Host，或已经通过 Cloudflare Access JWT 的连接，才跳过这层。后者意味着 Access 开着时「已受信任的设备」这张表管不到隧道进来的连接（吊销无效）。
@@ -36,7 +36,7 @@
 
 headless 没有桌面端：在跑 `npm start` 的那个终端里停掉再起。
 
-💡 若已设 `DEV_MODE`（配置项说明见 `node scripts/config.js schema`），web 端齿轮面板会出现「重启服务」按钮，可免上电脑一键重启——只适合本机调试，生产对外部署建议留空，避免误触。
+💡 若已设 `DEV_MODE`（配置项说明见 `node scripts/config.js schema`），web 端齿轮面板会出现「重启服务」按钮，可免上电脑一键重启。按钮只在 server 由进程管理器托管（桌面端 launchd、systemd 等）时可点：前台 `npm start` 停了没人拉起，按钮是灰的。只适合本机调试，生产对外部署建议留空，避免误触。
 
 ## 从零搭建
 
@@ -200,9 +200,9 @@ Zero Trust → Access → Applications → Add → Self-hosted，Domain 填 `<yo
 
 > 策略生效有**传播延迟**：刚建完立刻 `curl` 多半还是 `text/html`，等几十秒到一两分钟再测。别据此以为没配对。
 
-> **暴露面**：公网能拿到的只有那几张图标（外加你若一并放行 `manifest.webmanifest` 时的应用名与主题色）。不涉及任何数据、会话或 API 通道。代价是站点用途对外可见——域名本身已能从 CT log 查到，实际增量很小。
+> **暴露面**：公网能拿到的只有那几张图标（外加你若一并放行 manifest（`manifest-light.webmanifest` / `manifest-dark.webmanifest`）时的应用名与主题色）。不涉及任何数据、会话或 API 通道。代价是站点用途对外可见——域名本身已能从 CT log 查到，实际增量很小。
 >
-> `manifest.webmanifest` 一般**不必**放行：Chrome 读它时带 cookie（`index.html` 里 `<link rel="manifest" crossorigin="use-credentials">` 就是干这个的），只有图标是服务器去抓的。先只放行 `icons`，仍失败再补。
+> manifest 一般**不必**放行：Chrome 读它时带 cookie（`index.html` 里 `<link rel="manifest" crossorigin="use-credentials">` 就是干这个的），只有图标是服务器去抓的。先只放行 `icons`，仍失败再补。
 
 改完必须**删掉主屏图标重新安装**——Chrome 缓存了失败结果，不会自己重试。
 
@@ -282,8 +282,8 @@ NTFY_TOKEN=<可选：私有实例的访问令牌>
 PUBLIC_URL=https://<your-domain>    # 点通知深链回该会话；留空回退 CF_ACCESS_HOSTNAME
 ```
 
-- 不配 ntfy 则优雅缺席、仍走 Web Push。
-- ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `app/src/server/app.js` 的 notify 分发）；但**标题会带工作区目录名与会话标题**（`formatNotifyIdentity` 的「事件 · 项目 · 会话」三段，会话标题取自抽屉里的 SDK summary / AI 生成标题，上限 40 字），且明文经第三方。故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
+- 不配 ntfy 则优雅缺席，只剩 Web Push；Web Push 本身也要先配 VAPID 才启用，见 [getting-started.md](getting-started.md#开启-web-push)。
+- ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `app/src/server/app.js` 的 `emitNotify`）；**标题只有「事件 · 项目」两段**，不带会话标题——没有 AI 生成标题时，会话标题就是你某条消息的原文。Web Push 端到端加密，标题照旧带会话标题（「事件 · 项目 · 会话」三段，`formatNotifyIdentity`），方便分辨同一项目的多条会话。工作区目录名仍会明文经第三方，故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
 - 改这些 env 后须**重启 server** 才生效（见下「运维速查」）。
 
 ## 运维速查
@@ -328,6 +328,8 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 | OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜 `[http-auth] 鉴权失败（access_jwt）`（socket 握手侧是 `[conn] … 握手鉴权`），核对配置里的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
 | 手机进不去登录页 | 检查 DNS / 隧道日志有无 `Registered tunnel connection` |
 | Android 装的 PWA 长按只有「移除」、系统设置点进去是 Chrome | 装成了 shortcut 而非 WebAPK：Access 拦了 `/icons/*`，Google 打包服务器抓不到图标。见 §2b，给图标加 Bypass 后删图标重装 |
+| PWA 仍装成 shortcut（长按只有「移除」），但 §2b 的 `curl` 已返回 `image/png` | 安装那一刻手机连不上 Google：WebAPK 由 Google 服务器打包、再经 Google Play 装回手机，任一步连不上，Chrome 都会退回 shortcut 且不报错。在 Google 服务受限的网络里，先开代理（Chrome、Google Play 商店、Google Play 服务都要走代理），再删图标重装 |
+| 开着代理装，Chrome 通知一直停在「正在安装」 | Chrome 已把安装交给 Google Play，Play 还在忙别的下载（实测是正在更新 Chrome 本身），这次安装一直轮不到。到 Play 的「管理应用和设备」停掉或等完进行中的更新，再从 Chrome 重新安装 |
 | 改了配置不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
 | 公网 1033 且部署机开着全局代理/VPN | 代理的 TUN 模式劫持了 `cloudflared` 到 Cloudflare edge 的出站连接：先临时关闭系统代理/VPN 复测确认；长期共存则在代理软件里给 `cloudflared` 进程或 `*.trycloudflare.com` / `*.cloudflareaccess.com` / 你的隧道域名配置直连(bypass)规则 |
 | 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在工作区 `.claude/settings.local.json` 的 `env` 块写 `"ANTHROPIC_MODEL": "<带后缀名>"`（或在启动 shell `export` 后重启），或 web 端 `/model <带后缀名>` 切换（本项目配置文件里的 `ANTHROPIC_*` 启动期被剥除） |
@@ -453,8 +455,8 @@ CCM 看到的连接 IP 是 127.0.0.1，整个 tailnet 的设备共用一个限�
 
 后两行需要展开：
 
-**设备审批会自己回来。** `shouldBypassDeviceApproval`（`app/src/auth/rate-limiter.js`）第一行是
-`if (accessEnabled && deviceApprovalScope !== 'all') return true`——**缺省**下 Access 与设备审批是替代关系而非叠加
+**设备审批会自己回来。** `shouldBypassDeviceApproval`（`app/src/auth/rate-limiter.js`）先判 `deviceApprovalScope === 'all'` 返回 false，
+紧接着 `if (accessEnabled) return true`——**缺省**下 Access 与设备审批是替代关系而非叠加
 （声明 `DEVICE_APPROVAL_SCOPE=all` 可让两者叠加）。失去 Access 不等于防护归零。
 反代进来的请求也会被正确判成「非本机」：peer 虽是 `127.0.0.1`，但 Host 是公网域名，不满足 bypass 条件。
 
@@ -652,8 +654,11 @@ cloudflared tunnel --url http://localhost:3000
 
 ```bash
 node scripts/config.js set LOG_TERMINAL=on    # 默认关闭
-node scripts/config.js set LOG_FILE=/绝对/路径 # 不设 = ~/Library/Logs/ccm-server.log
+node scripts/config.js set LOG_FILE=/绝对/路径 # 只告诉日志窗口和 doctor 去哪读；不设 = ~/Library/Logs/ccm-server.log
 ```
+
+窗口只是跟随那个文件，server 不会因为设了 `LOG_FILE` 就往里写。headless 直接 `npm start` 时输出留在终端，窗口会是空的；
+要用它，先把输出重定向到文件（如 `npm start 2>&1 | tee -a /绝对/路径`），再让 `LOG_FILE` 指向同一个文件。
 
 （直接改 `ccm.config.json` 也行：`"LOG_TERMINAL": true`。JSON 里写布尔值，
 落到进程环境时会由 schema 归一成这个键实际认的字面量。）

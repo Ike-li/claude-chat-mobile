@@ -22,7 +22,11 @@ export default [
       '.codegraph/**',
       '.reasonix/**',
       '.worktrees/**',
+      // 其它会话的 worktree（gitignore）：不忽略的话主检出每次 lint 都把每个分支的源码再扫一遍
+      '.claude/worktrees/**',
       'tests/infra/playground/seed/**',
+      // 验收套件的本机配置与每轮产物（gitignore），不是源码
+      'tests/acceptance/local/**',
     ],
   },
   js.configs.recommended,
@@ -105,12 +109,12 @@ export default [
     files: ['app/public/js/i18n.js'],
     rules: { 'no-restricted-syntax': 'off' },
   },
-  // 经典 <script>（非 ESM）：tw-config 写入 tailwind 全局、sw-cleanup 操作 navigator
+  // 经典 <script>（非 ESM）：sw-cleanup 操作 navigator
   {
-    files: ['app/public/js/tw-config.js', 'app/public/js/sw-cleanup.js'],
+    files: ['app/public/js/sw-cleanup.js'],
     languageOptions: {
       sourceType: 'script',
-      globals: { ...globals.browser, tailwind: 'writable' },
+      globals: { ...globals.browser },
     },
   },
   // Service Worker 上下文

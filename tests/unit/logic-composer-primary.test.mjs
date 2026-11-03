@@ -18,6 +18,8 @@ import {
   shouldBusyAfterOfflineBatch,
   outboxItemTargetsViewing,
   outboxNoticePlacement,
+  shouldCarryOutboxBubbleOnClear,
+  canTextClaimPendingBubble,
   SERVER_PRE_TURN_UPPER_BOUND_MS,
   SEND_ACK_FALLBACK_MS,
   SEND_ACK_TRANSPORT_MS,
@@ -40,6 +42,9 @@ import {
   INTERRUPT_PENDING_TIMEOUT_MS,
   planOutboxWorktreeReuse,
   nextOutboxWorktreeAnchor,
+  planOutboxScratchReuse,
+  nextOutboxScratchAnchor,
+  outboxComposeKey,
 } from '../../app/public/js/logic.js';
 // F2 配对回归用：server 侧忙拒收判定与前端 present* 必须逐维对齐（该模块零依赖、单测环境可直接 import）
 import { externalDirtyBusyNack } from '../../app/src/server/instance-routing.js';
@@ -428,6 +433,17 @@ test('outbox: enqueue 去重同 clientMessageId + 超 cap 丢最旧', () => {
   assert.equal(r2.queue.find(x => x.clientMessageId === 'c').text, '3b');
 });
 
+// 已经取出队列、还没有结论的条目（投递中、排队等本轮结束）照样落盘：刷新之后下一次批处理重新投递它们。
+// 同一条既在队列里又在途时只落一行，否则刷新后会被投递两次。
+test('outbox: durable dump 合并队列与在途条目，同 clientMessageId 只落一行、队列里那份优先', () => {
+  const rows = parseDurableOutbox(dumpDurableOutbox(
+    [{ clientMessageId: 'q', text: '排队中' }, { clientMessageId: 'both', text: '重新入队后的' }],
+    [{ clientMessageId: 'held', text: '等本轮结束', bubbleEl: { fake: true } }, { clientMessageId: 'both', text: '在途时的' }],
+  ));
+  assert.deepEqual(rows.map(r => r.clientMessageId), ['q', 'both', 'held'], '在途条目没落盘 = 刷新即丢；重复落盘 = 刷新后投两遍');
+  assert.equal(rows.find(r => r.clientMessageId === 'both').text, '重新入队后的');
+});
+
 test('outbox: durable dump/parse 剥 bubbleEl', () => {
   const raw = dumpDurableOutbox([{ clientMessageId: 'x', text: 'hi', bubbleEl: { fake: true } }]);
   assert.ok(!raw.includes('bubbleEl'));
@@ -597,6 +613,18 @@ test.describe('planOutboxDrainNotice（重发横幅归属标注）', () => {
     assert.equal(out.foreign, 1);
     assert.match(out.text, /其它会话/);
   });
+
+  // drain 开始前同一会话已换了实例号：在线发出去的那条没被确认、转进重发前置换的广播先到了，或离线期间另一台
+  // 设备切了 effort。服务端按条目里的会话改投，这条就是发往本会话的；横幅要把视图会话传给归属判据才认得出。
+  test('同一会话换了实例号 → 不标注发往其它会话', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: 'old', sessionId: 's1' }],
+      viewingInstanceId: 'new',
+      viewingSessionId: 's1',
+    });
+    assert.equal(out.foreign, 0);
+    assert.doesNotMatch(out.text, /其它会话/);
+  });
 });
 
 // 归属判据抽成单一函数：此前 planOutboxDrainNotice / shouldBusyAfterOfflineBatch / app.js 的
@@ -609,6 +637,9 @@ test.describe('outboxItemTargetsViewing（三处共用的归属判据）', () =>
   test('instanceId 不等 → 不属于', () => {
     assert.equal(outboxItemTargetsViewing({ instanceId: 'x' }, { viewingInstanceId: 'v' }), false);
   });
+
+  // 条目与视图两侧都带会话时按会话认的那几条（置换换号、/clear、缺一侧回落）是红线，
+  // 在 tests/invariants/instance-identity.test.mjs。
 
   test('两边 instanceId 同为 null 且无 cwd → 不得配成一对', () => {
     assert.equal(outboxItemTargetsViewing({ instanceId: null }, { viewingInstanceId: null }), false);
@@ -688,6 +719,15 @@ test('shouldBusyAfterOfflineBatch: 剩余首发项 cwd 同当前视图 → busy'
   }), true);
 });
 
+test('shouldBusyAfterOfflineBatch: 同一会话换了实例号，剩余项拿着旧号 → busy', () => {
+  assert.equal(shouldBusyAfterOfflineBatch({
+    viewingInstanceId: 'new',
+    viewingSessionId: 's1',
+    remainingItems: [{ instanceId: 'old', sessionId: 's1' }],
+    hadViewingOk: false,
+  }), true);
+});
+
 test('shouldBusyAfterOfflineBatch: 剩余首发项 cwd 是别的工作区 → 不 busy', () => {
   assert.equal(shouldBusyAfterOfflineBatch({
     viewingInstanceId: 'v',
@@ -743,6 +783,71 @@ test.describe('outboxNoticePlacement（离线失败提示挂哪儿）', () => {
   test('缺省参数（什么都不知道）→ none，不猜', () => {
     assert.equal(outboxNoticePlacement(), 'none');
     assert.equal(outboxNoticePlacement({}), 'none');
+  });
+});
+
+// 清屏时离线条目的未确认气泡要不要保住。不保：同一会话的清屏重载（规则 5 置换、磁盘 ahead）把气泡摘下 DOM，
+// 第 2 条的「未发送 + 重发」只能另起一条提示条，插在空的 #messages 里，重载的历史接在它下面，要往上翻才看得到。
+// 保错：别的会话的离线气泡被带进眼前这个会话。
+test.describe('shouldCarryOutboxBubbleOnClear（清屏时保不保离线气泡）', () => {
+  test('同一会话的清屏重载，条目发往的就是它 → 保住', () => {
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: 'sess_a', prevSessionId: 'sess_a', sessionId: 'sess_a' }), true);
+  });
+
+  test('切到别的会话：哪怕条目发往新会话也不保，旧界面上的节点归旧会话的 DOM 缓存', () => {
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: 'sess_b', prevSessionId: 'sess_a', sessionId: 'sess_b' }), false);
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: 'sess_a', prevSessionId: 'sess_a', sessionId: 'sess_b' }), false,
+      '旧会话的离线气泡绝不能带进新会话');
+  });
+
+  test('同一会话，但条目发往别的会话（/clear 换了会话、号没变那种窄窗里入的队）→ 不保', () => {
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: 'sess_old', prevSessionId: 'sess_a', sessionId: 'sess_a' }), false);
+  });
+
+  test('没有会话（新会话页、懒开还没拿到 id）或条目没记会话 → 不保', () => {
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: null, prevSessionId: null, sessionId: null }), false);
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: '', prevSessionId: '', sessionId: '' }), false);
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: null, prevSessionId: 'sess_a', sessionId: 'sess_a' }), false);
+  });
+
+  test('调用方没说清屏前是哪个会话 → 不保（宁可丢气泡，不串会话）', () => {
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: 'sess_a', sessionId: 'sess_a' }), false);
+    assert.equal(shouldCarryOutboxBubbleOnClear(), false);
+  });
+});
+
+// 全量重载时被保住的气泡能不能按文字让历史认领。认领会把气泡的 clientMessageId 交给历史里那颗，之后同一个 id 的回显
+// 被当成已在屏幕上、不再渲染。历史没有 clientMessageId，只能按文字认，同文的旧消息（「继续」）认错了，就是把 id 交给了别人。
+test.describe('canTextClaimPendingBubble（被保住的气泡能不能按文字认领）', () => {
+  test('在线发送的乐观气泡（没交给 outbox）照旧认领', () => {
+    assert.equal(canTextClaimPendingBubble({}), true);
+    assert.equal(canTextClaimPendingBubble(), true);
+  });
+
+  test('离线条目服务端收下了 → 认领（已送达的那条要被历史认领，不能变成两颗）', () => {
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'ok' }), true);
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'ok', maybeSent: true }), true);
+  });
+
+  test('还没有结论（排队、在途）→ 不认：历史先于拒收落地时认错，之后「重发」成功的回显被旧消息吞掉', () => {
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'queued' }), false);
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'queued', maybeSent: true }), false,
+      '等着重试的条目还会拿同一个 id 重发，结局不明也不能认');
+  });
+
+  test('撞闸等「重发」、等重连重试 → 不认（同一个 id 还要再发）', () => {
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'blocked' }), false);
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'blocked', maybeSent: true }), false);
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'requeue', maybeSent: true }), false);
+  });
+
+  test('放弃重试：之前没有结局不明的投递 → 服务端明确没收下，不认', () => {
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'permanent' }), false);
+  });
+
+  test('放弃重试，但之前有一次结局不明的投递 → 认（可能早已写进 transcript，server 重启丢了去重表才回 stale）', () => {
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'permanent', maybeSent: true }), true,
+      '不认的话，重载后已送达的历史消息旁边会多一颗「没发出去」的失败气泡');
   });
 });
 
@@ -953,6 +1058,49 @@ test.describe('离线重放：worktree 意图每批只兑现一次', () => {
   test('ack 透传 instanceId —— 不传锚点就永远设不上', () => {
     assert.equal(presentOfflineResendAck(null, { ok: true, instanceId: 'inst_7' }).instanceId, 'inst_7');
     assert.equal(presentOfflineResendAck(null, { ok: true }).instanceId, null);
+  });
+});
+
+// 同一件事的「无文件夹」版（2026-09-24）：离线时在「无文件夹」的新会话页上连打几条，每条都以
+// {instanceId:null, cwd:<scratch 根>} 入队。重连后逐条重放，服务端的 scratch 分配器只合并**并发**的首条消息，
+// 合并不了**先后**——第二条又懒建一个 scratch 目录、又开一个会话。
+test.describe('离线重放：无文件夹每批只开一个会话', () => {
+  const ROOT = '/Users/you/Library/Application Support/claude-chat-mobile/scratch-workspaces';
+  const first = { clientMessageId: 'n1', text: '第一条', instanceId: null, cwd: ROOT };
+  const second = { clientMessageId: 'n2', text: '第二条', instanceId: null, cwd: ROOT };
+  const elsewhere = { clientMessageId: 'n3', text: '别的文件夹', instanceId: null, cwd: '/repo' };
+
+  test('还没有锚 → 第一条原样发出（由它去懒开）；有锚 → 后续条改投那个实例', () => {
+    assert.deepEqual(planOutboxScratchReuse(first, null, ROOT), first);
+    const out = planOutboxScratchReuse(second, 'inst_s', ROOT);
+    assert.equal(out.instanceId, 'inst_s', '不改投就会再建一个 scratch 目录、再开一个会话');
+    assert.equal(out.text, '第二条');
+    assert.equal(second.instanceId, null, '不得就地改写队列项');
+  });
+
+  test('不是无文件夹的条目不受影响；scratch 根未知时一律不动', () => {
+    assert.deepEqual(planOutboxScratchReuse(elsewhere, 'inst_s', ROOT), elsewhere);
+    assert.deepEqual(planOutboxScratchReuse(second, 'inst_s', null), second);
+    const targeted = { ...second, instanceId: 'inst_x' };
+    assert.deepEqual(planOutboxScratchReuse(targeted, 'inst_s', ROOT), targeted, '入队时已经有实例的，照原样投');
+  });
+
+  test('锚点：只从本批第一条成功的无文件夹条目取；失败不设、已有不覆盖、别的条目不写', () => {
+    assert.equal(nextOutboxScratchAnchor(first, { outcome: 'ok', instanceId: 'inst_s' }, null, ROOT), 'inst_s');
+    assert.equal(nextOutboxScratchAnchor(first, { outcome: 'requeue', instanceId: null }, null, ROOT), null);
+    assert.equal(nextOutboxScratchAnchor(second, { outcome: 'ok', instanceId: 'inst_t' }, 'inst_s', ROOT), 'inst_s');
+    assert.equal(nextOutboxScratchAnchor(elsewhere, { outcome: 'ok', instanceId: 'inst_e' }, null, ROOT), null);
+  });
+
+  // 锚点按新会话页分组（2026-10-10 第四轮 review P2）：两页的条目在 instanceId / cwd 上一模一样，
+  // 只有入队时记下的页标识分得开；它要活过 localStorage 往返，否则重载页面之后两页又并成一个会话。
+  test('新会话页标识随条目活过入队与 localStorage 往返；旧条目没有它时归同一组（行为同从前）', () => {
+    const [back] = parseDurableOutbox(dumpDurableOutbox([{ ...first, composeId: 'page-a' }]));
+    assert.equal(back.composeId, 'page-a');
+    assert.equal(outboxComposeKey(back), 'page-a');
+    assert.notEqual(outboxComposeKey({ ...second, composeId: 'page-b' }), outboxComposeKey(back));
+    assert.equal(outboxComposeKey(first), '', '升级前入队的条目：照旧归一组');
+    assert.equal('composeId' in parseDurableOutbox(dumpDurableOutbox([first]))[0], false, '没有就不平白多一个键');
   });
 });
 

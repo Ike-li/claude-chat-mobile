@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   notificationForEvent,
   notifyHasClientsAtSend,
+  NOTIFY_CATEGORY,
   hasForegroundApprovedClient,
   formatNotifyIdentity,
   sanitizeNotifySessionTitle,
@@ -48,6 +49,20 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
     assert.doesNotMatch(stopped.title, /出错/);
   });
 
+  // 验收 O30：审批等到 TTL 过期的那一轮，CLI 以 is_error 收尾，原来推成「⚠️ 任务出错 · 用时 1814.0s」。
+  // 用户需要知道的是「审批过期了、操作没执行、要重新触发」，不是「出错了」。
+  test('result：这一轮有审批过期 → 标题说审批已过期、正文说操作没执行，不说「出错」', () => {
+    const n = notificationForEvent('result', { isError: true, approvalExpired: true, durationMs: 1814000 }, { hasClients: false });
+    assert.match(n.title, /审批已过期/);
+    assert.doesNotMatch(n.title, /出错/);
+    assert.match(n.body, /操作没有执行/);
+    assert.match(n.body, /1814\.0s/, '用时照旧给出');
+
+    // 用户主动中止优先：那一轮的主因是用户点了停止
+    const stopped = notificationForEvent('result', { interrupted: true, approvalExpired: true, durationMs: 1000 }, { hasClients: false });
+    assert.match(stopped.title, /已中止/);
+  });
+
   test('permission_request：前台有人也照推（用户可能锁屏或在别的 app）', () => {
     const n = notificationForEvent('permission_request', { name: 'Bash' }, { hasClients: true });
     assert.notEqual(n, null, '审批是无条件推的类型，hasClients 不得让它静音');
@@ -57,6 +72,14 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
   test('question：前台有人也照推', () => {
     const n = notificationForEvent('question', { text: '选哪个？' }, { hasClients: true });
     assert.notEqual(n, null);
+  });
+
+  test('elicitation（MCP 要表单 / 授权，#460）：前台有人也照推；body 不带 message 正文，只在 previewBody 里', () => {
+    const n = notificationForEvent('elicitation', { serverName: 'github', message: '粘贴你的 token：ghp_secret', mode: 'form' }, { hasClients: true });
+    assert.notEqual(n, null, '与审批、提问同属「需要你」，hasClients 不得让它静音');
+    assert.match(n.body, /github/);
+    assert.doesNotMatch(n.body, /ghp_secret/, 'message 是第三方正文，body 会进 ntfy 明文通道');
+    assert.match(n.previewBody, /ghp_secret/);
   });
 
   test('未知事件类型 → null，不构造出无意义通知', () => {
@@ -72,6 +95,32 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
 });
 
 test.describe('SEC-04 正文最小化：命令参数不进推送正文', () => {
+  // 验收 O33（AC-22-11）：ntfy 明文经第三方（可能是公共 ntfy.sh），正文早已最小化，标题却带「事件 · 项目 · 会话标题」。
+  // 没有 AI 标题时（关了非必要流量、或标题生成失败），会话标题就是用户某条消息的原文——密钥、敏感信息照样出去。
+  // ntfy 只留「事件 · 项目」（ntfyTitle）；Web Push 端到端加密，title 照旧带会话标题方便分辨。
+  test('每一类会话推送：ntfyTitle 不含会话标题、保留事件与项目；Web Push 的 title 照旧带', () => {
+    const userWords = '把 sk-live-SUPERSECRET 填进配置';
+    const ctx = { cwd: '/home/u/proj', sessionTitle: userWords, instanceId: 'i-1', sessionId: 's-1', hasClients: false };
+    const built = [
+      ['result', notificationForEvent('result', { durationMs: 1000 }, ctx)],
+      // 审批过期那一轮（O30，合并时与本条同时进来）是 result 的另一支，同样要分两份标题
+      ['result_approval_expired', notificationForEvent('result', { durationMs: 1000, isError: true, approvalExpired: true }, ctx)],
+      ['permission_request', notificationForEvent('permission_request', { name: 'Bash' }, ctx)],
+      ['question', notificationForEvent('question', { text: 'q' }, ctx)],
+      ['task_notification', notificationForEvent('task_notification', { status: 'completed' }, ctx)],
+      ['gateway_stall', notificationForEvent('system', { kind: 'notice', notice: 'gateway_stall', seconds: 90 }, ctx)],
+      ['background_running', notificationForBackgroundRunning(ctx)],
+      ['cli_hook', notificationForCliHook('Stop', ctx)],
+    ];
+    for (const [kind, n] of built) {
+      assert.ok(n, `${kind}：前提是这一类会出推送`);
+      assert.ok(typeof n.ntfyTitle === 'string' && n.ntfyTitle, `${kind}：没有 ntfyTitle，ntfy 只能回落到带会话标题的 title`);
+      assert.doesNotMatch(n.ntfyTitle, /SUPERSECRET/, `${kind}：会话标题（可能是用户原话）进了 ntfy 明文标题`);
+      assert.match(n.ntfyTitle, /proj/, `${kind}：项目名要留，否则分不清是哪个项目`);
+      assert.match(n.title, /SUPERSECRET/, `${kind}：Web Push 的标题照旧带会话标题`);
+    }
+  });
+
   test('permission_request 的 body 只有工具名，绝不含 input 参数', () => {
     const secret = 'rm -rf /etc/passwd --token=SUPERSECRET';
     const n = notificationForEvent('permission_request',
@@ -129,6 +178,10 @@ test.describe('发送时刻的判据：result 用现场值，其余用快照', (
     assert.equal(notifyHasClientsAtSend('question', false, true), false);
   });
 
+  test('elicitation 与提问同节流类别（input）：作答后 request_resolved 清的是同一格', () => {
+    assert.equal(NOTIFY_CATEGORY.elicitation, 'input');
+  });
+
   test('非布尔值一律不算「有前台」（=== true 严格判定）', () => {
     assert.equal(notifyHasClientsAtSend('result', undefined, undefined), false);
     assert.equal(notifyHasClientsAtSend('question', 1, 1), false, '真值但非 true 不算数');
@@ -173,7 +226,7 @@ test.describe('ntfy 深链：第三方明文通道不带完整 cwd', () => {
   });
 
   test('需即时响应的四类走高优先级，其余普通', () => {
-    for (const t of ['permission_request', 'question', 'cli_hook_notification', 'device_request']) {
+    for (const t of ['permission_request', 'question', 'elicitation', 'cli_hook_notification', 'device_request']) {
       assert.equal(ntfyMetaFor(t, {}, '').priority, 5, `${t} 需要用户立刻处理`);
     }
     assert.equal(ntfyMetaFor('result', {}, '').priority, 3);

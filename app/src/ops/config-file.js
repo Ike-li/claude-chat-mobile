@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import dotenv from 'dotenv';
 
 import { ENV_SCHEMA } from './env-schema.js';
+import { shellOverrideSources } from './env-file.js';
 
 // 跨语言契约版本：desktop app 与 CLI 都按它判断能不能解码这份配置。
 // 与 scripts/service.js 的 STATUS_SCHEMA_VERSION 同一心智。
@@ -118,6 +119,20 @@ export function coerceToSchemaType(key, raw) {
 // 漏报则是「改了没生效还以为生效了」—— 与本仓一贯的 fail-closed 立场一致。
 export function reloadKindOf(key) {
   return schemaDef(key)?.reload === 'hot' ? 'hot' : 'restart';
+}
+
+// 保存回执逐项说清这次写入什么时候真的生效（验收 O48 / O63）。shell 环境变量恒压过配置文件，被压着的项
+// 写进文件也不生效，重启照样是环境变量的值——说「重启后生效」就是 hard-rules §4.6 的假成功。
+//   · shadowed：被 shell 里同名或别名的变量压着；shadowedBy 是要 unset 的变量名（别名处与配置键不同名）；
+//   · applied：schema 标 reload:hot，写盘即生效；
+//   · restart：其余，重启后生效。
+// shadowed 优先：被 WORK_DIRS 压着的 WORKDIRS 热加载也救不了。shellEnv 要的是投影之前的快照（见 buildEnvView 头注）。
+export function describeSavedKeys(keys, { shellEnv = null } = {}) {
+  return keys.map((key) => {
+    const shadowedBy = shellEnv ? shellOverrideSources(shellEnv, [key]) : [];
+    if (shadowedBy.length) return { key, effect: 'shadowed', shadowedBy };
+    return { key, effect: reloadKindOf(key) === 'hot' ? 'applied' : 'restart' };
+  });
 }
 
 // 两份配置的差异按 reload 类别分组。热加载路径据此决定：能就地应用，还是只能提示需重启。

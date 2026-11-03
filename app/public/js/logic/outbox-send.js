@@ -33,6 +33,23 @@ export function presentOnlineSendAck(ack) {
   const error = (ack && typeof ack.error === 'string' && ack.error.trim())
     ? ack.error.trim()
     : t('发送失败');
+  // 续接会丢掉最新那段对话（SESSION-04）：服务端没收下这条，等用户在面板上选「分叉」还是「仍然发送」。
+  // 不进 outbox——自动重发要么一直撞同一道闸，要么就是替用户做了决定。话先回填输入框，面板的两个选项都作用于
+  // 输入框里的话（app/resume-divergence.js），取消就留在那儿。ack 里的 permanent 是给不认 reason 的旧前端的，这里先于它判。
+  if (ack?.reason === 'resume_divergent' && ack.divergence && typeof ack.divergence === 'object') {
+    return {
+      ok: false,
+      clearBusy: true,
+      restoreDraft: true,
+      retryable: false,
+      permanent: false,
+      stale: false,
+      requeue: false,
+      dropBubble: true,
+      message: '',
+      divergence: ack.divergence,
+    };
+  }
   // 在途轮拒收（排队已移除）：被拒的是【这条新消息】，不是正在跑的那轮——
   // clearBusy 必须 false，否则会把在跑那轮的状态行/停止钮一起清掉；也不 requeue，
   // 自动重发等于把排队搬到客户端。文字回填输入框（send 已清空它）。
@@ -148,12 +165,17 @@ function serializeOutboxItem(item) {
     clientMessageId,
     instanceId: item.instanceId == null ? null : item.instanceId,
     cwd: item.cwd == null ? null : item.cwd,
+    // 入队时那个实例跑的会话（MSG-02）：服务端据它核对重放命中的实例还是不是那段对话。instanceId 活得比
+    // server 进程久，单凭它认不出「同号的另一个会话」。入队时会话还没开出来（新会话页）就不落键。
+    ...(typeof item.sessionId === 'string' && item.sessionId ? { sessionId: item.sessionId } : {}),
     // 「在新 worktree 里开」的意图必须活过入队与 localStorage 往返：服务端在懒开实例时据它
     // `git worktree add`，丢了就是一条没有意图的消息——实例开在父仓，而用户以为改动隔离了。
     // 本函数是白名单，新字段不显式登记就被静默丢掉（这一条就是那么漏过一次的）。
     // 只在真勾选时落字段：没勾的消息不该平白多两个键，服务端判的是 `=== true`。
     ...(item.useWorktree === true ? { useWorktree: true } : {}),
     ...(typeof item.sourceBranch === 'string' && item.sourceBranch ? { sourceBranch: item.sourceBranch } : {}),
+    // 入队时在哪一个新会话页上（见 outboxComposeKey）：重载页面之后两页的条目还要分得开
+    ...(typeof item.composeId === 'string' && item.composeId ? { composeId: item.composeId } : {}),
   };
 }
 
@@ -183,10 +205,13 @@ export function parseDurableOutbox(raw) {
   return out;
 }
 
-export function dumpDurableOutbox(queue) {
-  const items = (Array.isArray(queue) ? queue : [])
+// inFlight：已经取出队列、还没有结论的条目（见 app/outbox-in-flight.js），一并落盘。
+// 同 clientMessageId 只落一行，队列里那份优先（重新入队时可能已被改投）。
+export function dumpDurableOutbox(queue, inFlight = []) {
+  const seen = new Set();
+  const items = [...(Array.isArray(queue) ? queue : []), ...(Array.isArray(inFlight) ? inFlight : [])]
     .map(serializeOutboxItem)
-    .filter(Boolean);
+    .filter(row => row && !seen.has(row.clientMessageId) && seen.add(row.clientMessageId));
   return JSON.stringify(items);
 }
 
@@ -208,12 +233,21 @@ export function presentOfflineResendAck(err, ack) {
     const error = (typeof ack.error === 'string' && ack.error.trim()) ? ack.error.trim() : t('当前任务运行中，完成后可发送');
     return { outcome: 'blocked', permanent: false, requeue: false, clearBusyIfViewing: false, message: error };
   }
+  // 续接会丢掉最新那段对话（SESSION-04）：要人拍板，后台重放不能替他选。落 blocked；点「重发」再撞上时，
+  // 调用方据 divergence 把这条挪回输入框、弹出与在线路径同一块面板（app.js markOutboxBlocked）。
+  if (!err && ack && ack.ok === false && ack.reason === 'resume_divergent') {
+    return {
+      outcome: 'blocked', permanent: false, requeue: false, clearBusyIfViewing: true,
+      message: t('这次续接会丢掉最近一段对话，点「重发」后选择怎么续'),
+      ...(ack.divergence && typeof ack.divergence === 'object' ? { divergence: ack.divergence } : {}),
+    };
+  }
   // stale（目标实例已关闭）也是死信：服务端 fail-closed 的负 ack 只带 {stale:true}、【不带】permanent，
   // 落到下面的兜底 requeue 就成了「每次重连重发一遍、永不退场」。判据与在线路径 presentOnlineSendAck
   // 逐字对齐（error==='stale_instance' || ack.stale），并把裸协议串换成人话——用户看到的是提示不是错误码。
   if (!err && ack && ack.ok === false && (ack.stale === true || ack.error === 'stale_instance')) {
     return {
-      outcome: 'permanent', permanent: true, requeue: false, clearBusyIfViewing: true,
+      outcome: 'permanent', permanent: true, stale: true, requeue: false, clearBusyIfViewing: true,
       message: t('目标会话已关闭，请刷新后重发'),
     };
   }
@@ -237,7 +271,12 @@ export function presentOfflineResendAck(err, ack) {
 // 而那一维从没对齐过）。合成一个函数后，"一致" 由语言保证，不再靠注释纪律。
 //
 // 两条判据分工：
-// ① instanceId 非空 → 严格相等。同一工作区可并存多个会话，cwd 相同也不得改判。
+// ① instanceId 非空 → 条目与视图两侧的会话都已知时按会话认，否则严格比实例号。同一工作区可并存多个会话，
+//    cwd 相同也不得改判。按会话认是跟着服务端走：离线重放带着入队时的 sessionId，服务端按它改投（MSG-02，
+//    instance-routing.js 的 resolveInstanceTarget）。规则 5 置换、切 effort 只换实例号不换会话——同一批的
+//    第 1 条触发置换，新号的 instances 广播先于它的 ack 到达，于是它和后面各条都拿着旧号去对新视图，按实例号比
+//    全成了「别的会话」；/clear 反过来，实例号没变、会话换了，服务端不投给它。viewingSessionId 取 instances
+//    快照里当前查看实例此刻跑的会话（与 viewingInstanceId 同一份快照）；查不到时回落实例号。
 // ② instanceId 为空（入队时实例还没开：新会话首发、或在线 ack 超时把首发消息推进 outbox）→
 //    按 cwd 判。cwd 任一侧缺失/空串就判不属于，与服务端 shouldRejectOutboxLazyOpen 的 fail-closed
 //    对齐（它同样拒 cwd.trim() === ''），不在 UI 上谎称它属于眼下这个会话。
@@ -248,12 +287,55 @@ export function presentOfflineResendAck(err, ack) {
 //    「一个工作区开了两个会话」或「离线期间 session:new 清过指针」时，这里判 true 而服务端可能
 //    投给另一个会话。可达性窄（要 ≥2 个同目录会话，或离线 session:new），代价仅是文案归属标错，
 //    故接受启发式而不引入 instances 列表依赖把纯函数复杂化。
-export function outboxItemTargetsViewing(item, { viewingInstanceId = null, viewingCwd = null } = {}) {
+export function outboxItemTargetsViewing(item, { viewingInstanceId = null, viewingCwd = null, viewingSessionId = null } = {}) {
   if (!item || typeof item !== 'object') return false;
-  if (item.instanceId != null) return item.instanceId === viewingInstanceId;
+  if (item.instanceId != null) {
+    const itemSid = typeof item.sessionId === 'string' ? item.sessionId : '';
+    const viewSid = typeof viewingSessionId === 'string' ? viewingSessionId : '';
+    if (itemSid && viewSid) return itemSid === viewSid;
+    return item.instanceId === viewingInstanceId;
+  }
   const itemCwd = typeof item.cwd === 'string' ? item.cwd.trim() : '';
   const viewCwd = typeof viewingCwd === 'string' ? viewingCwd.trim() : '';
   return itemCwd !== '' && viewCwd !== '' && itemCwd === viewCwd;
+}
+
+// 离线条目的目标实例（O66）：先按会话认——规则 5 置换、切 effort 之后同一会话换了实例号；条目没带会话才按实例号。
+// 认不出返回 null（实例已被关掉，或广播还没到）。
+export function findOutboxTargetInstance(target, instances) {
+  const list = Array.isArray(instances) ? instances : [];
+  const sid = typeof target?.sessionId === 'string' ? target.sessionId : '';
+  if (sid) {
+    const bySession = list.find(i => i?.sessionId === sid);
+    if (bySession) return bySession;
+  }
+  return target?.instanceId != null ? (list.find(i => i?.instanceId === target.instanceId) || null) : null;
+}
+
+const outboxTargetKey = target => (typeof target?.sessionId === 'string' && target.sessionId
+  ? `s:${target.sessionId}` : `i:${target?.instanceId ?? ''}`);
+
+// 离线重放撞上在途轮的条目排队，本轮结束按序自动续发（O66：终端里忙时打的话也是排队、回合结束再发）。
+// entries 按入队顺序：{ target: {instanceId, sessionId}, sawRunning, inFlight }。返回该续发的那一条或 null：
+//   · 同一目标只看队首——一轮一条，第 3 条要等第 2 条那一轮；
+//   · 队首在发（inFlight）整个目标都等着；
+//   · 目标实例认不出就不发：实例被关掉了，不替用户把会话重新开起来（手动「重发」仍在）；
+//   · sawRunning：上一条发出之后还没看到这一会话开跑，就不算「本轮结束」——迟到的旧广播不能把下一条提前放出去。
+export function pickAfterTurnResend(entries, instances) {
+  const seen = new Set();
+  for (const e of Array.isArray(entries) ? entries : []) {
+    const key = outboxTargetKey(e?.target);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (e.inFlight || !e.sawRunning) continue;
+    const inst = findOutboxTargetInstance(e.target, instances);
+    if (inst && inst.turnRunning !== true) return e;
+  }
+  return null;
+}
+
+export function sameOutboxTarget(a, b) {
+  return outboxTargetKey(a) === outboxTargetKey(b);
 }
 
 // 离线消息的失败提示（「未发送 · 可重发」/「已停止重试」）该挂在哪儿。判据是两条独立的问题，
@@ -277,16 +359,70 @@ export function outboxNoticePlacement({
   return indicatorExists ? 'stale' : 'none';
 }
 
+// 永久拒收、眼前又没有落点的条目进了死信暂存（app.js 的 outboxDeadLetters），回到它的会话才交还。
+// 眼前没有会话时（server 重启后的提示页、首页）不说一句，用户只看得到服务端那行「请刷新后重发」，
+// 会以为原文没了、只能凭记忆重打（验收 O126）。这时没有 B 会话可污染，可以说；正在看别的会话时
+// 仍守 outboxNoticePlacement 的判据，不说。stale 的原因不带「请刷新后重发」：原文在暂存里，刷新找不回它。
+// 条目没带会话号（升级前入队）就回不去：只剩的实例号在 server 重启后不复用（MSG-02），暂存永远认不出它——
+// 不许诺交还，原文直接写进提示，看得见、复制得到（PR #310 review）。
+export function outboxParkedNotice({ viewingInstanceId = null, stale = false, message = '', sessionId = null, text = '' } = {}) {
+  if (viewingInstanceId) return null;
+  const head = outboxDeadLetterHead({ stale, message });
+  return sessionId ? `${head}${t('。原文已保存，回到该会话时会放回输入框')}` : `${head}${t('。原文：')}${text}`;
+}
+
+export function outboxDeadLetterHead({ stale = false, message = '' } = {}) {
+  const reason = stale ? t('目标会话已关闭') : (message || t('发送失败'));
+  return `⚠️ ${t('离线时发的一条消息没有发出：')}${reason}`;
+}
+
+// 死信暂存里交还不了的条目：判了 stale（点名的实例已不在）、又只有实例号没有会话号（升级前入队）。实例号在 server
+// 重启后不复用（MSG-02），按会话、按实例号都认不出它。只有实例号但不是 stale 的不算：新会话还没拿到会话号时被拒，
+// 那个实例还活着、回去还认得（PR #339 review）；两样都没有的是新会话页发的，按目录还能交还（outboxItemTargetsViewing）。
+export function isUnreturnableDeadLetter({ stale = false, sessionId = null, instanceId = null } = {}) {
+  return stale === true && !(typeof sessionId === 'string' && sessionId) && instanceId != null;
+}
+
+// 清屏时一颗离线条目的未确认气泡要不要保住（app.js 的 clearView）。上面 'bar' 那一档在同一会话的清屏重载里会落空：
+// 规则 5 置换、磁盘 ahead 都会清屏再拉历史，负 ack 常常先于历史到达，气泡已被摘下，提示条只能插进清空的 #messages，
+// 历史随后接在它下面，把它压到顶上。保住气泡，提示就挂在它自己的气泡上，等历史落地再随气泡排到末尾。
+//
+// 只在同一会话的重载里保、只保发往这个会话的。切到别的会话时旧界面的节点归旧会话的 DOM 缓存，带过来就是串会话；
+// 调用方没说清屏前是哪个会话（prevSessionId 缺省）就不保——丢一颗气泡是本来的样子，串会话不是。
+// outboxSessionId 是条目入队时记下的会话；没有会话（新会话页、懒开还没拿到 id）一律不保。
+export function shouldCarryOutboxBubbleOnClear({ outboxSessionId = null, prevSessionId = null, sessionId = null } = {}) {
+  if (typeof sessionId !== 'string' || sessionId === '') return false;
+  return prevSessionId === sessionId && outboxSessionId === sessionId;
+}
+
+// 全量重载时，一颗被保住的未确认气泡能不能按文字让历史认领（app.js 的 settleCarriedPendingBubbles）。
+// 认领会把气泡的 clientMessageId 交给历史里那颗，之后同一个 id 的 user_message 回显被当成「已在屏幕上」、不再渲染。
+// 历史没有 clientMessageId，只能按文字从后往前认；同文的旧消息（「继续」这类短句）认错了，就是把 id 交给了别人。
+//
+// 在线发送的乐观气泡（outboxOutcome 为空，没交给 outbox）照旧认领（P0-DUP-OPT）。交给 outbox 的只在有证据说它进了
+// transcript 时认领，outboxOutcome 是它最近一次投递的结论（入队时为 'queued'），maybeSent 是有过一次结局不明的投递
+// （超时、服务端让重试）：
+//   · 'ok'：服务端收下了。
+//   · 'permanent' 且 maybeSent：放弃重试了，但先前那次可能已写进 transcript、只是回执没到——server 重启丢了去重表，
+//     再重放就回 stale。不会再拿这个 id 重发，认错的代价只是收掉一颗失败气泡；不认，已送达的历史旁边就多一颗「没发出去」。
+// 其余一律不认：排队中、在途（还没有结论）、撞闸等「重发」、等重连重试的，之后都还会拿同一个 id 再发，id 一旦交给旧消息，
+// 送达那次的回显就被吞掉；'permanent' 而没有结局不明的投递，是服务端明确没收下，历史里同文的只能是别的消息。
+export function canTextClaimPendingBubble({ outboxOutcome = null, maybeSent = false } = {}) {
+  if (outboxOutcome == null || outboxOutcome === 'ok') return true;
+  if (outboxOutcome === 'permanent') return maybeSent;
+  return false;
+}
+
 // 离线批处理后是否应 busy：仅当「仍有目标为当前 viewing 的重入队项」或「本批有 viewing 相关 ok 且
 // 指望 result 清 busy」时保持 busy。FE-NEW-001：永久失败且无剩余 viewing 队列 → 必须 clear。
 // remainingItems = 本批结束后仍在 offlineQueue 的项；viewingInstanceId 可为 null。
-export function shouldBusyAfterOfflineBatch({ viewingInstanceId, viewingCwd = null, remainingItems = [], hadViewingOk = false } = {}) {
+export function shouldBusyAfterOfflineBatch({ viewingInstanceId, viewingCwd = null, viewingSessionId = null, remainingItems = [], hadViewingOk = false } = {}) {
   // 首页（无 viewing 实例）恒不 busy：那里没有会话承载运行条，且 instances 广播里的 busy 看门狗
   // 被 `newViewing && newViewing === displayedInstanceId` 包着（app.js），newViewing 为 null 时整段
   // 跳过 ⇒ 此处一旦置上就没人清得掉，主按钮卡成「停止」直到下次 clearView。下面 hadViewingOk 那条
   // 早有同款 `viewingInstanceId != null` 前提，这里补齐 viewingPending 那一半（按 cwd 归属后才够得着）。
   if (viewingInstanceId == null) return false;
-  const viewingPending = remainingItems.some(it => outboxItemTargetsViewing(it, { viewingInstanceId, viewingCwd }));
+  const viewingPending = remainingItems.some(it => outboxItemTargetsViewing(it, { viewingInstanceId, viewingCwd, viewingSessionId }));
   if (viewingPending) return true;
   // 本批对当前 viewing 成功发出 → 短暂 busy 等 result（与在线一致）；非 viewing 成功不抬 busy
   if (hadViewingOk && viewingInstanceId != null) return true;
@@ -297,7 +433,7 @@ export function shouldBusyAfterOfflineBatch({ viewingInstanceId, viewingCwd = nu
 // 是【入队时刻】那个实例——两者不是一回事。不标注就会读成「这条排队消息在本会话发了」，
 // 叠上服务端 sysTo 的「目标会话已关闭」（同样贴当前视图）尤其像串会话。
 // 归属判据走 outboxItemTargetsViewing（与 shouldBusyAfterOfflineBatch / app.js 的 targetsViewing 同一份）。
-export function planOutboxDrainNotice({ items = [], viewingInstanceId = null, viewingCwd = null } = {}) {
+export function planOutboxDrainNotice({ items = [], viewingInstanceId = null, viewingCwd = null, viewingSessionId = null } = {}) {
   const list = Array.isArray(items) ? items : [];
   const total = list.length;
   // 冷启动/刷新后 connect 即 drain（app.js 的 socket.on('connect')），而横幅在第一个 await 之前同步
@@ -305,7 +441,7 @@ export function planOutboxDrainNotice({ items = [], viewingInstanceId = null, vi
   // 不标注：说「发往其它会话」和说「本会话」一样是编的。foreign 归 0 自然走下面不带标注的中性文案。
   const hasViewContext = viewingInstanceId != null || viewingCwd != null;
   const foreign = hasViewContext
-    ? list.filter(it => !outboxItemTargetsViewing(it, { viewingInstanceId, viewingCwd })).length
+    ? list.filter(it => !outboxItemTargetsViewing(it, { viewingInstanceId, viewingCwd, viewingSessionId })).length
     : 0;
   let text;
   if (foreign === 0) {
@@ -424,14 +560,15 @@ export function shouldClearBusyBySnapshot({ live, localBusy = false, turnStartTs
 export function presentTurnResult(payload = {}, opts = {}) {
   const p = payload && typeof payload === 'object' ? payload : {};
   const durationMs = typeof p.durationMs === 'number' ? p.durationMs : 0;
-  const cost = typeof p.costUsd === 'number' ? ` · $${p.costUsd.toFixed(4)}` : '';
+  // costUsd 是 CLI 的累计费用（resume 的会话里还带着之前的），不是这一轮花的：三种收尾行都不挂，累计成本在状态栏
+  // （验收 O57：网关 503、一个 token 没用的失败轮显示「$0.38」，读起来像这条失败的消息花了这么多钱）
   const secs = (durationMs / 1000).toFixed(1);
   const errorText = Array.isArray(p.errors) ? p.errors.filter(Boolean).join('; ') : '';
 
   if (p.interrupted) {
     return {
       kind: 'aborted',
-      statusBar: { text: `${t('已中止')} · ${secs}s${cost}`, cls: 'text-ink-faint' },
+      statusBar: { text: `${t('已中止')} · ${secs}s`, cls: 'text-ink-faint' },
       errorBar: null,
       notify: { title: t('⏹ 任务已中止'), body: `${t('用时')} ${secs}s` },
       failToolsMessage: t('已中止'),
@@ -441,7 +578,7 @@ export function presentTurnResult(payload = {}, opts = {}) {
   if (p.isError) {
     return {
       kind: 'error',
-      statusBar: { text: `${t('完成')} · ${secs}s${cost}`, cls: 'text-ink-faint' },
+      statusBar: { text: `${t('出错')} · ${secs}s`, cls: 'text-ink-faint' },
       errorBar: errorText ? { text: `${t('出错：')}${errorText}`, cls: 'text-danger' } : null,
       notify: { title: t('⚠️ 任务出错'), body: errorText.slice(0, 80) || `${t('用时')} ${secs}s` },
       failToolsMessage: errorText || t('工具执行已因本轮错误停止'),
@@ -480,6 +617,27 @@ export function planOutboxWorktreeReuse(item, openedInstanceId) {
   return { ...item, useWorktree: false, sourceBranch: null, instanceId: openedInstanceId };
 }
 
+// 上面这组锚点按「哪一个新会话页」分组：同一页连打的几条并成一个会话，但用户有意新开的另一页要各开各的
+// （2026-10-10 第四轮 review P2）。两页的条目 instanceId 都是 null、cwd 也一样，只有入队时记下的页标识分得开。
+// 升级前入队的条目没有它，归同一组——行为与从前相同。
+export const outboxComposeKey = item => (typeof item?.composeId === 'string' ? item.composeId : '');
+
+// 同一件事的「无文件夹」版（2026-09-24）：离线时在「无文件夹」的新会话页上连打几条，每条都以
+// {instanceId:null, cwd:<scratch 根>} 入队；服务端的 scratch 分配器只合并并发、合并不了先后，
+// 逐条重放就会一条建一个 scratch 目录、开一个会话。第一条照原样发（由它懒开），后续各条改投它开出来的实例。
+// scratchRoot 未知（旧服务端）时不动任何条目。
+export function planOutboxScratchReuse(item, openedInstanceId, scratchRoot) {
+  if (!item || !scratchRoot || item.instanceId || item.cwd !== scratchRoot) return item;
+  if (!openedInstanceId) return item;
+  return { ...item, instanceId: openedInstanceId };
+}
+export function nextOutboxScratchAnchor(item, decision, current, scratchRoot) {
+  if (current) return current;
+  if (!item || !scratchRoot || item.instanceId || item.cwd !== scratchRoot) return current ?? null;
+  if (!decision || decision.outcome !== 'ok') return current ?? null;
+  return decision.instanceId || null;
+}
+
 // 这一条重放成功后，本批的「worktree 已开」锚点该变成什么。
 // 只认【原始意图是 useWorktree 且此前还没锚】的那一条 —— 后续条目已被改投，不该覆盖锚点；
 // 普通条目（没勾 worktree）更不该把无关会话的实例写进来。
@@ -488,4 +646,20 @@ export function nextOutboxWorktreeAnchor(item, decision, current) {
   if (!item || item.useWorktree !== true) return current ?? null;
   if (!decision || decision.outcome !== 'ok') return current ?? null;
   return decision.instanceId || null;
+}
+
+// 普通工作区新会话页的同一件事（O66 review）：离线连发的条目都是 {instanceId:null}。第一条懒开实例；后面各条
+// 服务端经 viewing 投给它、撞上它那一轮被拒收。拿着 {instanceId:null} 去排队，本轮结束时 findOutboxTargetInstance
+// 认不出目标，永远不续发。所以记下第一条开出来的实例，被拒收的条目按它登记（planOutboxBlockedTarget）。
+// 只管登记与之后的「重发」：首次投递照旧不带实例号，路由仍由服务端决定。worktree / 无文件夹各有自己的锚，不在这里。
+export function nextOutboxLazyOpenAnchor(item, decision, current, scratchRoot) {
+  if (current) return current;
+  if (!item || item.instanceId != null || item.useWorktree === true) return null;
+  if (scratchRoot && item.cwd === scratchRoot) return null;
+  if (!decision || decision.outcome !== 'ok') return null;
+  return decision.instanceId || null;
+}
+export function planOutboxBlockedTarget(item, openedInstanceId) {
+  if (!item || item.instanceId != null || !openedInstanceId) return item;
+  return { ...item, instanceId: openedInstanceId };
 }

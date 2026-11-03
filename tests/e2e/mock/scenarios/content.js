@@ -1,5 +1,71 @@
 export function createContentScenarios(getContext) {
+  // 先把这条命令开的那一轮收尾（idle 广播 + result），再做后续动作。前端发出消息后一直停在运行态直到收到 result，
+  // 不收尾的话下一条命令会被 sendChatMessage 卡在「等停止键消失」上。
+  const finishTurnThen = (activeInst, messageId, after) => {
+    const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, mockServicePayload, getMockCanRestart } = getContext();
+    if (activeInst) activeInst.state = 'idle';
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst?.cwd, ...getContext().mockDirFields(), instances: mockInstances }
+    });
+    socket.emit('agent:event', {
+      seq: 1, epoch: activeEpoch, sessionId: activeInst?.sessionId ?? null, instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'result', payload: { messageId, durationMs: 1, costUsd: 0, isError: false, models: [activeModel] }
+    });
+    after();
+  };
   return [
+    {
+      // 验收 O59：本地 slash 命令（/context、/cost）的输出。真 server 里它是 agent 合成 messageId 的一条 text_delta，
+      // 紧跟着就是 result（不经模型，没有持续几秒的流）；两者都经 io.to('approved') 广播给所有已批准的端。
+      // 这里同样用 io.emit——mock 的通用回显走 socket.emit 只给发送端，那样观察端什么都收不到，测不出东西。
+      command: 'test:local-command-output',
+      run: async ({ activeInst }) => {
+        const { io, activeEpoch, viewingInstanceId, activeModel, mockInstances, mockServicePayload, getMockCanRestart } = getContext();
+        const base = { epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId };
+        io.emit('agent:event', {
+          ...base, seq: 1, ts: Date.now(), type: 'text_delta',
+          payload: { messageId: 'local-cmd-mock-1', text: '## Context Usage\n\n| Category | Tokens |\n|---|---|\n| System prompt | 3.1k |' },
+        });
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances },
+        });
+        io.emit('agent:event', {
+          ...base, seq: 2, ts: Date.now(), type: 'result', payload: { durationMs: 10, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
+      // 验收 O25 / O90：用户气泡按纯文本显示，和终端里看到的原样输入一致。用户气泡有三个建出点：
+      // 乐观气泡转正（发出去的这条，由通用回显走到）、在线新建（不带 clientMessageId 的 user_message，
+      // 另一台设备发的形态）、历史渲染（history_append 走 renderHistoryBubbles）。这里把后两条也各推一条。
+      prefix: 'test:raw-user',
+      run: async ({ activeInst }) => {
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, mockServicePayload, getMockCanRestart } = getContext();
+        const raw = label => `${label} <Header> keep <div className="wrap">w</div> <b>${label}-b</b> **${label}-star**\n  two  spaces`;
+        const base = { epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId };
+        socket.emit('agent:event', {
+          ...base, seq: 1, ts: Date.now(), type: 'user_message', payload: { text: raw('LIVE'), uuid: 'u-raw-live' },
+        });
+        socket.emit('agent:event', {
+          ...base, seq: 0, ts: Date.now(), type: 'history_append',
+          payload: { external: true, messages: [{ role: 'user', content: raw('HIST'), uuid: 'u-raw-hist', timestamp: new Date().toISOString() }] },
+        });
+        socket.emit('agent:event', {
+          ...base, seq: 2, ts: Date.now(), type: 'text_delta', payload: { messageId: 'msg_raw_user_1', text: 'raw user fixture' },
+        });
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances },
+        });
+        socket.emit('agent:event', {
+          ...base, seq: 3, ts: Date.now(), type: 'result', payload: { messageId: 'msg_raw_user_1', durationMs: 10, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
     {
       prefix: 'test:message-edit',
       run: async ({ activeInst }) => {
@@ -8,7 +74,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         await delay(250);
@@ -23,11 +89,33 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_message_edit_1', durationMs: 250, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      // 验收 O45：回复里有一张 12 列的宽表格。375 宽下它把整个消息列表撑出横向滚动、每格被压到一字一行。
+      command: 'test:wide-table',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel, delay } = getContext();
+        const cols = Array.from({ length: 12 }, (_, i) => `column-${i + 1}`);
+        const table = [`| ${cols.join(' | ')} |`, `| ${cols.map(() => '---').join(' | ')} |`, `| ${cols.map((_, i) => `value-${i + 1}`).join(' | ')} |`].join('\n');
+        // 再来一张全中文的（O45 残留）：英文格宽落在最长单词上，中文每个字之间都能断行，只修英文那张会漏掉它。
+        // 必须整列都是中文——和英文同列时列宽被英文撑开，看不出来
+        const zhCols = Array.from({ length: 12 }, (_, i) => `第${i + 1}列`);
+        const zhTable = [`| ${zhCols.join(' | ')} |`, `| ${zhCols.map(() => '---').join(' | ')} |`, `| ${zhCols.map((_, i) => `第${i + 1}项的说明`).join(' | ')} |`].join('\n');
+        await delay(50);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_wide_table', text: `wide table fixture\n\n${table}\n\n${zhTable}\n` },
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_wide_table', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] },
         });
       },
     },
@@ -42,7 +130,7 @@ export function createContentScenarios(getContext) {
         const instancesPayload = () => ({
           viewingInstanceId,
           viewingCwd: activeInst.cwd,
-          dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+          ...getContext().mockDirFields(),
           instances: mockInstances,
           canRestart: getMockCanRestart(),
           service: mockServicePayload(),
@@ -97,6 +185,11 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armHistoryOrderRace(); },
     },
     {
+      // P0-PICK-8：武装「下一个懒开的实例一开出来就有一轮在跑」，离线连发的第二条因此撞上在途轮。
+      command: 'test:arm-fresh-turn-running',
+      run: async () => { getContext().armFreshTurnRunning(); },
+    },
+    {
       // P0-ACK-TIMEOUT：武装「session:history 的 ack 永不返回、但连接没断」，下一次切入 Timeline Session 生效。
       command: 'test:arm-history-ack-timeout',
       run: async () => { getContext().armHistoryAckTimeout(); },
@@ -105,6 +198,80 @@ export function createContentScenarios(getContext) {
       // P0-SYNC-ACK-TIMEOUT：武装「bindView 的 sync:since ack 永不返回、但连接没断」，下一次切入 Timeline Session 生效。
       command: 'test:arm-sync-ack-timeout',
       run: async () => { getContext().armSyncAckTimeout(); },
+    },
+    {
+      // #329 review P2：同上，吞掉 ack 后 100ms 让 Timeline Session 的进程崩溃（回放缓冲还开着）。
+      command: 'test:arm-sync-ack-timeout-crash',
+      run: async () => { getContext().armSyncAckTimeoutCrash(); },
+    },
+    {
+      // P0-05-HIST-FULL：武装「Timeline Session 的历史里多一对被截断的 Bash 工具卡」，下一次拉历史生效。
+      command: 'test:arm-history-long-tool',
+      run: async () => { getContext().armHistoryLongTool(); },
+    },
+    {
+      // P0-08-HIST：武装「Timeline Session 的历史里多四张 AskUserQuestion 卡」（#455 新旧两种结果格式的回放），下一次拉历史生效。
+      command: 'test:arm-history-ask-question',
+      run: async () => { getContext().armHistoryAskQuestion(); },
+    },
+    {
+      // P0-40c：武装「下一条 user:message 回一个可重试的负 ack」，前端会把它转进 outbox 自动重发。
+      command: 'test:arm-send-transient-fail',
+      run: async () => { getContext().armSendTransientFail(); },
+    },
+    {
+      // P0-02d7：武装「下一条离线重放回永久拒绝」（验收 O31）。
+      command: 'test:arm-outbox-permanent',
+      run: async () => { getContext().armOutboxPermanent(); },
+    },
+    {
+      // P0-02d14：武装「下一次连入时 server 已重启」——所有实例消失，离线重放指向的实例按真 server 落 stale（验收 O31）。
+      command: 'test:arm-outbox-restart-stale',
+      run: async () => { getContext().armOutboxRestartStale(); },
+    },
+    {
+      // P0-RESUME-DIV：武装「Archived Planning Session 续接会丢掉最近那段对话」，之后在那个会话里发消息被发送闸拒收。
+      command: 'test:arm-resume-divergence',
+      run: async () => { getContext().armResumeDivergence(); },
+    },
+    {
+      // P0-RESUME-DIVe：同上，但挂在 worktree 会话上，且拒收前先模拟规则 5 置换（同一会话换成新实例并广播）。
+      command: 'test:arm-resume-divergence-worktree-swap',
+      run: async () => { getContext().armResumeDivergenceWorktreeSwap(); },
+    },
+    {
+      // P0-RESUME-DIVf：挂在 Archived Planning Session 上，拒收前先模拟规则 5 置换——离线重放的那条撞闸时，
+      // 入队时的句柄就此作废，「重发」要靠服务端按会话改投（MSG-02）。
+      command: 'test:arm-resume-divergence-swap',
+      run: async () => { getContext().armResumeDivergenceSwap(); },
+    },
+    {
+      // P0-02d4：Archived Planning Session 的下一条离线重放触发规则 5 置换（同一会话换成新实例），新实例的 sync:since
+      // 报磁盘 ahead 逼出清屏重载。同一批后面各条拿着旧号撞上第 1 条开跑的那轮。
+      command: 'test:arm-outbox-replay-swap',
+      run: async () => { getContext().armOutboxReplaySwap(); },
+    },
+    {
+      // P0-02d6：同上，但同一批后面那条的在途轮拒收压到这个会话的历史回包之后才发；放出之后那一轮跑完，「重发」照常收下。
+      command: 'test:arm-outbox-replay-swap-history-first',
+      run: async () => { getContext().armOutboxReplaySwapHistoryFirst(); },
+    },
+    {
+      // 验收 O29：同上，但第 1 条的 user_message 回显先于重载的历史回包到达（见 mock 的 outboxReplaySwapEchoFirst）。
+      command: 'test:arm-outbox-replay-swap-echo-first',
+      run: async () => { getContext().armOutboxReplaySwapEchoFirst(); },
+    },
+    {
+      // P0-02d9（验收 O66）：之后的离线重放条目每条开一轮、挂到 /__outbox-turn-end 才收尾；本条自身立即收尾。
+      command: 'test:arm-outbox-turns',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel } = getContext();
+        getContext().armOutboxTurns();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_arm_outbox_turns', durationMs: 10, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
     },
     {
       // P0-TS6：只读镜像的增量追平（终端里跑、server 轮询 transcript 检出新落定消息 → history_append）。
@@ -137,6 +304,66 @@ export function createContentScenarios(getContext) {
           seq: batches.length + 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test',
           instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_history_append_ts', durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] },
+        });
+      },
+    },
+    {
+      // 会话里的图片 · live 工具截图。形态复刻 app/src/agent/agent.js：tool_result 只带 images 引用
+      // （一张可取、一张超单张上限 tooLarge），摘要只剩文字。图由前端经 image:get 按需取（server.js 的 mock）。
+      command: 'test:tool-screenshot',
+      run: async ({ activeInst }) => {
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart } = getContext();
+        console.log('[mock] Starting test:tool-screenshot sequence');
+        const instancesPayload = () => ({ canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances });
+        activeInst.state = 'busy';
+        io.emit('agent:event', { seq: 0, epoch: 'server', sessionId: null, ts: Date.now(), type: 'instances', payload: instancesPayload() });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_shot', name: 'mcp__claude-in-chrome__computer', inputSummary: '{"action":"screenshot"}' }
+        });
+        await delay(200);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: {
+            toolUseId: 't_shot', ok: true, outputSummary: 'Successfully captured screenshot',
+            images: [
+              { ref: 't:t_shot:0', mediaType: 'image/png', bytes: 159 },
+              { ref: 't:t_shot:1', mediaType: 'image/png', bytes: 3355443, tooLarge: true },
+            ],
+          }
+        });
+        activeInst.state = 'idle';
+        io.emit('agent:event', { seq: 0, epoch: 'server', sessionId: null, ts: Date.now(), type: 'instances', payload: instancesPayload() });
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_tool_screenshot', durationMs: 200, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      // 会话里的图片 · 用户贴图（终端 / 桌面端粘贴）。走 history_append（与刷新后 loadHistory 同一渲染器），
+      // 形态复刻 app/src/sessions/history.js：images 挂在用户文本条上；纯图消息 content 为空串。
+      // 第二张的引用 mock 不认 → 取图失败，必须显示「图片无法加载」而不是让整条消息出错。
+      command: 'test:history-images',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId } = getContext();
+        console.log('[mock] Starting test:history-images sequence');
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'history_append',
+          payload: {
+            external: true,
+            messages: [
+              { role: 'user', content: '[Image #1] 这个按钮的位置不对', uuid: 'u-img-paste', images: [{ ref: 'u:u-img-paste:0', mediaType: 'image/png', bytes: 159 }] },
+              { role: 'user', content: '', uuid: 'u-img-gone', images: [{ ref: 'u:u-img-gone:0', mediaType: 'image/jpeg', bytes: 2048 }] },
+              { role: 'assistant', content: '看到了，按钮偏右了。', uuid: 'a-img-1' },
+            ],
+          },
+        });
+        // 收尾 result：客户端发这条命令即 setBusy(true)，不收尾的话同页面后续 sendChatMessage 会白等（同 test:history-append-ts）
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_history_images', durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] },
         });
       },
     },
@@ -179,6 +406,100 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 历史里的 /compact 压缩摘要（O115）。字段形态复刻 app/src/sessions/history.js 的产出：摘要行换成
+      // { role:'system', kind:'compact_summary', content:'' } 标记，不带 uuid。走 history_append，与刷新后
+      // loadHistory 同一渲染器。
+      command: 'test:history-compact',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId } = getContext();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'history_append',
+          payload: {
+            external: true,
+            messages: [
+              { role: 'user', content: '压缩前的问题', uuid: 'u-compact-1' },
+              { role: 'system', kind: 'compact_summary', content: '' },
+              { role: 'user', content: '压缩后的问题', uuid: 'u-compact-2' },
+            ],
+          },
+        });
+      },
+    },
+    {
+      // 桌面端 visualize 工具（show_widget）画的图。字段形态复刻 app/src/shared/tool-summary.js 的 widgetPayload：
+      // SVG 带完整 code；超限的后端根本不带 widget（与普通工具卡无异，这里不再造）。
+      // 四张卡各验一条：① 完整 SVG → 图片 ② HTML 组件 → 只显示提示，带了 code 也不执行
+      // ③ 半截 SVG → 退回一行工具调用 ④ XML 不合法（裸 &）→ 图片解码失败，撤掉图、留工具卡。
+      // ①② 的源码里埋了脚本与事件处理器：任何一条路径把它们放进页面 DOM，window.__widgetRan 就会被写上。
+      command: 'test:widget',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel, delay } = getContext();
+        const base = seq => ({ seq, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now() });
+        const widgets = [
+          { id: 't_widget_svg', widget: { title: 'mock_architecture', kind: 'svg', code: MOCK_WIDGET_SVG } },
+          { id: 't_widget_html', widget: { title: 'mock_calculator', kind: 'html', code: '<div>calc</div><img src="x" onerror="window.__widgetRan=\'html\'"><script>window.__widgetRan=\'html-script\'</script>' } },
+          { id: 't_widget_half', widget: { title: 'mock_half', kind: 'svg', code: '<svg viewBox="0 0 100 40"><rect width="10" height="10"/>' } },
+          { id: 't_widget_badxml', widget: { title: 'mock_bad_xml', kind: 'svg', code: '<svg viewBox="0 0 100 40"><text class="t" x="4" y="20">R&D</text></svg>' } },
+          // ⑤ 孤立代理字符（合法 JSON 转义就能进来）：encodeURIComponent 会抛，抛了工具卡都插不进去
+          { id: 't_widget_surrogate', widget: { title: 'mock_surrogate', kind: 'svg', code: MOCK_WIDGET_SURROGATE } },
+        ];
+        let seq = 1;
+        for (const w of widgets) {
+          socket.emit('agent:event', {
+            ...base(seq++), type: 'tool_use', payload: {
+              toolUseId: w.id, name: 'mcp__visualize__show_widget',
+              inputSummary: JSON.stringify({ title: w.widget.title, loading_messages: ['drawing'], widget_code: w.widget.code }).slice(0, 600),
+              widget: w.widget,
+            },
+          });
+          await delay(60);
+          socket.emit('agent:event', {
+            ...base(seq++), type: 'tool_result',
+            payload: { toolUseId: w.id, ok: true, outputSummary: '[{"type":"text","text":"Content rendered and shown to the user."}]' },
+          });
+        }
+        socket.emit('agent:event', { ...base(seq++), type: 'text_delta', payload: { messageId: 'msg_widget_1', text: 'Widget fixture done.' } });
+        socket.emit('agent:event', {
+          ...base(seq), type: 'result', payload: { messageId: 'msg_widget_1', durationMs: 120, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
+      // 同一张图走历史追平（history_append → renderHistoryBubbles，与刷新后 loadHistory 同一个渲染器）。
+      // 桌面端会话在 CCM 里就是这么显示的：server 轮询 transcript，history.js 展开出带 widget 的 tool_use 条目。
+      command: 'test:widget-history',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel } = getContext();
+        const ts = new Date().toISOString();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'history_append', payload: {
+            external: true,
+            messages: [
+              { role: 'user', content: 'Draw the architecture', uuid: 'u-widget-h1', timestamp: ts, entrypoint: 'claude-desktop' },
+              // 坏数据在前：抛错会中断整块历史渲染，后面的图和文字都出不来
+              {
+                kind: 'tool_use', role: 'assistant', toolUseId: 'h_widget_surrogate', name: 'mcp__visualize__show_widget',
+                inputSummary: '{"title":"mock_surrogate"}',
+                widget: { title: 'mock_surrogate', kind: 'svg', code: MOCK_WIDGET_SURROGATE }, timestamp: ts, entrypoint: 'claude-desktop',
+              },
+              {
+                kind: 'tool_use', role: 'assistant', toolUseId: 'h_widget_svg', name: 'mcp__visualize__show_widget',
+                inputSummary: JSON.stringify({ title: 'mock_architecture', widget_code: MOCK_WIDGET_SVG }).slice(0, 600) + ' …（已截断）',
+                widget: { title: 'mock_architecture', kind: 'svg', code: MOCK_WIDGET_SVG }, timestamp: ts, entrypoint: 'claude-desktop',
+              },
+              { kind: 'tool_result', role: 'user', toolUseId: 'h_widget_svg', ok: true, outputSummary: 'Content rendered and shown to the user.', timestamp: ts },
+            ],
+          },
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_widget_history', durationMs: 10, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       command: 'test:tool',
       run: async ({ activeInst }) => {
         const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart } = getContext();
@@ -186,7 +507,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -247,7 +568,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -264,7 +585,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -293,7 +614,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -309,7 +630,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -321,7 +642,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -340,7 +661,7 @@ export function createContentScenarios(getContext) {
         activeInst.turnRunning = true;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -357,7 +678,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -421,7 +742,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 9, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -430,14 +751,36 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // P0-02j：先断一次传输层，客户端重连后发的 sync:since 被扣住、随即再断一次（见 server.js syncHoldThenDropArmed）。
+      // 与 test:disconnect-now 的区别：这里关的是 engine 传输层（客户端 reason=transport close，走自动重连），
+      // 那边是 socket.disconnect(true)（io server disconnect，客户端不自动重连）。
+      command: 'test:sync-inflight-drop',
+      run: async ({ activeInst }) => {
+        const { socket, armSyncHoldThenDrop } = getContext();
+        finishTurnThen(activeInst, 'msg_sync_inflight_drop', () => {
+          armSyncHoldThenDrop();
+          setTimeout(() => socket.conn.close(), 50);
+        });
+      },
+    },
+    {
+      // 单纯断一次传输层（客户端走自动重连）。P0-02j 用它验「之前那次竞态之后，再断线还能自己连回来」。
+      command: 'test:transport-drop',
+      run: async ({ activeInst }) => {
+        const { socket } = getContext();
+        finishTurnThen(activeInst, 'msg_transport_drop', () => setTimeout(() => socket.conn.close(), 50));
+      },
+    },
+    {
       command: 'test:disconnect-now',
       run: async ({ activeInst }) => {
         const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart } = getContext();
         console.log('[mock] Completing current turn, then forcing a socket disconnect');
-        activeInst.state = 'busy';
+        // 新会话页上发的（没有查看实例）：没有那一轮可收尾，只断线（P0-02d16）
+        if (activeInst) activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst?.cwd ?? mockInstances[0].cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         await delay(100);
@@ -446,10 +789,10 @@ export function createContentScenarios(getContext) {
           type: 'text_delta', payload: { messageId: 'msg_disconnect_now_1', text: '模拟断线前的最后一条回复。' }
         });
 
-        activeInst.state = 'idle';
+        if (activeInst) activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst?.cwd ?? mockInstances[0].cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -474,7 +817,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -522,6 +865,48 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 真机回归（2026-11-02）：后台子代理在主轮 result 之后还在推流。这段时间权威快照是
+      // state=busy、bgActive=true、turnRunning=false，归后台任务横幅管，运行条不该亮。
+      // 子代理三种流事件（thinking / 内部工具 / 正文）各发一条，任何一处还会点亮运行条都会被测出来。
+      command: 'test:bg-subagent-after-result',
+      run: async ({ activeInst }) => {
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart } = getContext();
+        const base = { epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId };
+        socket.emit('agent:event', {
+          ...base, seq: 1, ts: Date.now(), type: 'tool_use', payload: {
+            toolUseId: 'agent-bg-1', name: 'Agent',
+            inputSummary: JSON.stringify({ description: 'Scan repo in background', subagent_type: 'Explore', run_in_background: true }),
+          }
+        });
+        await delay(100);
+        Object.assign(activeInst, { state: 'busy', bgActive: true, turnRunning: false });
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          ...base, seq: 2, ts: Date.now(), type: 'result',
+          payload: { messageId: 'msg_bg_subagent_main', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+        await delay(300);
+        const sub = { parentToolUseId: 'agent-bg-1', subagentType: 'Explore' };
+        socket.emit('agent:event', {
+          ...base, seq: 3, ts: Date.now(), type: 'thinking_delta',
+          payload: { messageId: 'msg_bg_sa_1', text: 'BG_SUBAGENT_THINKING', ...sub }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          ...base, seq: 4, ts: Date.now(), type: 'tool_use',
+          payload: { toolUseId: 't_bg_sa_grep', name: 'Grep', inputSummary: JSON.stringify({ pattern: 'TODO' }), ...sub }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          ...base, seq: 5, ts: Date.now(), type: 'text_delta',
+          payload: { messageId: 'msg_bg_sa_1', text: 'BG_SUBAGENT_TEXT', ...sub }
+        });
+      },
+    },
+    {
       // TC-24：子 agent 可折叠卡——主 Agent tool_use 预建卡 + parentToolUseId 嵌套 text/thinking/tool
       // 默认收起；展开后可见子 agent 正文与内部工具。对齐 agent.js forwardSubagentText 分流字段。
       command: 'test:subagent',
@@ -539,7 +924,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         // 主会话：启动 Agent 工具（input 含 subagent_type + description）→ 前端预建可折叠卡
@@ -631,7 +1016,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -654,7 +1039,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -714,7 +1099,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -768,7 +1153,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         // Send thinking indicator
@@ -814,7 +1199,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -831,7 +1216,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -865,7 +1250,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -884,7 +1269,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         await delay(80);
         socket.emit('agent:event', {
@@ -894,7 +1279,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -910,7 +1295,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         const responseText = [
@@ -925,8 +1310,14 @@ export function createContentScenarios(getContext) {
           '<a href="javascript:window.__ccmUnsafeMarkdownClickFired = true">unsafe javascript link</a>',
           '<span onclick="window.__ccmUnsafeMarkdownClickFired = true">unsafe click probe</span>',
           '',
-          // Tailwind 运行时会把 class 现编成 CSS：不剥的话这就是一个盖住审批按钮的全屏遮罩
-          '<div class="fixed inset-0 z-[2147483647] pointer-events-none" data-probe="class-overlay">class overlay probe</div>'
+          // tw.css 里有现成的 fixed、inset-0、z-50 这类工具类：不剥的话就能拼出盖住审批按钮的全屏遮罩
+          '<div class="fixed inset-0 z-[2147483647] pointer-events-none" data-probe="class-overlay">class overlay probe</div>',
+          '',
+          // <style> 元素整页生效、按 id 就能改写审批按钮：不剥的话「允许」成了铺满视口的透明层，点哪都是批准。
+          // <svg> 里的 <style> 走 DOMPurify 的 SVG 表，单独放一条
+          '<style>#permAllow{position:fixed;inset:0;z-index:2147483647;opacity:.002}</style>',
+          '',
+          '<svg><style>#permDeny{position:fixed}</style></svg>'
         ].join('\n');
 
         socket.emit('agent:event', {
@@ -938,7 +1329,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -997,7 +1388,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         await delay(150);
@@ -1009,7 +1400,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -1025,3 +1416,23 @@ export function createContentScenarios(getContext) {
 
 // 与 app/server.js MOCK_ATTACH_PNG 字节数一致（1×1 PNG fixture 的解码长度）；仅用于 meta.size 展示，无行为语义。
 const MOCK_PNG_SIZE = 70;
+
+// show_widget 夹具：形态照桌面端真实产出（无 xmlns、width="100%"、viewBox 680 宽、c-* 色板 class、
+// var(--b) 变量、onclick 里的 sendPrompt），另埋脚本与 onload 验证图片里不执行。
+const MOCK_WIDGET_SVG = '<svg width="100%" viewBox="0 0 680 200" role="img" onload="window.__widgetRan=\'svg-onload\'">'
+  + '<title>Mock architecture</title><desc>Two boxes and an arrow.</desc>'
+  + '<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">'
+  + '<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5"/></marker></defs>'
+  + '<script>window.__widgetRan=\'svg-script\'</script>'
+  + '<rect x="20" y="10" width="640" height="180" rx="20" fill="none" stroke="var(--b)" stroke-width="0.5" stroke-dasharray="4 4"/>'
+  + '<g class="node c-purple" onclick="sendPrompt(\'phone\')"><rect x="60" y="60" width="220" height="56" rx="8" stroke-width="0.5"/>'
+  + '<text class="th" x="170" y="78" text-anchor="middle" dominant-baseline="central">手机 / PWA</text>'
+  + '<text class="ts" x="170" y="96" text-anchor="middle" dominant-baseline="central">单页应用</text></g>'
+  + '<line x1="280" y1="88" x2="398" y2="88" class="arr" marker-end="url(#arrow)"/>'
+  + '<g class="c-gray"><rect x="400" y="60" width="220" height="56" rx="8" stroke-width="0.5"/>'
+  + '<text class="th" x="510" y="78" text-anchor="middle" dominant-baseline="central">本机 claude</text>'
+  + '<text class="ts" x="510" y="96" text-anchor="middle" dominant-baseline="central">transcript</text></g>'
+  + '</svg>';
+
+// 孤立代理字符的 SVG：\ud800 经 JSON 转义原样到前端，单独一个高位代理没有配对。
+const MOCK_WIDGET_SURROGATE = '<svg viewBox="0 0 100 40"><text class="t" x="4" y="20">\ud800</text></svg>';
