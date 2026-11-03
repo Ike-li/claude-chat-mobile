@@ -33,20 +33,29 @@ python3 ../seo-baseline/compare.py    # 与基线对比，期望 Findings: 0
 ```
 
 Google 不在 IndexNow 这条链上 —— 它只认 Search Console，必须人工提交。
-2026-09-21 验证的 GSC 资源是「网址前缀」`https://ike-li.github.io/claude-chat-mobile/`（旧地址），
-验证文件是根目录下的 `google*.html`，**别删**。2026-10-27 换到 `ccm.osolee.cc.cd` 之后，新域名要在
-GSC 里另加资源；这一行曾随那次批量换 URL 被误改成新域名，2026-11-03 改回。
+
+根目录下这几份是搜索平台的所有权验证文件，**都别删**（删了对应资源会掉验证）：
+
+| 文件 | 平台 | 对应资源 |
+|---|---|---|
+| `googlec3678881a327ba45.html` | Google Search Console | 网址前缀 `https://ccm.osolee.cc.cd/`（2026-11-03 加，现用） |
+| `google00965f7c867cac6e.html` | Google Search Console | 网址前缀 `https://ike-li.github.io/claude-chat-mobile/`（2026-09-21，旧地址） |
+| `BingSiteAuth.xml` | Bing Webmaster Tools | `https://ccm.osolee.cc.cd/`（2026-11-03 加） |
+| `f4de549d69b937e21baa110749dcc3bc.txt` | IndexNow | 整个主机（`submit-indexnow.mjs` 用的 key） |
+
+这几份不在 sitemap 里，也不该有入链，`check-link-graph` 只查 sitemap 里的页面，不会把它们当孤儿页。
 
 ## 两个反直觉的点
 
 - **`robots.txt` 从 2026-10-27 起才生效**。RFC 9309 规定它只在主机根被读取；站点换到
   自定义域名 `ccm.osolee.cc.cd` 的根上之后，这份文件才第一次被爬虫读到（之前在
-  `ike-li.github.io/claude-chat-mobile/` 子路径下，没人读）。搜索爬虫全放行，训练爬虫按名单
-  `Disallow`；不想被收录的页面各自带 `<meta name="robots" content="noindex">`（目前只有 `404.html`），
-  别指望 `Disallow`。训练爬虫名单是 2026-11-03 从 Cloudflare 托管段搬过来的（去掉了百度搜索的
-  Baiduspider），同时关掉了 Cloudflare 的 Bot Preference Sync，所以**线上就是这份文件本身，名单
-  不会自动更新**。哪天 Cloudflare 后台又把同步打开，前面会重新多出一段托管内容，Baiduspider 也会
-  重新被禁。实际生效的规则以 `curl https://ccm.osolee.cc.cd/robots.txt` 为准。
+  `ike-li.github.io/claude-chat-mobile/` 子路径下，没人读）。2026-11-03 起所有爬虫全放行：搜索、
+  AI 检索、AI 训练都不设 `Disallow`，`Content-Signal` 三项都是 `yes`；不想被收录的页面各自带
+  `<meta name="robots" content="noindex">`（目前只有 `404.html`）。**这份文件说了不全算**，Cloudflare
+  后台还有两处得保持现状：Bot Preference Sync 要关着（一打开就会按后台策略在前面插一段托管的
+  `Disallow` 名单，之前百度就是被它禁的）；「安全性 → 设置 → AI 爬网程序和代理访问策略」三类都要是
+  「允许」（那是边缘拦截，robots.txt 管不到；之前训练类是「禁止」，AI Crawl Control 里 15 个爬虫显示
+  为被拦）。实际生效的规则以 `curl https://ccm.osolee.cc.cd/robots.txt` 为准。
 - **`check-link-graph` 报绿不代表每条链接都必要**。站内链接有冗余（删掉首页指向
   `/diagrams/` 的链接后它仍然全绿，因为 docs-site 那 28 页也指向那里）。它守的是
   「没有页面掉出链接图」，不是「链接结构最优」。

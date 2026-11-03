@@ -27,17 +27,17 @@
 # ---------------------------------------------------------------------------
 # 上面是 Cloudflare 的 Content Signals 政策原文（CC0），照搬自 2026-11-03 的线上版本。
 #
-# 2026-11-03 起，这份文件就是线上 robots.txt 的全部内容。
-# 在那之前，Cloudflare 的 Bot Preference Sync 会按后台「训练＝禁止」的设置，在这份文件
-# 前面插一段 Disallow 名单（后台位置：安全性 → 设置 → AI 爬网程序和代理访问策略 →
-# 启用自动程序偏好同步）。那段名单只能整类开关，没法给单个爬虫开例外，而名单里有
-# Baiduspider，也就是百度搜索用的爬虫，所以百度一页都收录不了。Cloudflare 给的例外做法
-# 是关掉同步、自己写名单，所以同步已经关了，名单搬到了下面：
-#   · 训练爬虫名单：2026-11-03 Cloudflare 生成的那份去掉 Baiduspider，其余原样保留
-#   · PetalBot（华为 Petal 搜索的爬虫）仍然禁止：Cloudflare 在边缘把它归为 AI Crawler，
-#     按训练类直接拦截，这里放行它也抓不到。要放它，得先改 Cloudflare 的训练类策略
-#   · 这份名单不会再自动更新。边缘拦截仍由 Cloudflare 按它自己的爬虫库维护，这里只是
-#     写给守规矩的爬虫看的声明
+# 2026-11-03 起，本站对所有爬虫全放行：搜索引擎、AI 检索、AI 训练都可以抓，
+# 下面不设任何 Disallow。Content-Signal 里 search / ai-input / ai-train 都是 yes；
+# use 不写，按上面 (c) 的定义，不写就是既不授权也不限制。
+#
+# 这份文件就是线上 robots.txt 的全部内容，前提是 Cloudflare 后台两处保持现状：
+#   · AI Crawl Control → 信号 → Enable Bot Preference Sync 关着。它一打开，就会按后台策略
+#     在这份文件前面插一段托管的 Disallow 名单（2026-11-03 之前就是这样，名单里连百度搜索的
+#     Baiduspider 都有）
+#   · 安全性 → 设置 → AI 爬网程序和代理访问策略：搜索、训练、代理三类都是「允许」。
+#     这是边缘那一层，和本文件无关：2026-11-03 之前训练类是「禁止」，AI Crawl Control 里
+#     PetalBot、GPTBot、ClaudeBot 等 15 个爬虫显示为被拦，这里写什么都放不进来
 #   · 不想被收录的页面各自带 <meta name="robots" content="noindex">（目前只有
 #     404.html），不靠这里的 Disallow
 #   · Bing / Yandex / Seznam 另走 IndexNow 推送（见 _build/submit-indexnow.mjs）
@@ -46,102 +46,10 @@
 # 主机根下的 robots.txt）。线上实际内容以 curl https://ccm.osolee.cc.cd/robots.txt 为准。
 
 User-agent: *
-Content-Signal: search=yes,ai-train=no,use=reference
+Content-Signal: search=yes,ai-input=yes,ai-train=yes
 Allow: /
 # Agent & LLM quick indexes
 Allow: /llms.txt
 Allow: /skill.md
-
-# Training crawlers
-User-agent: Amazonbot
-Disallow: /
-
-User-agent: Applebot-Extended
-Disallow: /
-
-User-agent: Bytespider
-Disallow: /
-
-User-agent: CCBot
-Disallow: /
-
-User-agent: ClaudeBot
-Disallow: /
-
-User-agent: Diffbot
-Disallow: /
-
-User-agent: Google-Extended
-Disallow: /
-
-User-agent: GPTBot
-Disallow: /
-
-User-agent: omgili
-Disallow: /
-
-User-agent: anthropic-ai
-Disallow: /
-
-User-agent: Claude-Web
-Disallow: /
-
-User-agent: cohere-ai
-Disallow: /
-
-User-agent: MistralAI-Training
-Disallow: /
-
-User-agent: meta-externalagent
-Disallow: /
-
-User-agent: GoogleOther
-Disallow: /
-
-User-agent: PetalBot
-Disallow: /
-
-User-agent: AwarioSmartBot
-User-agent: AwarioRssBot
-Disallow: /
-
-User-agent: Google-CloudVertexBot
-Disallow: /
-
-User-agent: QualifiedBot
-Disallow: /
-
-User-agent: Cotoyogi
-Disallow: /
-
-User-agent: ICC-Crawler
-Disallow: /
-
-User-agent: atlassian-bot
-Disallow: /
-
-User-agent: FishBot
-Disallow: /
-
-User-agent: BorderxBot
-Disallow: /
-
-User-agent: NavuBot
-Disallow: /
-
-User-agent: SemrushBot-SWA
-Disallow: /
-
-User-agent: WARDBot
-Disallow: /
-
-User-agent: magpie-crawler
-Disallow: /
-
-User-agent: KimiBot
-Disallow: /
-
-User-agent: CitibotSiteCrawler
-Disallow: /
 
 Sitemap: https://ccm.osolee.cc.cd/sitemap.xml
