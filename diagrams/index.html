@@ -651,7 +651,7 @@ footer a { color: var(--ink-soft); }
       title: '在手机上发一条消息',
       items: [
         '手机经 Socket.io 连入（公网时经 Cloudflare），先过鉴权栈',
-        'user:send 按 instanceId 路由到当前会话的 AgentSession',
+        'user:message 按 instanceId 路由到当前会话的 AgentSession',
         'AgentSession 把消息送进 SDK 的 streaming input，SDK 拉起或续接本机 claude',
         'CLI 在已连接的文件夹里读写文件，回合内容落盘到 transcript，写入方记为 sdk-ts',
         'SDK 输出映射成产品事件，进环形缓冲，以 agent:event 推回手机'

@@ -17,8 +17,8 @@
 ## 提交前跑
 
 ```bash
-node _build/check-seo.mjs             # canonical / description / 重复 / 旧许可证残留 / llms.txt 清单与 token
-node _build/check-event-contract.mjs  # 站点的事件清单 ⇔ 主仓 protocol.js
+node _build/check-seo.mjs             # canonical / description / 重复 / 旧许可证残留 / llms.txt 死链
+node _build/check-event-contract.mjs  # 站点上提到的事件名都真实存在于主仓 protocol.js
 node _build/check-link-graph.mjs      # 从首页 BFS，钉住「没有孤儿页」
 ```
 
