@@ -80,17 +80,19 @@ export function getTrustedDeviceIds() {
 //
 // 监听器按「trusted / pending 两份文件的成员集合差集」补审计，覆盖的是那些【没人在动作发生处
 // 记账】的改动。有两类必须从差集里减掉：
-//   ① Web 侧的批准/拒绝/吊销——app.js 的 user:approveDevice / denyDevice / revoke 在动作发生处
-//      已各记一条 via:'web'。监听器再记一条 via:'cli'，是同一件事的第二条记录，归因还是错的。
+//   ① Web 侧与终端里的批准/拒绝/吊销——app.js 的 user:approveDevice / denyDevice / revoke、
+//      tty-device-console.js 的回车 / deny 在动作发生处已各记一条 via:'web' / via:'tty'。
+//      监听器再记一条 via:'cli'，是同一件事的第二条记录，归因还是错的。
 //   ② addPendingDevice 的容量淘汰——超过 MAX_PENDING_DEVICES 按插入序丢最旧。那是容量策略，
 //      不是任何人的拒绝决定；不减掉的话，第 51 台设备之后每来一台就伪造一条 device_denied，
 //      而审计表是环形有上限的，伪造记录会把真实安全事件挤出去。
 //
 // 【登记点必须是「已经自己记过审计的调用方」，不是写盘 choke point】第一版登记在
-// writeTrustedSet / savePendingDevices 上，等于把「本进程里的所有写入」一律排除——而 TTY 的
-// 回车批准 / deny（app.js 的 stdin 处理器）走的正是同进程的 approveDevice/denyDevice，
-// 且它自己【不记审计】，文件监听器是它唯一的审计来源。一并排除的后果是终端审批彻底无痕，
-// 恰恰是本模块要防的那件事。集成测试当场咬住了（它用同进程调用模拟 CLI 批准）。
+// writeTrustedSet / savePendingDevices 上，等于把「本进程里的所有写入」一律排除——而当时 TTY 的
+// 回车批准 / deny 走的正是同进程的 approveDevice/denyDevice，且自己【不记审计】，文件监听器
+// 是它唯一的审计来源。一并排除的后果是终端审批彻底无痕，恰恰是本模块要防的那件事。集成测试
+// 当场咬住了（它用同进程调用模拟 CLI 批准）。如今 TTY 也自记 via:'tty' 再登记（2026-11-03），
+// 但同进程里直接调 approveDevice/denyDevice 而不登记的写入，监听器仍要照记——登记点留在调用方。
 //
 // 失败方向也因此是对的：调用方忘了登记，最多多一条重复审计（吵，但看得见）；
 // choke point 版忘了豁免，则是【少】一条安全记录——无声，且正好在最需要它的时候。
@@ -207,7 +209,7 @@ function writeDeviceProfiles(next) {
 // 落一条审批事实。**只在 approve 成功之后调用**，且返回值恒被忽略（BE-011 故障隔离：
 // trusted-devices.json 写成功就等于准入已生效，元数据写不写得进去都不能改变这个结论）。
 // 上下文只从待审记录取，**不接受调用方注入**：三个 approve 入口都强制「必须先在待审列表里」
-// （server/app.js 的 web 与 TTY 两处、scripts/device.js 一处），所以待审记录必然存在；
+// （server/app.js 的 web、auth/tty-device-console.js 的终端回车、scripts/device.js 各一处），所以待审记录必然存在；
 // 而 web 那个入口的作用域里躺着的 ip/userAgent 是【审批者】的，开一个入参迟早被接错线，
 // 写进去一条看起来完全正常的假 profile——没有异常、没有日志、没有测试会红。
 function recordDeviceProfile(deviceToken, request) {

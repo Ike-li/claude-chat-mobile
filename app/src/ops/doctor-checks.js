@@ -71,10 +71,11 @@ export function modelSettingsConflictDiagnostic({ userModel = '', dirs = [] } = 
   const problems = list.map(d => diagnoseDir(d, userModel)).filter(Boolean);
   if (!problems.length) {
     const u = String(userModel || '').trim();
+    // 本项只读配置、不发请求：映射到一个网关根本不提供的模型名，这里照样全命中（2026-11-03 mini 实测）。
     return {
       status: 'ok',
       name: 'MODEL_SETTINGS',
-      detail: `${withGateway.length} 个目录配了网关映射，档位解析均命中（全局 model=${u || '未设，CLI 自选'}）`,
+      detail: `${withGateway.length} 个目录配了网关映射，档位解析均命中（全局 model=${u || '未设，CLI 自选'}）。只核对了配置自洽，不代表网关提供这些模型——发一条消息才知道`,
     };
   }
   const shown = problems.slice(0, 3).map(p => `${p.name}（${p.reason}）`).join('；');
@@ -384,7 +385,10 @@ export function computeReadiness(checks = []) {
   const cfEnabled = byId.CF_ACCESS?.safe?.enabled === true;
   const tokenWeak = byId.AUTH_TOKEN?.status !== 'ok';
   if (anyFail || (hasDanger && !cfEnabled && tokenWeak)) return { level: 'blocked', summary: '公网暴露前需修复高风险项' };
-  if (hasDanger || list.some(c => c.status === 'warn')) return { level: 'caution', summary: '可用，但有需留意的偏宽项' };
+  if (hasDanger) return { level: 'caution', summary: '可用，但有需留意的偏宽项' };
+  // 其余 warn 多半是功能缺席（推送未配置、有待批设备），不是放宽——说成「偏宽项」会让人去找不存在的放宽。
+  const warns = list.filter(c => c.status === 'warn').length;
+  if (warns) return { level: 'caution', summary: `可用，有 ${warns} 项需留意` };
   return { level: 'ready', summary: '关键项就绪' };
 }
 
@@ -1218,7 +1222,7 @@ export function parseProcNetTcpListeners(text, port) {
 // 这里纯判定。两条不能反的方向：
 //   · 未安装只在声明 vpn 时 warn——其余档它是「还有这条路」的提示，把没装 Tailscale 说成缺陷是误报；
 //   · MagicDNS 名只进 detail 不进 safe——与 CF_ACCESS_HOSTNAME 同一敏感度，报告会被贴进 issue / 聊天。
-export function tailscaleDiagnostic({ found = false, backendState = '', dnsName = '', accessProfile = '', port = 3000, lang = 'zh' } = {}) {
+export function tailscaleDiagnostic({ found = false, backendState = '', dnsName = '', error = '', accessProfile = '', port = 3000, lang = 'zh' } = {}) {
   const name = 'TAILSCALE';
   const p = String(accessProfile || '').trim();
   const state = String(backendState || '').trim();
@@ -1260,6 +1264,16 @@ export function tailscaleDiagnostic({ found = false, backendState = '', dnsName 
     return p === 'vpn'
       ? { status: 'warn', name, safe, detail: bi(lang, `已声明加密隧道 / VPN，但 Tailscale 守护进程没在跑——手机现在连不上这台机器。${fix}`, `Profile is vpn, but the Tailscale daemon is not running — your phone cannot reach this machine right now. Please ${fix}`) }
       : { status: 'ok', name, safe, detail: bi(lang, `Tailscale 已安装但守护进程没在跑；要走这条路${fix}（配方见 docs/deployment.md）`, `Tailscale is installed but its daemon is not running; if you want this path, ${fix} (see docs/deployment.md)`) };
+  }
+
+  // 找得到命令、status 却跑不起来（2026-11-03 mini：PATH 里残留的 tailscale 坏了）。tailscale up 同样跑不起来，
+  // 下一步是修好或删掉这个命令；原因用探测带回的 stderr 那一行。
+  const why = String(error || '').trim();
+  if (!state && why) {
+    const fix = bi(lang, '重装 Tailscale，或删掉残留的 tailscale 命令', 'reinstall Tailscale, or remove the leftover tailscale command');
+    return p === 'vpn'
+      ? { status: 'warn', name, safe, detail: bi(lang, `已声明加密隧道 / VPN，但 tailscale 命令跑不起来（${why}）——手机现在连不上这台机器。请${fix}`, `Profile is vpn, but the tailscale command fails to run (${why}) — your phone cannot reach this machine right now. Please ${fix}`) }
+      : { status: 'ok', name, safe, detail: bi(lang, `找到了 tailscale 命令，但它跑不起来（${why}）。不走 Tailscale 可忽略；要走就${fix}`, `Found a tailscale command, but it fails to run (${why}). Ignore this if you don't use Tailscale; otherwise ${fix}`) };
   }
 
   // 装了但没登录 / 已停 / Running 却拿不到 MagicDNS 名（管理台关了 MagicDNS）

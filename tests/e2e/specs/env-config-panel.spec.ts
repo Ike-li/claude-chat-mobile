@@ -42,6 +42,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 2026-11-03 mini 全新安装核对：别的行都在标签旁标出键名，开关行没有——文档、doctor、启动日志说的都是
+  // CLI_STATUSLINE_BRIDGE=off 这类键名，面板上却只有「CLI statusline 桥」，对不上号。
+  test('P0-31p 开关行和其它行一样标出键名', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralPage(page, 'behavior');
+    await page.locator('#btnEnvConfig').click();
+    const row = page.locator('#envConfigBody [data-env-key="DEV_MODE"]');
+    await expect(row.locator('input[type="checkbox"]')).toHaveCount(1);
+    await expect(row.locator('code', { hasText: /^DEV_MODE$/ })).toHaveCount(1);
+    await expectNoBrowserErrors(page);
+  });
+
   // 验收 O111：保存前的底栏对被环境变量压着的项仍说「保存后需重启服务才生效」——可这类项写进文件也不生效、
   // 重启后仍是环境变量的值，逐项回执要保存后才出现。保存前就要说清。
   test('P0-31k 改的是被环境变量压着的项：保存前底栏就说清写了也不生效，不再只说「重启后生效」', async ({ page }) => {

@@ -1,6 +1,6 @@
 // tests/invariants/device-gate.test.mjs —— 设备准入网关与信任管理单测
 // 守护：DEVICE-01（双本机与未审批设备拦截）、DEVICE-02（CLI 吊销/批准通过原子文件监听即时生效；落盘失败不提交变更；待审列表容量有界防 flood）、DEVICE-03（网络响应与待审推送信封隔离敏感数据）
-// 测什么：createDeviceGate 初始化文件存在性；unlockDeviceSockets 与 disconnectDeviceSockets 生命周期；broadcastPendingDevices 仅推向可信端；pendingDevices 有界队列 (MAX_PENDING_DEVICES)；persistTrustedChange 原子持久化事务；getTrustedDeviceIds 隔离边界；trustedDevicesPayload 不下发全量 token
+// 测什么：createDeviceGate 初始化文件存在性；unlockDeviceSockets 与 disconnectDeviceSockets 生命周期；broadcastPendingDevices 仅推向可信端；pendingDevices 有界队列 (MAX_PENDING_DEVICES)；persistTrustedChange 原子持久化事务；getTrustedDeviceIds 隔离边界；trustedDevicesPayload 不下发全量 token；终端（TTY）审批自记 via:tty、监听器不重复记
 // 不测什么 + 为什么：不测物理硬件指纹采集与操作系统真实推送通道——分别属于前端采集与 ops/push
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +15,10 @@ import {
   getTrustedCount,
   getTrustedDeviceIds,
   loadTrustedDevices,
+  addPendingDevice,
+  DEVICE_FILES,
 } from '../../app/src/auth/devices.js';
+import { createTtyDeviceConsole } from '../../app/src/auth/tty-device-console.js';
 import * as audit from '../../app/src/ops/audit.js';
 
 // 每个 gate 都建了目录监听；文件跑完统一 close()，否则 Windows 上子进程不退出（见 device-gate.js 的 close）。
@@ -73,7 +76,11 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
     const trustedFile = process.env.CCM_TRUSTED_DEVICES_FILE;
     assert.ok(trustedFile, '前提：preload 设了 CCM_TRUSTED_DEVICES_FILE（本用例靠它复现两处路径分叉）');
     const before = existsSync(trustedFile) ? readFileSync(trustedFile, 'utf8') : null;
+    let gate = null;
     t.after(() => {
+      // 先关监听再还原，不留到文件末尾统一关：这只监听器盯的是 preload 那份真文件、用的是进程级那张登记表，
+      // 开着的话，还原本身会被记成一条 CLI 吊销，后面同样盯这份文件的用例（TTY 审批）登记的条目也会被它先取走。
+      gate?.close();
       if (before === null) rmSync(trustedFile, { force: true }); else writeFileSync(trustedFile, before);
       loadTrustedDevices();
     });
@@ -81,7 +88,7 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
     const s1 = fakeSocket({ deviceToken: token });
     const unlocked = [];
     // 与生产调用同形：不注入文件路径（修复前传的是 dataDir，监听的是它下面那一对，不是覆盖路径）。
-    openGate({ io: fakeIo(s1), onUnlockSocket: (s) => unlocked.push(s) });
+    gate = openGate({ io: fakeIo(s1), onUnlockSocket: (s) => unlocked.push(s) });
 
     await new Promise(r => setTimeout(r, 50)); // 让 watcher 先挂上
     writeFileSync(`${trustedFile}.tmp`, JSON.stringify([token]));
@@ -547,5 +554,48 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
       'Web 侧批准已由 app.js 记过 via:web，监听器不得再记一条 via:cli');
     assert.equal(recordsFor('device_revoked', WEB_REVOKED).length, 0,
       'Web 侧吊销同理');
+  });
+
+  // 2026-11-03 mini 全新安装核对：在跑着 server 的终端里敲回车批准第一台设备，日志与审计都写成「（CLI）」/ via:'cli'。
+  // 终端审批走的是同进程的 approveDevice / denyDevice，以前自己不记审计，靠这个监听器按差集补——而监听器只认得进程外的 CLI。
+  // 这里全用真东西：devices.js 的真文件、真审计、默认参数的真监听器（真登记表），只把 socket 侧三个动作换成空函数
+  // （零连接，与审计归因无关）。哨兵同上一条：同一 tick 里再让「进程外的 CLI」批准一台，它的 via:cli 记到了，
+  // 才说明监听器已经处理过这一轮——否则「没有 via:cli」在监听器还没跑时也成立。
+  // 两种输入放在同一条用例里顺序跑：它们共用 devices.js 那一对真文件，拆成两条有交错的风险（见本组开头的注记）。
+  test('终端里敲回车批准 / 输入 deny 拒绝 → 只记一条 via:tty，监听器不再补 via:cli', async (t) => {
+    const files = [DEVICE_FILES.trusted, DEVICE_FILES.pending];
+    const original = files.map(f => (existsSync(f) ? readFileSync(f, 'utf8') : null));
+    const gate = createDeviceGate({ io: { sockets: { sockets: new Map() } }, onUnlockSocket: () => {} });
+    t.after(() => {
+      gate.close(); // 先停监听再还原：还原本身也是一次变更，别让它记进审计
+      files.forEach((f, i) => {
+        if (original[i] === null) { try { rmSync(f); } catch { /* 本来就没有 */ } } else writeFileSync(f, original[i]);
+      });
+      loadTrustedDevices();
+    });
+    await settleWatcher();
+
+    const onTtyInput = createTtyDeviceConsole({
+      unlockDeviceSockets: () => {}, disconnectDeviceSockets: () => {}, broadcastPendingDevices: () => {},
+    });
+    const cliApprove = (token) => {
+      const ids = JSON.parse(readFileSync(DEVICE_FILES.trusted, 'utf8'));
+      writeFileSync(DEVICE_FILES.trusted, JSON.stringify([...ids, token]));
+    };
+
+    for (const [input, action] of [['\n', 'device_approved'], ['deny\n', 'device_denied']]) {
+      const stamp = `${action}-${Date.now()}`;
+      const TTY_TOK = `gate-tty-${stamp}`, CLI_SENTINEL = `gate-cli-sentinel-${stamp}`;
+      addPendingDevice(TTY_TOK, { ip: '10.0.0.9', userAgent: 'ua' });
+      await settleWatcher();
+
+      onTtyInput(input);
+      cliApprove(CLI_SENTINEL);
+
+      const ok = await waitUntil(() => recordsFor('device_approved', CLI_SENTINEL).length > 0);
+      assert.ok(ok, '哨兵（进程外 CLI 批准）没记到——监听器这一轮没跑完，下面的断言会假绿');
+      const vias = recordsFor(action, TTY_TOK).map(r => r.meta?.via);
+      assert.deepEqual(vias, ['tty'], `终端输入 ${JSON.stringify(input)} 应只记一条 via:tty，实际 ${JSON.stringify(vias)}`);
+    }
   });
 });

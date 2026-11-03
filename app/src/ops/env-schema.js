@@ -286,11 +286,15 @@ export const ENV_SCHEMA = {
   CLI_HOOKS_BRIDGE: {
     group: 'toggles', kind: 'toggle', values: TOGGLE_OFF,
     label: t('CLI hooks 桥', 'CLI hooks bridge'),
-    help: t('关掉只是停止消费事件，不卸载安装。', 'Off stops consuming events; it does not uninstall.'),
+    // 两个桥的开关都只是 env 层的停用闸，安装态另有一处显示——没装时这里照样是「开」（2026-11-03 mini）。
+    help: t('关掉只是停止消费事件，不卸载安装。开着也不代表已安装：装没装看「设置与状态」→「宿主机」里的「终端推送」。',
+      'Off stops consuming events; it does not uninstall. On does not mean installed — see "Terminal push" under Settings & status → Host.'),
   },
   CLI_STATUSLINE_BRIDGE: {
     group: 'toggles', kind: 'toggle', values: TOGGLE_OFF,
     label: t('CLI statusline 桥', 'CLI statusline bridge'),
+    help: t('关掉是让状态栏只用 SDK 自己的数据，不卸载安装。开着也不代表已安装：装没装看「设置与状态」→「宿主机」里的「终端状态栏」。',
+      'Off makes the status line use SDK data only; it does not uninstall. On does not mean installed — see "Terminal status line" under Settings & status → Host.'),
   },
   // 本表里唯一一个**直接产生模型计费**的开关：开着时每个运行中的子 agent 每 ~30s 会被 fork 一次，
   // 由模型写一句进度短语（SDK 侧默认关，CCM 为了后台任务横幅有文案而默认开）。
