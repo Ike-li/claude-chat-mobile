@@ -19,6 +19,26 @@
 // 残留已知边界（Low）：若写恰好悬停在 `await rename` 内部（rename 系统调用已发起）时 flushSaveSync 同步写命中，
 // 二者在 OS 层竞争——窗口极窄（微秒级），未消除；需要彻底消除可把 shutdown 改为 async 并 await drain()。
 
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+
+let tmpSeq = 0;
+
+// doWrite 的标准实现：先写 .tmp 再 rename，防写到一半崩溃产生损坏文件。tmp 唯一名（pid+自增序）避免
+// 并发覆盖对方 tmp。rename 前查 shouldCommit：已被 flushSaveSync fence 就放弃，不覆盖同步权威写。
+export async function writeFileAtomic(file, text, shouldCommit) {
+  await mkdir(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${++tmpSeq}.tmp`;
+  try {
+    await writeFile(tmp, text, { mode: 0o600 });
+    if (!shouldCommit()) { await unlink(tmp).catch(() => {}); return; }
+    await rename(tmp, file);
+  } catch (e) {
+    try { await unlink(tmp); } catch { /* tmp 可能未生成 */ }
+    throw e;
+  }
+}
+
 export function createSerialWriter(doWrite, { onError } = {}) {
   let running = null;   // 当前在飞写的 Promise（null = 空闲）
   let pending = false;  // 在飞期间是否又来了请求（合并成一个尾随写）

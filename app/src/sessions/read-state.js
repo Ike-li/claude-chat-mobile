@@ -12,10 +12,9 @@
 // 前后端不得互相 import（tests/gates/check-import-boundaries.js 硬闸），合并语义两侧各写一份。两份不是
 // 冗余：前端是「远端权威覆盖本地」，这边是「多客户端增量归并」，方向与 cap 处理都不同。
 import { readFileSync, mkdirSync } from 'node:fs';
-import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
-import { createSerialWriter } from '../shared/serial-writer.js';
+import { createSerialWriter, writeFileAtomic } from '../shared/serial-writer.js';
 import { dataFile } from '../shared/data-dir.js';
 
 // 与 sessions.js 同款优先级：CCM_READ_STATE_FILE（仅测试）> CCM_DATA_DIR/read-state.json > data/read-state.json。
@@ -32,19 +31,9 @@ export function createReadStateStore({ file = FILE, now = () => Date.now(), seen
   let state = load(file);
 
   const writer = createSerialWriter(async (shouldCommit) => {
-    await mkdir(dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.${++saveSeq}.tmp`;
-    try {
-      await writeFile(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
-      if (!shouldCommit()) { await unlink(tmp).catch(() => {}); return; }
-      await rename(tmp, file);
-    } catch (e) {
-      try { await unlink(tmp); } catch { /* tmp 可能未生成 */ }
-      throw e;
-    }
+    await writeFileAtomic(file, JSON.stringify(state, null, 2), shouldCommit);
   }, { onError: e => console.error('[read-state] 保存失败（已读位点未落盘，换设备可能复现假未读）:', e?.message || e) });
 
-  let saveSeq = 0;
   let saveTimer = null;
   function save() {
     clearTimeout(saveTimer);

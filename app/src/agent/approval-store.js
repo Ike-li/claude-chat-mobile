@@ -7,10 +7,9 @@
 // 真正的完整性校验/fail-closed 仍在 agent.js 的同步内存路径（见 fingerprint.js 头部注释），本模块的
 // 写入失败不应、也不会阻塞审批流程本身（各调用点仅捕获日志，不向上抛）。
 import { readFileSync, mkdirSync } from 'node:fs';
-import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
-import { createSerialWriter } from '../shared/serial-writer.js';
+import { createSerialWriter, writeFileAtomic } from '../shared/serial-writer.js';
 import { dataFile } from '../shared/data-dir.js';
 
 // 优先级同 sessions.js：CCM_APPROVAL_STORE_FILE（仅测试）> CCM_DATA_DIR > data/ 默认。
@@ -33,19 +32,9 @@ function load() {
 
 let state = load();
 
-let _saveSeq = 0;
 // BE-012：实际写盘经单写者串行原语——串行不乱序 + 在飞合并 + shutdown fence（防在飞写覆盖同步 flush 的 deny 终态）。
 const writer = createSerialWriter(async (shouldCommit) => {
-  await mkdir(dirname(FILE), { recursive: true });
-  const tmp = `${FILE}.${process.pid}.${++_saveSeq}.tmp`;
-  try {
-    await writeFile(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
-    if (!shouldCommit()) { await unlink(tmp).catch(() => {}); return; } // BE-012：已被 flushSaveSync fence → 不覆盖同步权威写
-    await rename(tmp, FILE);
-  } catch (e) {
-    try { await unlink(tmp); } catch { /* tmp 可能未生成 */ }
-    throw e;
-  }
+  await writeFileAtomic(FILE, JSON.stringify(state, null, 2), shouldCommit);
 }, { onError: e => console.error('[approval-store] 保存失败（审批台账未落盘）:', e?.message || e) });
 
 let _saveTimer = null;

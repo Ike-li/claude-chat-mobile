@@ -4,10 +4,8 @@
 // 不拼进任何路径——候选全部来自 cwd 内枚举，没有穿越面；cwd 本身的授权范围校验由调用方（socket-files.js）负责。
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import { setLru } from '../shared/bounded-map.js';
-import { childEnv } from '../shared/child-env.js';
+import { gitExec } from './git-workspace.js';
 
 export const FILE_SEARCH_LIMIT = 50;
 const FILE_SEARCH_MAX_CANDIDATES = 5000;
@@ -17,33 +15,12 @@ const FILE_SEARCH_TIMEOUT_MS = 3_000;
 
 const SKIP_DIR_NAMES = new Set(['node_modules', '.git', '.worktrees']);
 
-const defaultExecFile = promisify(execFileCb);
-
-// 测试注入：opts.execFile(cmd, args, options, cb)  node callback 风格（同 git-workspace.js runExecFile）。
-function runExecFile(execFile, cmd, args, options) {
-  if (typeof execFile !== 'function') {
-    return defaultExecFile(cmd, args, options).then(
-      r => ({ stdout: String(r.stdout ?? '') }),
-      err => Promise.reject(err),
-    );
-  }
-  return new Promise((resolveP, rejectP) => {
-    try {
-      execFile(cmd, args, options, (err, stdout) => {
-        if (err) { rejectP(err); return; }
-        resolveP({ stdout: String(stdout ?? '') });
-      });
-    } catch (e) { rejectP(e); }
-  });
-}
-
-// env 走 childEnv：ls-files 读 index 时会执行仓库配置里的 core.fsmonitor，不能让它拿到控制面密钥（AUTH-06）。
+// gitExec 的 env 走 childEnv：ls-files 读 index 时会执行仓库配置里的 core.fsmonitor，不能让它拿到控制面密钥（AUTH-06）。
 async function gitLsFiles(cwd, { execFile, timeoutMs = FILE_SEARCH_TIMEOUT_MS } = {}) {
   try {
-    const { stdout } = await runExecFile(
-      execFile, 'git', ['-C', cwd, 'ls-files', '--cached', '--others', '--exclude-standard'],
-      { timeout: timeoutMs, maxBuffer: 1 << 20, env: childEnv() },
-    );
+    const { stdout } = await gitExec(cwd, ['ls-files', '--cached', '--others', '--exclude-standard'], {
+      timeoutMs, maxBuffer: 1 << 20, execFile,
+    });
     return stdout.split('\n').map(s => s.trim()).filter(Boolean);
   } catch {
     return null; // 非 git 目录 / git 不可用：回落遍历，不是错误态
