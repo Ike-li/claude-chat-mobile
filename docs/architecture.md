@@ -283,7 +283,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 | `question` | ❓ Claude 有问题 | 无条件 |
 | `elicitation` | 🔐 MCP 需要你 | 无条件 |
 | `task_notification` | ✅ / ⚠️ 后台任务完成 / 失败 | 无条件 |
-| `result` | ✅ / ⚠️ / ⏹ 任务完成 / 出错 / 已中止 | 前台可见则抑制 |
+| `result` | ✅ / ⚠️ / ⏹ 任务完成 / 出错 / 已中止；不是用户按的停止按 `interruptedBy` 显示 ⚠️ 任务超时中断 / 任务被中断 | 前台可见则抑制 |
 | `system` 且 `notice=gateway_stall` | ⏳ 模型长时间无响应 | 前台可见则抑制 |
 | 新设备握手 | 🔐 新设备请求接入 | 不走 `agent:event` |
 | CLI hooks 的 `Stop` / `Notification` | ✅ 终端会话完成一轮 / ⚠️ 终端会话需要你 | 不走 `agent:event` |

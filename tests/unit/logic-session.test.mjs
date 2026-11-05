@@ -419,6 +419,28 @@ test('presentTurnResult: interrupted=true 压过 isError/ede_diagnostic，不画
 // 出错分支有意不改 CLI 化：出错时更需要显式秒数，保留中文灰条+红色错误条（用户确认「出错分支不变」）。
 // 2026-10-19 验收 O57：原来那行还挂着「· $成本」，可 costUsd 是 CLI 的累计费用（恢复的会话里网关 503、一个 token
 // 没用，也显示 $0.38），读起来像这条失败的消息花了这么多钱；标签还写着「完成」。去掉成本、标签改「出错」，秒数照留。
+// 「已中止」只能留给用户自己按的停止：看门狗和 CLI 自己停的要说清楚，缺字段是升级前的旧事件，按手动算。
+test('presentTurnResult: 非手动中断的条/通知/工具收尾都说清来源', () => {
+  const present = interruptedBy => presentTurnResult({ interrupted: true, isError: true, durationMs: 1000, ...(interruptedBy ? { interruptedBy } : {}) });
+
+  const watchdog = present('system:idle-watchdog');
+  assert.equal(watchdog.statusBar.text, '超时中断 · 1.0s');
+  assert.equal(watchdog.notify.title, '⚠️ 任务超时中断');
+  assert.equal(watchdog.failToolsMessage, '超时中断');
+  assert.equal(watchdog.errorBar, null, '仍是中断不是出错：不画红条');
+
+  const cli = present('cli');
+  assert.equal(cli.statusBar.text, '已中断（非手动） · 1.0s');
+  assert.equal(cli.notify.title, '⚠️ 任务被中断');
+  assert.equal(cli.failToolsMessage, '已中断（非手动）');
+
+  for (const by of ['user', undefined]) {
+    assert.equal(present(by).statusBar.text, '已中止 · 1.0s');
+    assert.equal(present(by).notify.title, '⏹ 任务已中止');
+    assert.equal(present(by).failToolsMessage, '已中止');
+  }
+});
+
 test('presentTurnResult: 真错误仍中文灰条 + 红条（不 CLI 化）；灰条写「出错」、不挂累计成本', () => {
   const err = presentTurnResult({ isError: true, errors: ['boom'], durationMs: 1200, costUsd: 0.1 });
   assert.equal(err.kind, 'error');

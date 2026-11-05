@@ -427,6 +427,32 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 不是用户按的停止。字段形态复刻 agent.js：看门狗走强制收口时只有 system 没有 result，工具卡靠 system
+      // 分支收尾；走到 result 时带 interruptedBy。历史标记复刻 history.js：不带 uuid，走 history_append。
+      command: 'test:interrupt-sources',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel } = getContext();
+        const base = seq => ({ seq, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now() });
+        const interruptedResult = interruptedBy => ({ durationMs: 1000, costUsd: 0, isError: true, interrupted: true, interruptedBy, models: [activeModel] });
+        socket.emit('agent:event', { ...base(1), type: 'tool_use', payload: { toolUseId: 't_stuck', name: 'run_command', inputSummary: 'sleep 9999' } });
+        socket.emit('agent:event', { ...base(2), type: 'system', payload: { message: '已中断', kind: 'interrupted', interruptedBy: 'system:idle-watchdog' } });
+        socket.emit('agent:event', { ...base(3), type: 'result', payload: interruptedResult('system:idle-watchdog') });
+        socket.emit('agent:event', { ...base(4), type: 'result', payload: interruptedResult('cli') });
+        socket.emit('agent:event', {
+          ...base(5),
+          type: 'history_append',
+          payload: {
+            external: true,
+            messages: [
+              { role: 'user', content: '中断前的问题', uuid: 'u-interrupt-1' },
+              { role: 'system', kind: 'interrupted', content: '' },
+              { role: 'user', content: '中断后的问题', uuid: 'u-interrupt-2' },
+            ],
+          },
+        });
+      },
+    },
+    {
       // 桌面端 visualize 工具（show_widget）画的图。字段形态复刻 app/src/shared/tool-summary.js 的 widgetPayload：
       // SVG 带完整 code；超限的后端根本不带 widget（与普通工具卡无异，这里不再造）。
       // 四张卡各验一条：① 完整 SVG → 图片 ② HTML 组件 → 只显示提示，带了 code 也不执行
