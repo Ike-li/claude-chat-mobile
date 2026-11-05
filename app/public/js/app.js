@@ -582,13 +582,17 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   let latestServiceHealth = null;
   // 服务告警的「忽略」（#301）：本机记住忽略到哪个指纹，状态在模块内，此处只持句柄。
   const noticeDismissals = createNoticeDismissals();
-  let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
+  let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 时加入新目录）
+  // UX-007：当前文件夹只在切到它的那一刻自动展开一次，之后听用户的：重建抽屉不再碰展开集合（2026-11-04）。
+  function setCurrentCwd(cwd) {
+    if (cwd && cwd !== currentCwd) expandedDirs.add(cwd);
+    currentCwd = cwd;
+  }
   const SESSION_PANEL_REVALIDATE_MS = 12_000;
   // P3：面板"结构性"指纹（dirs 集合 + viewingInstanceId）；只有这两者变化才全量重建整个面板
   // （低频、全量更简单可靠）。纯状态变化、或只是某个目录下实例变化，都不再经它判定——见下方按目录分键。
   let _lastPanelStructKey = null;
-  // 纯换序（拖动排序广播回来的新顺序，集合不变）单独判——不算结构性变化，只挪 DOM 位置，不触发
-  // openSessionPanel 的 UX-007 强制展开（2026-10-26 回归：挪别的文件夹顺序，当前工作区被连带强制展开）。
+  // 纯换序（拖动排序广播回来的新顺序，集合不变）单独判——不算结构性变化，只挪 DOM 位置，不走 openSessionPanel 全量重建。
   let _lastDirOrderKey = null;
   // P3：按目录分键的实例签名（cwd → 签名片段，见 logic.js buildDirInstanceSignatures）+ diff 出的
   // "签名变了的目录"只重建那几个目录的 DOM 子树，其余目录保持原样（不撤离滚动位置/侧滑态等本地态）。
@@ -4451,7 +4455,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     const composeRelocatedFrom = !viewingInstanceId && !newViewing && cwdChanged && currentCwd && _composeReady
       && !connectedRoots.some(root => isPathWithin(currentCwd, root)) && !projectsState.isNoFolder(currentCwd)
       ? currentCwd : null;
-    currentCwd = newCwd;
+    setCurrentCwd(newCwd);
     composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;
     const viewingChanged = viewingInstanceId !== newViewing;
     viewingInstanceId = newViewing;
@@ -4510,7 +4514,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // 重新 bindView → 输入条会永远停在隐藏（真机 c1ccd055：内容回来了但发不了消息，换个浏览器新开
     // 页面却正常，因为那是完整 bindView）。syncComposerVisibility 自身读 instancesList 取最新 sid，幂等。
     syncComposerVisibility();
-    // 保持纯手动展开折叠，不自动展开任何工作区目录
+    // 展开折叠这里不动：切文件夹时的自动展开在 setCurrentCwd 里，其余听用户的
 
     // 切视图：viewingInstanceId 变了重载；空首页内换工作区（newViewing 恒 null、cwd 变了）也重渲——
     // 否则 dashboard 工作区名 + 模型 chip 残留上个工作区（本次修复的 bug 正出于此：两个 null 空首页被判为「视图没变」）
@@ -4628,7 +4632,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     updateServiceNotice(p?.service ?? null); // 服务健康与实例结构无关，无条件每次广播都刷新（不进下方判定分支）
     // P3 性能优化（两层判定，故意不合并——关注点不同）：
     // ① 结构性变化（目录集合本身变化 / viewingInstanceId 变化 / 当前查看 cwd 变化——三者共同决定
-    //   dirRow 高亮与自动展开）仍走全量重建：低频、全量更简单可靠，不做精细化 diff。
+    //   有哪些小节与 dirRow 高亮）仍走全量重建：低频、全量更简单可靠，不做精细化 diff。
     // ② 其余情况按目录分键 diff（见 logic.js buildDirInstanceSignatures/diffDirSignatures：id/sessionId/
     //   title 前20字），只重建签名真变化的目录子树，未涉及目录的 DOM 原样不动（不撤离滚动位置/侧滑态/
     //   "显示更多"展开态）——避免重连等场景下无关工作区被连坐重建（P3 抽屉局部重建）。
@@ -4649,7 +4653,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       if (_structuralChanged) {
         openSessionPanel(); // 内含 needsYou/service 区 + 工作区树全量重建，此路径不必再单独 refresh*
       } else if (_orderChanged) {
-        reorderDirSections(availableDirs); // 纯换序：只挪 DOM 位置，不碰 expandedDirs/不强制展开
+        reorderDirSections(availableDirs); // 纯换序：只挪 DOM 位置，不重建内容
         refreshDirBadges();
         refreshSessionStatusChips();
         refreshNeedsYou();
@@ -5617,7 +5621,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     getMirrorStaleFlag: () => mirrorStaleFlag, getMirrorWaitingFlag: () => mirrorWaitingFlag,
     getNeedsYouList: () => needsYouList, getViewingInstanceId: () => viewingInstanceId,
     getWorkdirStates: () => workdirStates, setComposeCwd: v => { composeCwd = v; },
-    setCurrentCwd: v => { currentCwd = v; }, setDirSectionNodes: v => { dirSectionNodes = v; },
+    setCurrentCwd, setDirSectionNodes: v => { dirSectionNodes = v; },
     setDisplayedSessionId: v => { displayedSessionId = v; },
     setExplicitCloseInstanceId: v => { explicitCloseInstanceId = v; },
     setFreshInterruptedInstanceId: v => { freshInterruptedInstanceId = v; },
