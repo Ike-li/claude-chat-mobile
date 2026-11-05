@@ -982,12 +982,12 @@ export function createSessionSidebar(context, {
     // 这里：慢 ACK 的回执写进刚关上的抽屉后，用户重新打开的第一件事就是把它清掉——正好复现
     // 原来那个"点了没反应"。清除归 drawer（关抽屉时）与删除成功时，两处都是真的翻篇了。
     drawerUnreadJump.resetCursor(); // 面板整段重建：旧游标指向的行已不存在，从头数起
-    // UX-007：当前工作区默认展开 + 记忆用户展开态
+    // UX-007：记忆用户展开态。当前文件夹的默认展开在切到它时做（app.js 的 setCurrentCwd），这里不做：
+    // 全量重建的触发面很宽（开抽屉、断开、改名、删除……），放这里会盖掉用户手动折叠。
     try {
       const saved = JSON.parse(localStorage.getItem('ccm_expanded_dirs') || '[]');
       if (Array.isArray(saved)) for (const d of saved) if (d) getExpandedDirs().add(d);
     } catch { /* ignore */ }
-    if (getCurrentCwd()) getExpandedDirs().add(getCurrentCwd());
 
     // 抽屉 = 注意力入口 + 导航树（非状态仪表盘）：需要你 → 服务异常 → 工作区树。
     // "需要你"聚合置顶（AttentionDeriver）：跨全部工作区/会话，
@@ -1042,9 +1042,8 @@ export function createSessionSidebar(context, {
   }
 
   // 纯换序（拖动排序广播回来的新顺序，目录集合不变）：按新顺序把已有的 dirRow/subtree 节点挪位置，
-  // 不重建内容、不碰 expandedDirs——换序不该触发 openSessionPanel() 那条全量重建路径（它会顺带把
-  // UX-007「当前工作区强制展开」套在跟这次换序无关的目录上，2026-10-26 回归）。「无文件夹」之外
-  // 的「运行中（不在已连接的文件夹里）」那一节不在 dirSectionNodes 里，挪完后把它续回最后。
+  // 不重建内容——换序用不着走 openSessionPanel() 全量重建。「无文件夹」之外的「运行中（不在已连接的
+  // 文件夹里）」那一节不在 dirSectionNodes 里，挪完后把它续回最后。
   function reorderDirSections(order) {
     for (const d of order) {
       const section = getDirSectionNodes().get(d);
