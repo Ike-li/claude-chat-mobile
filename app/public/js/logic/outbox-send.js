@@ -553,6 +553,13 @@ export function shouldClearBusyBySnapshot({ live, localBusy = false, turnStartTs
   });
 }
 
+// 中断的收尾说法：「已中止」只留给用户自己按的停止。缺字段是升级前的旧事件，按手动算。
+export function interruptLabel(interruptedBy) {
+  if (interruptedBy === 'system:idle-watchdog') return t('超时中断');
+  if (interruptedBy === 'cli') return t('已中断（非手动）');
+  return t('已中止');
+}
+
 // 轮次 result → 聊天流条/通知/触感/挂起工具收尾。
 // CLI 对用户主动中止只呈现 interrupt，不把 SDK 伴随的 is_error + ede_diagnostic 当红色错误。
 // 后端 agent.js 在 interrupt() 成功后给紧随的 result 打 interrupted=true；此处优先于 isError。
@@ -566,12 +573,16 @@ export function presentTurnResult(payload = {}, opts = {}) {
   const errorText = Array.isArray(p.errors) ? p.errors.filter(Boolean).join('; ') : '';
 
   if (p.interrupted) {
+    const label = interruptLabel(p.interruptedBy);
+    const title = p.interruptedBy === 'system:idle-watchdog' ? t('⚠️ 任务超时中断')
+      : p.interruptedBy === 'cli' ? t('⚠️ 任务被中断')
+        : t('⏹ 任务已中止');
     return {
       kind: 'aborted',
-      statusBar: { text: `${t('已中止')} · ${secs}s`, cls: 'text-ink-faint' },
+      statusBar: { text: `${label} · ${secs}s`, cls: 'text-ink-faint' },
       errorBar: null,
-      notify: { title: t('⏹ 任务已中止'), body: `${t('用时')} ${secs}s` },
-      failToolsMessage: t('已中止'),
+      notify: { title, body: `${t('用时')} ${secs}s` },
+      failToolsMessage: label,
       haptic: 'warning',
     };
   }

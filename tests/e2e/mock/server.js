@@ -7653,7 +7653,7 @@ io.on('connection', socket => {
           seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetId, ts: Date.now(),
           // interrupted 与真 server 对齐（agent.js:2906）：前端 presentTurnResult 用它【压过】isError 分流，
           // 漏发会把「你按了停止」渲染成红色「出错：」条 + 推送标题「⚠️ 任务出错」。
-          type: 'result', payload: { messageId: q.messageId, durationMs: 200, costUsd: 0, isError: false, interrupted: true, models: [activeModel] }
+          type: 'result', payload: { messageId: q.messageId, durationMs: 200, costUsd: 0, isError: false, interrupted: true, interruptedBy: 'user', models: [activeModel] }
         });
       }
       pendingQuestion = null;
@@ -7674,7 +7674,7 @@ io.on('connection', socket => {
 
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: targetId, ts: Date.now(),
-      type: 'system', payload: { message: '已中断', kind: 'interrupted' }
+      type: 'system', payload: { message: '已中断', kind: 'interrupted', interruptedBy: 'user' }
     });
   });
 

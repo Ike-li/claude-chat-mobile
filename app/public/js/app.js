@@ -46,6 +46,7 @@ import {
   resolveDeepLinkTarget,
   armedTakeoverStep,
   presentTurnResult,
+  interruptLabel,
   isSoftKeyboardPrimaryDevice,
   userBubbleFold,
   historyLoadedNotice,
@@ -3076,10 +3077,10 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         clearInterruptPending(viewingInstanceId, { keepLiveOverride: p.kind === 'interrupted' });
       }
       if (p.kind === 'interrupted') {
-        announceTurn(t('已中止')); // 读屏的回合结束端点（#379）：interrupted 走这里，不发 result
+        announceTurn(interruptLabel(p.interruptedBy)); // 读屏的回合结束端点（#379）：interrupted 走这里，不发 result
         finalizeStreams();
         // E3：interrupt 成功/settleForce 走 system interrupted 时没有 result，须收口工具卡与子 agent 卡
-        failPendingToolCards(t('已中止'));
+        failPendingToolCards(interruptLabel(p.interruptedBy));
         markAllSubagentCardsDone();
         clearBusyFromTurnEndEvent(ev); // 中止也是轮次终点：与 result 同样解锁发送闸，不等 instances 广播
         updateSendButtonState();
@@ -6165,6 +6166,13 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       if (msg?.kind === 'compact_summary') {
         const bar = el('<div class="msg-frame text-center text-xs text-ink-faint" data-testid="compact-marker"></div>');
         bar.textContent = t('上下文已压缩');
+        appendNode(bar, msg);
+        return;
+      }
+      // 磁盘只记得「被打断了」：看门狗写的也可能是这一行，所以这里不说是谁按的
+      if (msg?.kind === 'interrupted') {
+        const bar = el('<div class="msg-frame text-center text-xs text-ink-faint" data-testid="interrupted-marker"></div>');
+        bar.textContent = t('已中断');
         appendNode(bar, msg);
         return;
       }

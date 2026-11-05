@@ -1137,6 +1137,104 @@ test.describe('中断路径也不得被 force 槽吃掉', () => {
   });
 });
 
+// interrupted 只说「这一轮被腰斩了」，用户要知道的是「是不是我按的」：离线推送一度对看门狗和
+// 手动停止写同一句「任务已中止」，人回来会以为是自己点的。interruptedBy 是这个问题的答案。
+test.describe('中断来源 interruptedBy', () => {
+  const abortedResult = { type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10,
+    modelUsage: {}, terminal_reason: 'aborted_streaming' };
+  const interruptedEvent = events => events.find(e => e.type === 'system' && e.payload?.kind === 'interrupted');
+  const lastResult = events => events.filter(e => e.type === 'result').at(-1);
+
+  test('用户点停止：system 与 result 都标 user', async () => {
+    const { s, events } = makeSession();
+    s.q = { interrupt() { return Promise.resolve(); } };
+    s.pendingTurns = 1;
+    await s.interrupt(); // 真实用户点停止走的正是这条无参调用
+    s.map(abortedResult);
+    assert.equal(interruptedEvent(events)?.payload.interruptedBy, 'user');
+    assert.equal(lastResult(events).payload.interruptedBy, 'user');
+    s.dispose();
+  });
+
+  test('静默看门狗：system 与 result 都标 system:idle-watchdog，不能冒充用户', async () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 1 });
+    s.q = { interrupt() { return Promise.resolve(); } };
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    s.checkIdle();
+    await new Promise(r => setImmediate(r));
+    s.map(abortedResult);
+    assert.equal(interruptedEvent(events)?.payload.interruptedBy, 'system:idle-watchdog');
+    assert.equal(lastResult(events).payload.interruptedBy, 'system:idle-watchdog');
+    s.dispose();
+  });
+
+  test('本仓没发过 interrupt 的 aborted_*：result 标 cli，不算在用户头上', () => {
+    const { s, events } = makeSession();
+    s.map(abortedResult);
+    assert.equal(lastResult(events).payload.interrupted, true);
+    assert.equal(lastResult(events).payload.interruptedBy, 'cli');
+    s.dispose();
+  });
+
+  test('来源只归这一次：配对 result 之后再来的 aborted_* 标 cli', async () => {
+    const { s, events } = makeSession();
+    s.q = { interrupt() { return Promise.resolve(); } };
+    s.pendingTurns = 1;
+    await s.interrupt();
+    s.map(abortedResult);
+    s.map(abortedResult);
+    assert.equal(lastResult(events).payload.interruptedBy, 'cli');
+    s.dispose();
+  });
+
+  test('放弃等配对 result 后迟到的 result 仍归原发起者，否则会对按了停止的人说「不是手动」', async () => {
+    const { s, events } = makeSession();
+    s.pendingTurns = 1;
+    s.interruptSettleGraceMs = 20;
+    s.q = { interrupt() { return Promise.resolve(); } };
+    await s.interrupt();
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(s.pendingTurns, 0, '前提：兜底已清账');
+    s.map(abortedResult);
+    assert.equal(lastResult(events).payload.interruptedBy, 'user');
+    s.dispose();
+  });
+
+  test('清账后新开的一轮被 CLI 自己中止：标 cli，不沿用上一轮的 user', async () => {
+    const { s, events } = makeSession();
+    s.pendingTurns = 1;
+    s.interruptSettleGraceMs = 20;
+    s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
+    await s.interrupt();
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(await s.send('下一轮'), true);
+    s.map(abortedResult);
+    assert.equal(lastResult(events).payload.interruptedBy, 'cli');
+    s.dispose();
+  });
+
+  test('SDK 拒中断走强制收口：abort 前已缓冲的 aborted_* 仍归用户', async () => {
+    const { s, events } = makeSession();
+    s.q = { interrupt() { return Promise.reject(new Error('no task')); } };
+    s.pendingTurns = 1;
+    await s.interrupt();
+    s.map(abortedResult);
+    assert.equal(interruptedEvent(events)?.payload.interruptedBy, 'user');
+    assert.equal(lastResult(events).payload.interruptedBy, 'user');
+    s.dispose();
+  });
+
+  test('没被中断的收尾不带来源：正常完成与 API 报错都不能显示成中断', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {}, terminal_reason: 'completed' });
+    assert.equal('interruptedBy' in lastResult(events).payload, false);
+    s.map({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, modelUsage: {}, terminal_reason: 'api_error' });
+    assert.equal('interruptedBy' in lastResult(events).payload, false);
+    s.dispose();
+  });
+});
+
 // 挡住三个实测会空过的变异（2026-08-10 审查）：改坏实现而全量单测零红的三处。
 test.describe('精确出槽的三条生死线', () => {
   // 变异实测：把 agent.js inputStream() 里的 `uuid: item.uuid` 改成 undefined，112 条测试全绿。

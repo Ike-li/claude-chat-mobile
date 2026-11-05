@@ -521,6 +521,7 @@ export class AgentSession {
     this.stallWarnedForActivity = 0;   // 网关挂起告警去重锚：告警时记当时的 lastActivity——同段静默不重复告，
                                        // 有新消息（lastActivity 前移）后的新静默段可再告。不动 lastActivity 本身（那会推迟真中断）。
     this._awaitingInterruptResult = false; // P1-4：interrupt() 成功且确有在途轮时置真，标记"下一条 result 是这次中断的终态确认"
+    this._interruptedBy = null;            // 这次中断是谁发起的（decidedBy 同一套取值）：归属被中断的那一轮，随 result 带出或开新轮时作废
     // 验收 O30：本轮有审批等到 TTL 过期时置真，随下一条 result 带出 approvalExpired 后复位。那一轮 CLI 以 is_error
     // 收尾，推送只看 isError 会写成「任务出错」；用户要知道的是审批过期、操作没执行。
     this._approvalExpiredInTurn = false;
@@ -1140,6 +1141,7 @@ export class AgentSession {
   // msgUuid：本轮消息透传给 CLI 的 uuid（send 路径有；合成轮/后台任务这类无对应用户消息的槽为 null）。
   // result 上的 user_message_uuid 就是它，据此精确出槽，见 _settleOneResultTurn。
   _openTurnSlot(msgUuid = null) {
+    this._interruptedBy = null; // 配对 result 可能永不到（见 _armInterruptSettleWatchdog），不能带进新一轮
     const id = ++this._turnIdSeq;
     this._openTurns.push({ id, forceSettled: false, msgUuid });
     return id;
@@ -1304,7 +1306,8 @@ export class AgentSession {
       if (droppedIds.length > 0) {
         this.emit('system', { message: '尚未送达的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
       }
-      this.emit('system', { message: '已中断', kind: 'interrupted' });
+      this._interruptedBy = decidedBy; // abort 前已缓冲的 aborted_* 还可能吐出来，它也是这次中断
+      this.emit('system', { message: '已中断', kind: 'interrupted', interruptedBy: decidedBy });
       // 超时路径：再 abort 子进程，防止 CLI 仍在限流重试里挂着
       this.terminating = true;
       try { this.abort?.abort(); } catch { /* noop */ }
@@ -1331,7 +1334,10 @@ export class AgentSession {
       // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result。账面为 0（纯后台任务期空输入也有停止钮）
       // 时没有这条 result，标记置上就没人清，会把用户下一轮的正常完成标成「已中止」。
       this._awaitingInterruptResult = this.pendingTurns > 0;
-      if (this.pendingTurns > 0) this._armInterruptSettleWatchdog(); // …但"即将"不保证到达，见方法注释
+      if (this.pendingTurns > 0) {
+        this._interruptedBy = decidedBy;
+        this._armInterruptSettleWatchdog(); // …但"即将"不保证到达，见方法注释
+      }
       // AG-004：Stop 应对齐「取消在途工具审批/提问」——不依赖 SDK 是否 abort canUseTool signal。
       // 若 signal 已 abort，abortHandler 会先清 Map，下面 resolve/expire 幂等（pending 不在则 no-op）。
       // 注意：Map.keys() 的元素是字符串，for-of 解构 for (const [id] of keys) 会把 't1' 拆成字符 't'——
@@ -1343,7 +1349,7 @@ export class AgentSession {
       if (droppedIds.length > 0) {
         this.emit('system', { message: '尚未送达的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
       }
-      this.emit('system', { message: '已中断', kind: 'interrupted' }); // M7：kind 字段，勿靠字符串匹配
+      this.emit('system', { message: '已中断', kind: 'interrupted', interruptedBy: decidedBy }); // M7：kind 字段，勿靠字符串匹配
       _diagOutcome = 'success';
     } catch (err) {
       _diagTimedOut = !!(err && /interrupt_timeout/.test(String(err.message || err)));
@@ -3710,11 +3716,14 @@ export class AgentSession {
         // 只认 aborted_* 前缀，不把 max_turns / budget_exhausted / hook_stopped 这些别的死因混进来。
         const wasInterrupted = this._awaitingInterruptResult || (terminalReason?.startsWith('aborted_') ?? false);
         this._awaitingInterruptResult = false;
+        // 本仓没发起过这次中断却收到 aborted_* ⇒ 不是任何一个按了停止的人，归给 CLI
+        const interruptedBy = wasInterrupted ? (this._interruptedBy ?? 'cli') : null;
+        this._interruptedBy = null;
         const approvalExpired = this._approvalExpiredInTurn;
         this._approvalExpiredInTurn = false;
         this._clearInterruptSettleWatchdog(); // 配对 result 已到：撤销兜底，否则悬挂计时会误清后续轮次的账
         diagLog.record(this.logKey(), 'queue', 'turn_settled', {
-          pendingTurnsAfter: this.pendingTurns, wasInterrupted, isError: !!msg.is_error, durationMs: msg.duration_ms,
+          pendingTurnsAfter: this.pendingTurns, wasInterrupted, interruptedBy, isError: !!msg.is_error, durationMs: msg.duration_ms,
           terminalReason, // 排障时能直接看到 CLI 的死因，不必再从消息形态倒推
         });
         this.emit('result', {
@@ -3725,7 +3734,8 @@ export class AgentSession {
           errors: msg.subtype === 'success' ? undefined : msg.errors,
           models: Object.keys(msg.modelUsage ?? {}), // F1：语义断言用
           text: this.assistantResponseBuffer || undefined, // 完整回复文本：供前端断网恢复后校正截断的 s.raw
-          interrupted: wasInterrupted, // 这条 result 是否由用户主动中止直接导致（区别于独立的真实错误/完成）
+          interrupted: wasInterrupted, // 这一轮是否被腰斩（区别于独立的真实错误/完成）；是不是用户按的看 interruptedBy
+          ...(interruptedBy ? { interruptedBy } : {}), // user / system:idle-watchdog / cli
           ...(approvalExpired ? { approvalExpired: true } : {}), // 本轮有审批等到过期（推送据此改说「审批已过期」）
           ...(terminalReason ? { terminalReason } : {}), // CLI 权威死因；旧 CLI 无此字段时整个不带
         });
