@@ -657,9 +657,6 @@ header {
   footer > .max-w-2xl {
     max-width: 640px !important;
   }
-  #statusPillsRow {
-    display: none !important; /* 已并入输入框底栏，保留选择器防旧缓存命中 */
-  }
   .status-pill-chip {
     min-height: 28px;
     padding: 0 0.5rem;
@@ -725,8 +722,7 @@ header {
     padding: 0.25rem 0.5rem !important;
     font-size: 16px !important;
   }
-  #btnSend,
-  #btnStop {
+  #btnSend {
     width: 40px !important;
     height: 40px !important;
   }

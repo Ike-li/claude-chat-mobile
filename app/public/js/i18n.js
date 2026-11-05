@@ -69,7 +69,6 @@ export const EN_DICT = Object.freeze({
   '通知 · 设备信任 · 语言 · 诊断': 'Notifications · device trust · language · diagnostics',
   '下拉或点外侧关闭 · 不含本会话的模型与权限': "Swipe down or tap outside · this session's model & permissions live elsewhere",
   // L2 页内的组标题与作用域 chip
-  '现在': 'Now',
   '怎么提醒我': 'How to alert me',
   '📱 仅此设备': '📱 This device only',
   '🖥 整机': '🖥 Whole machine',

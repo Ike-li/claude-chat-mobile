@@ -258,6 +258,5 @@ export function createElicitationSheet(context, {
       else showNext();
     },
   };
-  context.state.elicitations = controller;
   return controller;
 }

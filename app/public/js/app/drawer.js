@@ -118,6 +118,5 @@ export function createDrawerController(context, {
   }, { passive: true });
 
   const controller = { openLeftSidebar, closeLeftSidebar, showNotice };
-  context.state.drawer = controller;
   return controller;
 }

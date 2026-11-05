@@ -32,7 +32,6 @@ export function createInteractionQueueState(context, { answeredCapacity = 200 } 
     markQuestionAnswered,
     isQuestionAnswered,
   };
-  context.state.interactions = state;
   return state;
 }
 

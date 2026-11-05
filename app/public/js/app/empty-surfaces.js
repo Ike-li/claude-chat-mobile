@@ -6,6 +6,28 @@
 import { dashboardDirs, displaySessionTitle, esc, folderReasonText, formatComposeDefaultsSummary, formatSessionRowTime, formatTopContextPillAriaLabel, isBlockedSurfaceTarget, recentsSnapshot, recentWorkspaceChips, resolveEmptySurface, resolveModelPillText, shouldShowComposer, shouldShowTopContextPill, summarizeRecentsLoad } from '../logic.js';
 import { t } from '../i18n.js';
 
+// 新会话页和空会话引导共用的三个起手提示。文案现取 t()：跟着当前语言走，不能提成模块常量。
+export function starterPromptsHtml() {
+  return `<div class="flex flex-col gap-2 w-full max-w-sm">
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('总结当前仓库结构并指出入口文件')}">${t('💡 总结当前仓库结构')}</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('帮我写一个最小改动的修复计划')}">${t('🛠 写一个最小修复计划')}</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('运行相关测试并解读失败')}">${t('🧪 运行测试并解读')}</button>
+        </div>`;
+}
+
+export function wireStarterPrompts(root, { haptic, inputEl }) {
+  root.querySelectorAll('.esg-prompt').forEach(btn => {
+    btn.onclick = () => {
+      haptic('tap');
+      if (inputEl) {
+        inputEl.value = btn.getAttribute('data-p') || '';
+        inputEl.focus();
+        inputEl.dispatchEvent(new Event('input'));
+      }
+    };
+  });
+}
+
 export function createEmptySurfaces(context, {
   $, approvals, baseName, btnHome, btnNew, btnSessions, dashUnreadMark, el, elicitationSheet, folderPicker, haptic,
   hideStatuslineWrap, inputEl, messagesEl, modelInput, newSessionWorktree, openLeftSidebar, panelCwd,
@@ -290,11 +312,7 @@ export function createEmptySurfaces(context, {
             </button>
           </div>
         </div>
-        <div class="flex flex-col gap-2 w-full max-w-sm">
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('总结当前仓库结构并指出入口文件')}">${t('💡 总结当前仓库结构')}</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('帮我写一个最小改动的修复计划')}">${t('🛠 写一个最小修复计划')}</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('运行相关测试并解读失败')}">${t('🧪 运行测试并解读')}</button>
-        </div>
+        ${starterPromptsHtml()}
       </div>`);
 
     // 照官方新会话页：胶囊就是「在哪开」的选择器（已连接的文件夹 / 子文件夹 / 无文件夹 / 添加文件夹）
@@ -303,16 +321,7 @@ export function createEmptySurfaces(context, {
       haptic('tap');
       folderPicker.open();
     };
-    container.querySelectorAll('.esg-prompt').forEach(btn => {
-      btn.onclick = () => {
-        haptic('tap');
-        if (inputEl) {
-          inputEl.value = btn.getAttribute('data-p') || '';
-          inputEl.focus();
-          inputEl.dispatchEvent(new Event('input'));
-        }
-      };
-    });
+    wireStarterPrompts(container, { haptic, inputEl });
 
     wireConfigRefreshButton(container.querySelector('.compose-defaults-refresh'));
 

@@ -785,9 +785,6 @@
             <!-- 转后台（#459，终端 Ctrl+B）：有前台命令 / 子代理挡着本轮时才出现，见 app/foreground-tasks.js -->
             <button id="btnBackgroundTasks" type="button" class="hidden shrink-0 h-8 px-2.5 rounded-full border border-line text-xs font-medium text-ink-soft bg-surface active:bg-sunk disabled:opacity-50" title="把正在跑的前台命令 / 子代理转到后台，本轮继续（终端 Ctrl+B）" data-testid="btn-background-tasks">转后台</button>
 
-            <!-- 兼容性保留：隐藏的原 btnStop -->
-            <button id="btnStop" class="hidden pointer-events-none w-0 h-0" style="display: none !important;"></button>
-
             <!-- 空闲无内容时 JS 加 .hidden（C）；busy 停止 / 有内容发送 / 续接 均显示；无语音 -->
             <button id="btnSend" class="hidden flex items-center justify-center w-10 h-10 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0" title="发送" disabled>
               <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6">
@@ -1011,13 +1008,8 @@
 
       <!-- ═══ L1 目录 ═══ -->
       <div id="generalNavHome" data-testid="general-nav-home" class="space-y-2">
-        <!-- 「现在」区：只在有可行动的事时出现，无事整段消失（不留空占位）。由 app.js 渲染。 -->
-        <div id="generalNowSection" class="hidden space-y-1.5 p-2.5 rounded-xl border border-accent/30 bg-accent-wash/40" data-testid="general-now">
-          <div class="text-[11px] font-bold text-accent-deep tracking-wide">现在</div>
-          <div id="generalNowItems" class="space-y-1.5"></div>
-        </div>
         <!-- 六行目录由 app/general-nav.js 按 logic/general-nav.js 的判定渲染 -->
-        <div id="generalNavRows" class="space-y-2"></div>
+        <div id="generalNavRows" class="mt-2 space-y-2"></div>
         <!-- 底部两档（#302，app/local-reset.js）：「重新加载」不丢数据，「重置本机数据」清空这台设备上存的一切 -->
         <div class="pt-3 space-y-2" data-testid="local-reset">
           <button id="btnReloadApp" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">

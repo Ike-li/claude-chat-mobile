@@ -44,6 +44,5 @@ export function createSessionRowMenu(context, {
   }
 
   const controller = { open };
-  context.state.sessionRowMenu = controller;
   return controller;
 }
