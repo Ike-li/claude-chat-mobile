@@ -484,6 +484,15 @@ function feedHistory(s, entry, liveUuids) {
       return true;
     }
 
+    // 中断同理：这一行是这轮被打断的唯一痕迹。只换这里的回显，isCliSystemLine 不能动——回退候选和
+    // 尾部形态判定都靠它把这行当系统行。子 agent 支线的中断不代表这一轮被打断，照旧丢弃。
+    if (isMainChainInterruptMarker(entry)) {
+      const marker = { role: 'system', kind: 'interrupted', content: '', timestamp: entry.timestamp };
+      if (entry.entrypoint) marker.entrypoint = entry.entrypoint;
+      pushCapped(s, marker);
+      return true;
+    }
+
     const role = entry.message?.role || entry.type;
     const isSide = Boolean(entry.isSidechain || entry.parent_tool_use_id);
     const parentFromDisk = entry.parent_tool_use_id || entry.parentToolUseId || entry.agentId || null;
@@ -1078,6 +1087,15 @@ function isLocalCommandWrapped(text) {
   return /^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t);
 }
 
+const INTERRUPT_MARKER_RE = /^\[Request interrupted by user[^\]]*\]$/;
+
+function isMainChainInterruptMarker(entry) {
+  if (entry.type !== 'user' || entry.isSidechain || entry.parent_tool_use_id) return false;
+  const content = entry.message?.content;
+  const text = Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' ? content[0].text : content;
+  return typeof text === 'string' && INTERRUPT_MARKER_RE.test(text.trim());
+}
+
 export function isCliSystemLine(content) {
   const t = content.trim();
   if (isLocalCommandWrapped(t)) return true;
@@ -1089,7 +1107,7 @@ export function isCliSystemLine(content) {
   const ide = /^<(ide_[a-z_]+)>/.exec(t);
   if (ide && new RegExp(`</${ide[1]}>`).test(t)) return true;
   // 用户打断标记（含 [Request interrupted by user] 与 [... for tool use] 变体）。
-  if (/^\[Request interrupted by user[^\]]*\]$/.test(t)) return true;
+  if (INTERRUPT_MARKER_RE.test(t)) return true;
   // Continue/继续 触发的 resume 空 turn 占位（assistant）。
   if (t === 'No response requested.') return true;
   return false;
@@ -2174,7 +2192,7 @@ function classifyChainTail(entries, sidechainOnly) {
     // user
     if (blocks?.some(b => b?.type === 'tool_result')) return { verdict: 'pending', lastChainTs, lastChainEntrypoint };
     const text = typeof c === 'string' ? c : (blocks || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
-    if (/^\[Request interrupted by user[^\]]*\]$/.test(text.trim())) return { verdict: 'settled', lastChainTs, lastChainEntrypoint };
+    if (INTERRUPT_MARKER_RE.test(text.trim())) return { verdict: 'settled', lastChainTs, lastChainEntrypoint };
     if (isCliSystemLine(text)) continue; // local-command / bash / ide 噪音：不当链尾
     // 本地命令只存在于主链；子链不认这条收尾。收尾成立的前提是【链尾这条 user 自己就是那条 slash】——
     // 本地命令的输出只能给它自己的调用收尾，不能给任意一条 user 消息收尾，否则「终端发了真实请求、

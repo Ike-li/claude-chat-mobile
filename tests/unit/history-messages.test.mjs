@@ -288,9 +288,9 @@ test('getSessionHistory: 以 <task-notification> 开头但无闭合标签的普�
   assert.ok(msgs[0].content.includes('这个标签是什么意思'));
 });
 
-test('getSessionHistory: CLI 系统行（isMeta=false 的 interrupt / 空 turn / 命令输出）被过滤', async () => {
-  // 回归护栏：<local-command-stdout>（本地命令的执行输出，非用户输入）、[Request interrupted by user]
-  // （打断标记）、assistant 的 'No response requested.'（Continue/继续 触发的 resume 空 turn）均
+test('getSessionHistory: CLI 系统行（isMeta=false 的空 turn / 命令输出）被过滤', async () => {
+  // 回归护栏：<local-command-stdout>（本地命令的执行输出，非用户输入）、assistant 的
+  // 'No response requested.'（Continue/继续 触发的 resume 空 turn）均
   // isMeta=false，会漏过上面的 isMeta 闸、被当成 user/assistant 气泡回显。这些都不是对话内容，必须过滤。
   // 注：<command-name>/<command-message>/<command-args>（slash 命令本身的调用块）不在此列——见下方
   // 「slash 命令块重建」测试：那才是用户实际打出的那一行，磁盘上唯一留存处，不该被当噪音丢弃。
@@ -300,13 +300,54 @@ test('getSessionHistory: CLI 系统行（isMeta=false 的 interrupt / 空 turn /
   writeJSONL(dir, 'clinoise', [
     { type: 'user', message: { role: 'user', content: '真实提问' } },
     { type: 'user', message: { role: 'user', content: '<local-command-stdout>Set model to Opus 4.8 (default)</local-command-stdout>' } },
-    { type: 'user', message: { role: 'user', content: '[Request interrupted by user]' } },
-    { type: 'user', message: { role: 'user', content: '[Request interrupted by user for tool use]' } },
     { type: 'assistant', message: { role: 'assistant', content: 'No response requested.' } },
     { type: 'assistant', message: { role: 'assistant', content: '真实回答' } },
   ]);
   const msgs = await getSessionHistory('clinoise', cwd, 50, { baseDir: BASE });
   assert.deepEqual(msgs.map(m => m.content), ['真实提问', '真实回答'], 'CLI 系统噪音行不得回显成气泡');
+});
+
+// 中断在磁盘上只留这一行。整条丢掉的话，刷新或换设备后一轮停在半截却看不出原因，以为任务还没干完或干完了。
+test('getSessionHistory: 主链中断行换成「已中断」标记，不回显成用户气泡', async () => {
+  const cwd = '/test/interrupt-marker-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  const interrupted = (uuid, content, extra = {}) => ({ type: 'user', uuid, entrypoint: 'cli', timestamp: '2026-11-05T10:00:00Z', message: { role: 'user', content }, ...extra });
+  writeJSONL(dir, 'interrupted', [
+    { type: 'user', uuid: 'u-1', message: { role: 'user', content: '干活' }, timestamp: '2026-11-05T09:59:00Z' },
+    interrupted('i-array', [{ type: 'text', text: '[Request interrupted by user]' }]), // 磁盘真实形态
+    { type: 'assistant', uuid: 'a-1', message: { role: 'assistant', content: '接着干' }, timestamp: '2026-11-05T10:00:01Z' },
+    interrupted('i-tool', '[Request interrupted by user for tool use]'),
+    interrupted('i-side', [{ type: 'text', text: '[Request interrupted by user]' }], { isSidechain: true }),
+    { type: 'user', uuid: 'u-2', message: { role: 'user', content: '[Request interrupted by user] 这行是什么意思' }, timestamp: '2026-11-05T10:01:00Z' },
+  ]);
+  const msgs = await getSessionHistory('interrupted', cwd, 50, { baseDir: BASE });
+  assert.deepEqual(msgs.map(m => [m.role, m.kind ?? null, m.content]), [
+    ['user', null, '干活'],
+    ['system', 'interrupted', ''],
+    ['assistant', null, '接着干'],
+    ['system', 'interrupted', ''],
+    ['user', null, '[Request interrupted by user] 这行是什么意思'],
+  ], '子 agent 支线的中断不是这一轮被打断，用户引用这段文字也不是中断');
+  assert.equal(msgs[1].timestamp, '2026-11-05T10:00:00Z');
+  assert.equal(msgs[1].entrypoint, 'cli', 'catchUpStep 靠它判己方写盘还是外部写入');
+  assert.equal(msgs[1].uuid, undefined, '标记不是对话节点，不能带分叉锚点');
+});
+
+test('getSessionHistory: 中断标记的追平口径：终端写的算外部写入，己方写的被吸收', async () => {
+  const cwd = '/test/interrupt-marker-sync';
+  const dir = join(BASE, getProjectDir(cwd));
+  const before = entrypoint => [
+    { type: 'user', uuid: 'u-1', entrypoint, message: { role: 'user', content: '问题' }, timestamp: '2026-11-05T10:00:00Z' },
+  ];
+  const marker = entrypoint => ({ type: 'user', uuid: 'i-1', entrypoint, message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] }, timestamp: '2026-11-05T10:00:05Z' });
+  const stepAfterInterrupt = async (id, entrypoint) => {
+    writeJSONL(dir, id, before(entrypoint));
+    const first = catchUpStep({ baseline: 0, wasBusy: false }, { messages: await getSessionHistory(id, cwd, 50, { baseDir: BASE }) });
+    writeJSONL(dir, id, [...before(entrypoint), marker(entrypoint)]);
+    return catchUpStep(first.state, { messages: await getSessionHistory(id, cwd, 50, { baseDir: BASE }) });
+  };
+  assert.deepEqual((await stepAfterInterrupt('intcli', 'cli')).emit.map(m => m.kind), ['interrupted'], '终端按了 Esc：手机要看到');
+  assert.deepEqual((await stepAfterInterrupt('intsdk', 'sdk-ts')).emit, [], '己方写的：live 已经画过，再推就重复，还会误锁只读');
 });
 
 test('getSessionHistory: slash 命令块（<command-name>/<command-args>）重建成 "/命令名 参数" 文本，不再整体丢弃', async () => {
