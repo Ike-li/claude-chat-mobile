@@ -126,6 +126,7 @@ export function createContentScenarios(getContext) {
         const { socket, activeEpoch, viewingInstanceId, activeModel, delay } = getContext();
         const text = [
           '- [带行号](demo.js:2)', '- [长文件](long.js:300)', '- [分页日志](paged.log#L700)', '- [太远的行](paged.log:3900)',
+          '- [页尾的下一行](page-edge.log#L129)',
           '- [视频](media/clip.webm)', '- [图片](media/cover.png)', '- [坏图](media/broken.png)', '- [压缩包](media/out.zip)',
           '- [目录](media/)', '- [不存在](missing/nope.txt)', '- [旧后端](stale-backend.txt)', '- [别的文件夹](../sibling/notes.txt)',
           '- [网页](https://example.com/page)', '- [电话](tel:10086)', '- [邮件](mailto:a@example.com)',

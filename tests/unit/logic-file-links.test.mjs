@@ -83,7 +83,7 @@ test('lineSpan：取出第 N 行，还没读到那一行时回 null', () => {
   assert.equal(lineOf('one\ntwo\n\nfour', 3), '');
   assert.equal(lineOf('one\ntwo\n\nfour', 4), 'four');
   assert.equal(lineOf('one\ntwo\n\nfour', 5), null);
-  // 末尾的换行后面还算一行：截断的文件正好断在行尾时，下一行要等下一页
-  assert.equal(lineOf('one\n', 2), '');
+  // 截断的文件正好断在行尾时，下一行要等下一页；回空串的话调用方会当成找到了，续页就停了
+  assert.equal(lineOf('one\n', 2), null);
   assert.equal(lineOf('one\n', 3), null);
 });

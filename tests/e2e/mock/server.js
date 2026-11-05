@@ -1018,7 +1018,7 @@ app.get('/f/:ticket', (req, res) => {
   const file = MOCK_BINARY_FILES.get(relPath);
   if (file?.media && req.query.download === undefined) res.type(file.mime);
   else res.attachment(relPath.split('/').pop());
-  res.send(file?.bytes ?? `mock text: ${relPath}`);
+  res.send(file?.bytes ?? 'mock text');
 });
 
 app.get('/__approve-log', (_req, res) => res.json(mockApproveLog));
@@ -3418,6 +3418,12 @@ io.on('connection', socket => {
     }
     if (encoding !== 'base64' && String(relPath || '') === 'paged.log') {
       const text = Array.from({ length: 4000 }, (_, i) => `log line ${i + 1}`).join('\n');
+      const page = text.slice(offset, offset + 2048);
+      return callback({ ok: true, content: page, totalSize: text.length, bytesRead: page.length, truncated: offset + page.length < text.length, binary: false });
+    }
+    // 每行 16 字节：第 128 行的换行是第一页的最后一个字节，第 129 行整行都在第二页
+    if (encoding !== 'base64' && String(relPath || '') === 'page-edge.log') {
+      const text = Array.from({ length: 200 }, (_, i) => `edge line ${String(i + 1).padStart(5, '0')}`).join('\n');
       const page = text.slice(offset, offset + 2048);
       return callback({ ok: true, content: page, totalSize: text.length, bytesRead: page.length, truncated: offset + page.length < text.length, binary: false });
     }

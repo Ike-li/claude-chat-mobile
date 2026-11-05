@@ -36,6 +36,7 @@ export function lineSpan(text, line) {
     if (newline < 0) return null;
     start = newline + 1;
   }
+  if (start === text.length) return null; // 这一页正好断在目标行之前，行首的空区间不算读到
   const end = text.indexOf('\n', start);
   return { start, end: end < 0 ? text.length : end };
 }

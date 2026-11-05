@@ -78,6 +78,12 @@ test.describe('P0 文件链接', () => {
     // 2KB 一页，首页加 8 次自动续页。不设上限的话手机会把整个大文件拉完，这里已经落到 line 3900 了
     await expect(body(page).locator('button', { hasText: '18.0KB' })).toBeVisible();
     await expect(target).toHaveCount(0);
+    await closeSheet(page);
+
+    // 一页正好断在目标行之前：页尾的空区间不算找到，要接着读下一页，否则高亮一个空标记、那行也没显示
+    await link(page, '页尾的下一行').click();
+    await expect(target).toHaveText('edge line 00129');
+    await expect(target).toBeInViewport();
 
     await expectNoBrowserErrors(page);
   });
