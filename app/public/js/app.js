@@ -6766,27 +6766,6 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     };
   }
 
-  // 复制按钮的内容。尺寸由调用方写字面量类名（Tailwind 靠扫源码产出 utility）：代码块 w-3、消息操作栏 w-3.5。
-  function copyBtnInnerHtml(sizeClasses) {
-    return `
-      <svg class="${sizeClasses}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-      </svg>
-      <span>${t('复制')}</span>
-    `;
-  }
-
-  function wireCopyFeedback(btn, getText, { stopPropagation = false } = {}) {
-    btn.onclick = async (e) => {
-      if (stopPropagation) e.stopPropagation();
-      haptic('tap');
-      const ok = await copyText(getText());
-      const span = btn.querySelector('span');
-      if (span) span.textContent = ok ? t('已复制') : t('失败');
-      setTimeout(() => { if (span) span.textContent = t('复制'); }, 1500);
-    };
-  }
-
   // E18: 为代码块注入复制按钮（per-block，hover 时浮现）
   function injectCodeCopyButtons(container) {
     container.querySelectorAll('pre').forEach(pre => {
