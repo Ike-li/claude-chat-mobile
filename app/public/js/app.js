@@ -378,6 +378,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   const fileBrowseTools = $('fileBrowseTools'), fileBrowseBack = $('fileBrowseBack'),
         fileBrowsePath = $('fileBrowsePath'),
         fileBrowseBody = $('fileBrowseBody'), fileBrowseEdit = $('fileBrowseEdit'),
+        fileBrowseDownload = $('fileBrowseDownload'),
         fileBrowseSave = $('fileBrowseSave'), fileBrowseCancelEdit = $('fileBrowseCancelEdit'),
         fileBrowseSaveError = $('fileBrowseSaveError');
   // git 变更（只读）——改动 tab
@@ -703,6 +704,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       fileBrowsePath,
       fileBrowseBody,
       fileBrowseEdit,
+      fileBrowseDownload,
       fileBrowseSave,
       fileBrowseCancelEdit,
       fileBrowseSaveError,
@@ -5226,6 +5228,15 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // #399：把手下拉走面板自己的 close（含未保存编辑丢弃确认），不要直接 closeSheet
   setGestureDismiss(workspaceModal, () => { void workspacePanel.close(); });
   const openWorkspacePanel = workspacePanel.open;
+  // 流式期间正文反复重写 innerHTML，所以挂在 document 上；审批 sheet 里的计划正文走同一份渲染，一并覆盖
+  document.addEventListener('click', event => {
+    const link = event.target.closest('a[data-file-path]');
+    if (!link) return;
+    workspacePanel.openFile(panelCwd(), worktreeGoneNotice(), {
+      path: link.dataset.filePath,
+      line: Number(link.dataset.fileLine) || null,
+    });
+  });
   // 「选文件夹」面板：新会话在哪开（已连接的文件夹 / 子文件夹 / 无文件夹 / 添加文件夹）
   const folderPicker = createFolderPicker({
     $, el, socket, openSheet, closeSheet, haptic,

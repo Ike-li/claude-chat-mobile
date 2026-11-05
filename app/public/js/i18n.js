@@ -1300,6 +1300,11 @@ export const EN_DICT = Object.freeze({
 
   // —— 文件浏览 / git 改动 ——
   '无法加载：': 'Could not load: ',
+  '无法打开：': 'Could not open: ',
+  '无法下载：': 'Could not download: ',
+  '下载': 'Download',
+  '无法预览，可以下载后查看': 'Preview failed. Download the file to view it.',
+  '服务端没响应，刚更新过的话要重启后端': 'No response from the server. If you just updated, restart the backend.',
   '加载更多（已显示': 'Load more (showing',
   '二进制文件（': 'Binary file (',
   '），不支持预览': ') — preview not supported',

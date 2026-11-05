@@ -20,6 +20,7 @@ export * from './logic/composer.js';
 export * from './logic/device-id.js';
 export * from './logic/elicitation.js';
 export * from './logic/connection.js';
+export * from './logic/file-links.js';
 export * from './logic/format.js';
 export * from './logic/general-nav.js';
 export * from './logic/about.js';
