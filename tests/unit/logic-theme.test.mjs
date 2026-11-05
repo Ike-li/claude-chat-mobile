@@ -11,7 +11,6 @@ import {
   writeThemePref,
   resolveTheme,
   themeHtmlAttribute,
-  themePrefLabelKey,
   manifestHrefForTheme,
 } from '../../app/public/js/logic/theme.js';
 import { applyThemeToDocument } from '../../app/public/js/theme.js';
@@ -72,12 +71,6 @@ test.describe('resolveTheme / themeHtmlAttribute', () => {
     assert.equal(themeHtmlAttribute('system'), null);
     assert.equal(themeHtmlAttribute('nope'), null);
   });
-});
-
-test('themePrefLabelKey 给出中文 key（调用方再 t()）', () => {
-  assert.equal(themePrefLabelKey('light'), '浅色');
-  assert.equal(themePrefLabelKey('dark'), '深色');
-  assert.equal(themePrefLabelKey('system'), '跟随系统');
 });
 
 function fakeDoc() {

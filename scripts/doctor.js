@@ -27,7 +27,7 @@
 // 21. 监听地址自洽性（BIND_MODE/BIND_HOST 绑到哪、会不会让 server 拒绝启动，见 doctor-checks.bindDiagnostic）
 // 22. Tailscale 检测（不经 Cloudflare 的推荐公网路径；只探测 + 指路，不装不起不保活，见 doctor-checks.tailscaleDiagnostic）
 // 23. 设备审批管辖面（DEVICE_APPROVAL_SCOPE 写错的值运行时按较松的默认档跑，这里点名，见 doctor-checks.deviceApprovalScopeDiagnostic）
-import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, accessSync, constants, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
 import { join, dirname, basename } from 'node:path';
@@ -145,7 +145,7 @@ function checkClaudeBin() {
 // WORK_DIR 的退役一并删除。那个 `|| homedir()` 会让「没配工作区」的机器被 doctor 报成
 // 「WORK_DIR 可写 ✓」—— 检查的是家目录，而用户以为检查的是他的项目目录。
 function checkWorkDir() {
-  // 白名单各目录需可写。soft：问题用 warn（server 启动期对单个无效项告警跳过、不挡启动，
+  // 白名单各目录需可写。问题用 warn（server 启动期对单个无效项告警跳过、不挡启动，
   // doctor 与之一致——不因可选切换目录有问题就 fail 整个自检）。
   // 解析统一走 workdirs.js（与 server readWorkdirSource 单一事实源）：条目支持 string 或 {path, sessionLimit}。
   const { result, from, filePath, warnings: srcWarnings } = resolveWorkdirSource();
@@ -159,7 +159,7 @@ function checkWorkDir() {
     // WORK_DIRS：新用户配的是 ccm.config.json 的 WORKDIRS，报成 WORK_DIRS 会让他去找一个
     // 自己配置里根本不存在的键（2026-08-19 新装实测）。
     for (const w of result.warnings) warn(from, w);
-    for (const { path } of result.entries) checkOneDir(from, path, true);
+    for (const { path } of result.entries) checkOneDir(from, path);
     // 过宽根只报不拦（判据与写入侧同一个，见 workdirBreadthDiagnostic）。本机终端里逐条点名，路径可以出现。
     for (const dir of workdirBreadthDiagnostic({ dirs: result.entries.map(e => e.path), home: homedir(), lang: LANG }).broad) {
       warn(from, bi(
@@ -172,22 +172,16 @@ function checkWorkDir() {
   }
 }
 
-function checkOneDir(label, dir, soft = false) {
+function checkOneDir(label, dir) {
   if (!existsSync(dir)) {
-    if (soft) { warn(label, bi(`不存在: ${dir}（server 启动期会告警跳过此目录）`, `Missing: ${dir} (the server warns and skips it at startup)`)); return; }
-    try {
-      mkdirSync(dir, { recursive: true });
-      ok(label, bi(`不存在已创建: ${dir}`, `Did not exist; created: ${dir}`));
-    } catch (err) {
-      fail(label, bi(`不存在且无法创建: ${dir} — ${err.message}`, `Missing and could not be created: ${dir} — ${err.message}`));
-    }
+    warn(label, bi(`不存在: ${dir}（server 启动期会告警跳过此目录）`, `Missing: ${dir} (the server warns and skips it at startup)`));
     return;
   }
   try {
     accessSync(dir, constants.W_OK);
     ok(label, bi(`可写: ${dir}`, `Writable: ${dir}`));
   } catch {
-    (soft ? warn : fail)(label, bi(`存在但不可写: ${dir}`, `Exists but is not writable: ${dir}`));
+    warn(label, bi(`存在但不可写: ${dir}`, `Exists but is not writable: ${dir}`));
   }
 }
 

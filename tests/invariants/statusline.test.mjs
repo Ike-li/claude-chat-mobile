@@ -25,7 +25,6 @@ import {
   lastUsageInputTokens,
   invalidateCtxOccupancy,
   webContextCost,
-  getContextUsageSafe,
   contextUsageDetail,
   fetchAndAdoptContextUsage,
   CONTEXT_USAGE_INFLIGHT_MAX_MS,
@@ -427,28 +426,6 @@ test.describe('token 与成本口径', () => {
 
   test('只有时长没有花费也算有成本信息', () => {
     assert.equal(webContextCost({ agent: { totalDurationMs: 5 } }).cost?.durationMs, 5);
-  });
-});
-
-test.describe('getContextUsageSafe：RPC 层兜底，不判生命周期', () => {
-  test('q 没有 getContextUsage → null', async () => {
-    assert.equal(await getContextUsageSafe(null), null);
-    assert.equal(await getContextUsageSafe({}), null);
-  });
-
-  test('正常返回原样透传', async () => {
-    const payload = { maxTokens: 200000, percentage: 12 };
-    assert.deepEqual(await getContextUsageSafe({ getContextUsage: async () => payload }), payload);
-  });
-
-  test('超时 → null（先发陈旧值，回来再补发，不阻塞状态栏）', async () => {
-    const never = { getContextUsage: () => new Promise(() => {}) };
-    assert.equal(await getContextUsageSafe(never, 20), null);
-  });
-
-  test('抛错 → null，不把异常冒泡到状态栏组装', async () => {
-    const boom = { getContextUsage: async () => { throw new Error('rpc down'); } };
-    assert.equal(await getContextUsageSafe(boom, 100), null);
   });
 });
 

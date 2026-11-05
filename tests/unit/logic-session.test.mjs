@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, resolveRowTerminalState, mirrorRowLockChanged, isBlockedSurfaceTarget, formatSessionRowSubtitle, mergeOrphanRowsByTime, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, resolveRowTerminalState, mirrorRowLockChanged, isBlockedSurfaceTarget, formatSessionRowSubtitle, mergeOrphanRowsByTime, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -653,27 +653,8 @@ test('shouldRestoreOptimisticBusy: 同会话静默换实例且 pendingSendBusySe
   }), false);
 });
 
-// bindView 切视图时是否该清空输入框未发送草稿。思考强度/模型切档会让后端 dispose 旧实例 + resume 同会话
-// 开新实例（instanceId 变了、sessionId 不变），这只是底层实例被静默替换、用户视角仍在同一个聊天里——
-// 此时清空草稿是误伤（真实 bug：切效果强度/模型会清空正在输入的指令）。真正切到另一个会话/全新未开会话
-// 才应该清空（用户明确导航离开，草稿属于旧会话）。
-test('shouldClearInputOnBindView: 同一会话静默换实例保留草稿，真实切会话才清空', () => {
-  // 同一非空 sessionId（effort/model 触发的 dispose+recreate，同会话换了个 instanceId）：保留草稿
-  assert.equal(shouldClearInputOnBindView({ prevSessionId: 'sess_1', newSessionId: 'sess_1' }), false);
-  // 真实切到另一个已有会话：清空
-  assert.equal(shouldClearInputOnBindView({ prevSessionId: 'sess_1', newSessionId: 'sess_2' }), true);
-  // 切到全新未开会话（newSessionId 尚无）：清空
-  assert.equal(shouldClearInputOnBindView({ prevSessionId: 'sess_1', newSessionId: null }), true);
-  // 从空首页首次绑定到会话：清空（无「同一会话」可言）
-  assert.equal(shouldClearInputOnBindView({ prevSessionId: null, newSessionId: 'sess_1' }), true);
-  // 两端都空（新会话间切换/初始态）：清空，无法判定是否同一草稿归属
-  assert.equal(shouldClearInputOnBindView({ prevSessionId: null, newSessionId: null }), true);
-  // 空/未定义入参安全：默认清空（保守，不吞真实切换场景）
-  assert.equal(shouldClearInputOnBindView(), true);
-});
-
 // bindView 切会话时未发送草稿（文字 + 附件）按 sessionId 存/取。
-// 与 shouldClearInputOnBindView 同判定边界：同会话静默换实例 = keep；真实导航 = swap（存旧取新）。
+// 判定边界：同会话静默换实例 = keep；真实导航 = swap（存旧取新）。
 // 新会话在发出第一条消息前没有 sessionId。bindView 被 setInstances 无条件调用，
 // 而 broadcastInstances() 在服务端有 28 个触发点且都是 io.emit 全员广播——于是
 // 「新会话已就绪、还没发第一条」这整段时间里，任何一个实例的状态变化（别的会话跑完

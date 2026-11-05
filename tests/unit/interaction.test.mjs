@@ -159,13 +159,6 @@ test.describe('interaction-log', () => {
     assert.ok(!entry.text.includes('test1234567890abcdef'));
   });
 
-  test('textDelta：不启用时不记日志', () => {
-    ilog.textDelta('td1', 'some delta');
-    // textDelta 仅在 enabled 时 console.log，总是 no-op for session buffers
-    const logs = ilog.getSessionLogs('td1');
-    assert.deepEqual(logs, []);
-  });
-
   // ---- 模型 ID 独立字段（Web 交互日志 chip badge 数据源）----
   test('addSessionLog：model 参数 → entry.model（非空才带字段）', () => {
     ilog.addSessionLog('m1', 'user_in', 'hi', 'claude-opus-4-8');

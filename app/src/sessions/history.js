@@ -1413,8 +1413,7 @@ async function readCwdEvidence(file, tailBytes = 0) {
   return out;
 }
 
-// 标题子串匹配（大小写不敏感）。空/空白 query 视为全匹配。前后端各有一份同语义纯函数（前端在
-// public/js/logic/session-search.js）；两边不能互相 import（边界闸）。
+// 标题子串匹配（大小写不敏感）。空/空白 query 视为全匹配。
 export function matchesSessionTitle(title, query) {
   const q = typeof query === 'string' ? query.trim().toLowerCase() : '';
   if (!q) return true;
