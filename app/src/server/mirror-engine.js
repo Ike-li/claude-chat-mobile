@@ -500,7 +500,7 @@ export function createMirrorEngine({
     // 定时器启停：app.js 在装配末尾调 start()，shutdown 调 stop()。
     start() { catchUpStopped = false; rescheduleCatchUp(); },
     stop() { catchUpStopped = true; if (catchUpTimer) { clearTimeout(catchUpTimer); catchUpTimer = null; } },
-    // 主循环（定时器 / hooks 插队 / 前端 mirror:syncNow 三处驱动，内部单飞）
+    // 主循环（定时器 / hooks 插队 / mirror:syncNow 事件三处驱动，内部单飞）
     catchUpTick,
     // 只读查询：statusline 路由与重连快照用
     mirrorOwnedBy,

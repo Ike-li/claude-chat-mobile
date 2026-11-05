@@ -47,10 +47,6 @@ export function systemBarClass(payload = {}) {
   return 'text-ink-faint';
 }
 
-// UX-010：横幅优先级仲裁（同屏最多一条）。
-// mirror 状态已迁到 input placeholder + 续接钮，#mirrorBanner 恒隐——不得再压住 task_progress
-// （多子代理/后台任务进度是用户在只读时仍需要看到的）。
-// 序：task > subagent > activity > mirror(占位) > null。
 // UX-004：流式 markdown 预览节流间隔（ms）。
 export function formatStreamPreviewIntervalMs(ms) {
   const n = Number(ms);

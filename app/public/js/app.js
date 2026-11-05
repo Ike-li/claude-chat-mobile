@@ -262,8 +262,6 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   const connBannerSpinnerEl = $('connBannerSpinner'), connBannerRetryEl = $('connBannerRetry');
   const btnSend = $('btnSend'), btnNew = $('btnNew'), btnHome = $('btnHome'), btnSessions = $('btnSessions');
   // 流内 live 活动行（懒创建 #streamLiveStatus）；composer 顶条 #activeStatusPill 已移除
-  const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
-  const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
   const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), taskBannerLabel = $('taskBannerLabel'), btnTaskStop = $('btnTaskStop'), taskBannerToggle = $('taskBannerToggle'), taskBannerChevron = $('taskBannerChevron');
   const unreadPillEl = $('unreadPill'), unreadPillCountEl = $('unreadPillCount'); // 未读角标悬浮胶囊
   const sessionPanel = $('sessionPanel');
@@ -1402,14 +1400,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     const btn = el(`<button type="button" class="ml-2 underline decoration-dotted" data-testid="outbox-parked-goto">${t('回到该会话')}</button>`);
     btn.onclick = () => {
       haptic('tap');
-      let acked = false;
-      const blocked = message => showSessionBlockedSurface({ sessionId: item.sessionId, cwd: item.cwd, message });
-      socket.emit('session:switch', { sessionId: item.sessionId, cwd: item.cwd }, res => {
-        acked = true;
-        if (!res?.ok) blocked(res?.error || t('切换失败'));
-        else dismissBlockedSurfaceIfTarget(item.sessionId, item.cwd);
+      switchSessionWithFallback(item, {
+        onFailure: message => showSessionBlockedSurface({ sessionId: item.sessionId, cwd: item.cwd, message }),
       });
-      setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     };
     bar.appendChild(btn);
   }
@@ -4300,21 +4293,15 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 深链尤其需要落地页：从推送点进来时用户对"当前在哪个会话"毫无预期，一条落在别处的红字
       // 会被读成"我点开的这个会话出错了"；ack 迟迟不来同样不能让用户干等——同其它 4 处
       // session:switch 入口一样补 4s 兜底（不把反馈压在 ack 上）。
-      let acked = false;
-      const blocked = message => showSessionBlockedSurface({
-        sessionId: r.sessionId, cwd: r.cwd,
-        // 签名是具名参数（sessionsCache + instances 两条来源），位置参数会静默返回空标题
-        title: lookupNotifySessionTitle({ sessionId: r.sessionId, cwd: r.cwd, sessionsCache, instances: instancesList }),
-        message,
+      switchSessionWithFallback(r, {
+        ackFailureText: t('深链目标会话已不可用'),
+        onFailure: message => showSessionBlockedSurface({
+          sessionId: r.sessionId, cwd: r.cwd,
+          // 签名是具名参数（sessionsCache + instances 两条来源），位置参数会静默返回空标题
+          title: lookupNotifySessionTitle({ sessionId: r.sessionId, cwd: r.cwd, sessionsCache, instances: instancesList }),
+          message,
+        }),
       });
-      socket.emit('session:switch', { sessionId: r.sessionId, cwd: r.cwd }, res => {
-        acked = true;
-        if (!res?.ok) blocked(res?.error || t('深链目标会话已不可用'));
-        // ack 迟于 4s 兜底时落地页已经弹出来了，但这次切换其实成功了——撤掉它，
-        // 否则用户人在目标会话里、屏幕上却盖着一张「切换无响应」。
-        else dismissBlockedSurfaceIfTarget(r.sessionId, r.cwd);
-      });
-      setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     } else {
       openLeftSidebar(); // 定位不到（缺 sessionId / 无 instanceId）→ 打开会话列表让用户手选
     }
@@ -5549,13 +5536,14 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   const sessionSidebar = createSessionSidebar(appContext, {
     appConfirm, applyDeepLink, applySessionDraftSwap, attachments, attentionChipEl, baseName,
     closeLeftSidebar, composePage, connBanner, connDot, connDotWrap,
-    dismissBlockedSurfaceIfTarget: (...args) => dismissBlockedSurfaceIfTarget(...args), drawer, el,
+    drawer, el,
     ensureEmptySurface: (...args) => ensureEmptySurface(...args),
     enterComposeReady: (...args) => enterComposeReady(...args), envConfigPanel, folderPicker, haptic,
     inputEl, leftSidebar, newSessionWorktree, noticeDismissals, openDeleteSession, perfTrace, prefetchHistory, projectsState,
     renderHooksBridgeSection, renderStatuslineBridgeSection, SESSION_PANEL_REVALIDATE_MS, sessionPanel,
     sessionRename, sessionRowMenu, sessionsCache, sessionsDot, sessionSearchQueryByDir, sessionWorkspaceState,
     setStatusIcon, showSessionBlockedSurface: (...args) => showSessionBlockedSurface(...args), socket,
+    switchSessionWithFallback: (...args) => switchSessionWithFallback(...args),
     syncDashNoFolders: (...args) => syncDashNoFolders(...args), unread,
     getAvailableDirs: () => availableDirs, getCurrentCwd: () => currentCwd,
     getDirSectionNodes: () => dirSectionNodes, getDisplayedSessionId: () => displayedSessionId,
@@ -5689,9 +5677,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     setComposeReady: v => { _composeReady = v; },
   });
   const {
-    dismissBlockedSurfaceIfTarget, ensureEmptySurface, enterComposeReady, leaveComposeReady,
+    ensureEmptySurface, enterComposeReady, leaveComposeReady,
     refreshComposeDefaultsSummary, renderWorktreeChips, showComposeSurface, showDashboard,
-    showInstanceDestroyedSurface, showSessionBlockedSurface, syncComposerVisibility, syncDashNoFolders,
+    showInstanceDestroyedSurface, showSessionBlockedSurface, switchSessionWithFallback, syncComposerVisibility, syncDashNoFolders,
     syncTopContextLabel, syncTopContextPillAriaLabel, syncTopContextPillVisibility,
   } = emptySurfaces;
   /**
@@ -6540,31 +6528,16 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   }
 
   function refreshMirrorComposerCopy() {
-    if (!inputEl) return;
-    if (!mirrorReadonlySid) {
-      // 非镜像：走 turnRunning placeholder（勿在此写死 idle，否则 setBusy 后被镜像刷新冲掉）
-      inputEl.placeholder = resolveComposerPlaceholder({
-        busy: _busyState,
-        turnRunning: _turnRunning,
-        mirrorReadonly: false,
-        idleText: t('给 Claude 发消息...'),
-      });
-      return;
-    }
     const armed = armedTakeoverSid === mirrorReadonlySid;
     inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, waiting: mirrorWaitingFlag, isWebInitiated: !mirrorCliSeenFlag });
     maybeHintHooksBridge();
-    // 兼容：隐藏节点若仍在 DOM，同步文案（不展示）
-    if (mirrorBannerText) mirrorBannerText.textContent = inputEl.placeholder;
-    if (mirrorBannerIcon) mirrorBannerIcon.textContent = armed ? '⏳' : (mirrorStaleFlag ? '⚠️' : '⏱');
   }
 
   // 【曾经这里有 reconcileBanners 与 #activityBanner】那条横幅在 spawn 时点亮、显示子代理的
   // description，唯一的生产者是主链 spawn 工具。合卡之后聚合卡在同一时刻就建好了，且带着类型、
   // 用量与最近工具——横幅成了纯复读，2026-09-10 真机同屏看见两处说同一件事。
-  // 横幅一撤，仲裁函数的剩余职责只有「隐藏 #mirrorBanner」，而那个节点本就 class="hidden"
-  // 且另有一处显式隐它，于是整个仲裁退化成空操作，一并删掉。优先级表（bannerPriority）
-  // 随之失去唯一消费者，也从 logic 里退役。
+  // 横幅一撤，整个仲裁退化成空操作，一并删掉。优先级表（bannerPriority）随之失去唯一消费者，
+  // 也从 logic 里退役。
   // 驾驶中点输入区：解释能/不能/硬要怎么做（disabled 吞原生 focus，需主动反馈）。
   function showMirrorComposerHint() {
     if (!mirrorReadonlySid) return;
@@ -6628,12 +6601,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 把实例档位误清回 auto——对齐 adoptPanelState（同文件 4728/4736 附近）已有写法。
       rebuildEffortOptions(currentModel || cwdDefaultModel, { silentClear: true });
     }
-    if (mirrorBanner) mirrorBanner.classList.add('hidden'); // 状态改走 placeholder，横幅恒隐
     document.body.classList.toggle('mirror-readonly', effective); // UX-009
     // UX-010：镜像时强制隐藏忙碌条
     if (effective) setBusy(false);
     if (inputEl) inputEl.disabled = effective;
-    refreshMirrorComposerCopy();
+    syncComposerPlaceholder();
     // 附件入口随只读锁：禁点 + 防「选了图却发不出」
     if (btnAttach) {
       btnAttach.disabled = effective;
@@ -6768,13 +6740,6 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     addBar(t('已续接 CLI 会话：若终端仍在跑同一会话，并发发送有分叉风险'), 'text-warning');
     inputEl?.focus();
   }
-  // 兼容：旧隐藏按钮若仍被外部点到，转发到同一路径
-  btnMirrorOverride?.addEventListener('click', () => { requestMirrorResume(); });
-  btnMirrorSync?.addEventListener('click', () => {
-    haptic('tap');
-    socket.emit('mirror:syncNow');
-    addBar(t('已请求刷新：拉取终端最新消息'), 'text-ink-faint');
-  });
 
   // 复制按钮的内容。尺寸由调用方写字面量类名（Tailwind 靠扫源码产出 utility）：代码块 w-3、消息操作栏 w-3.5。
   function copyBtnInnerHtml(sizeClasses) {
