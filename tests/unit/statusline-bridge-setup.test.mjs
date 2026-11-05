@@ -242,6 +242,32 @@ test('uninstall：当前命令仍是已安装 wrapper 时恢复原命令/刷新�
   }
 });
 
+// 早期 manifest 没有 originalRefreshInterval 字段。面板（readStatuslineInstallState）把缺字段当 null，
+// 安装器曾当成漂移：面板报已安装，CLI 却报 drifted，而且卸载和重装都被拒。
+test('缺 originalRefreshInterval 的旧 manifest：status、install、uninstall 都按没设过 refreshInterval 处理', () => {
+  const home = makeHome();
+  try {
+    writeSettings(home, { type: 'command', command: 'old-status' });
+    assert.equal(runSetup(home, 'install').status, 0);
+    const { originalRefreshInterval: _dropped, ...legacy } = JSON.parse(readFileSync(manifestPath(home), 'utf8'));
+    writeFileSync(manifestPath(home), JSON.stringify(legacy), { mode: 0o600 });
+
+    assert.equal(JSON.parse(runSetup(home, 'status').stdout).state, 'installed');
+
+    const reinstall = runSetup(home, 'install');
+    assert.equal(reinstall.status, 0, reinstall.stderr);
+    assert.equal(JSON.parse(reinstall.stdout).idempotent, true);
+
+    const removed = runSetup(home, 'uninstall');
+    assert.equal(removed.status, 0, removed.stderr);
+    const restored = JSON.parse(readFileSync(settingsPath(home), 'utf8')).statusLine;
+    assert.equal(restored.command, 'old-status');
+    assert.equal(Object.hasOwn(restored, 'refreshInterval'), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('uninstall：用户安装后改过 command 时 CAS 拒绝覆盖，保留用户设置与 manifest', () => {
   const home = makeHome();
   try {

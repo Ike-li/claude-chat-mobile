@@ -3,25 +3,24 @@
 // Explicit opt-in installer for the transparent CLI statusline bridge.
 // Merely importing this file or running `status` never mutates user settings.
 
-import { randomUUID } from 'node:crypto';
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  fsyncSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { claudeHome, claudeSettingsPath, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
-import { removeBridgeNamespace } from '../app/src/ops/bridge-namespace.js';
+import { claudeSettingsPath, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
+import {
+  assertNoInstallerSymlinks,
+  atomicWriteInstallerJson,
+  removeBridgeNamespace,
+} from '../app/src/ops/bridge-namespace.js';
+import { readClaudeSettings } from '../app/src/ops/cli-hooks-bridge.js';
+import {
+  readStatuslineManifest,
+  statuslineInstalledStateMatches,
+  statuslineRefreshInterval,
+  statuslineRefreshMatches,
+} from '../app/src/ops/cli-statusline-bridge.js';
+import { shellQuote } from '../app/src/ops/log-terminal.js';
 import { resolveStableNodePath } from './node-path.js';
 
 const RUNNER = join(dirname(fileURLToPath(import.meta.url)), 'statusline-bridge.js');
@@ -33,82 +32,7 @@ function pathsForHome(home = homedir()) {
   };
 }
 
-function lstatIfPresent(path) {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
-function assertNoInstallerSymlinks(home, paths) {
-  const candidates = [
-    claudeHome(home),
-    ccmUnderClaudeHome(home),
-    ccmUnderClaudeHome(home, 'statusline-v1'),
-    paths.settings,
-    paths.manifest,
-  ];
-  for (const path of candidates) {
-    if (lstatIfPresent(path)?.isSymbolicLink()) {
-      throw new Error(`statusline bridge refused symbolic link path: ${path}`);
-    }
-  }
-}
-
-function readSettings(path) {
-  const parsed = JSON.parse(readFileSync(path, 'utf8'));
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Claude settings must be a JSON object');
-  }
-  return parsed;
-}
-
-function readManifest(path) {
-  const stat = lstatIfPresent(path);
-  if (!stat) return null;
-  if (stat.isSymbolicLink()) {
-    throw new Error(`statusline bridge refused symbolic link path: ${path}`);
-  }
-  const parsed = JSON.parse(readFileSync(path, 'utf8'));
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
-      || typeof parsed.originalCommand !== 'string'
-      || typeof parsed.installedCommand !== 'string') {
-    throw new Error('statusline bridge manifest is invalid');
-  }
-  return parsed;
-}
-
-function atomicWriteJson(path, value, { privateParent = false } = {}) {
-  const parent = dirname(path);
-  mkdirSync(parent, { recursive: true, mode: privateParent ? 0o700 : 0o755 });
-  if (privateParent && process.platform !== 'win32') chmodSync(parent, 0o700);
-  const temporary = join(parent, `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
-  let fd;
-  let renamed = false;
-  try {
-    fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
-    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-    fsyncSync(fd);
-    closeSync(fd);
-    fd = undefined;
-    renameSync(temporary, path);
-    renamed = true;
-    if (process.platform !== 'win32') chmodSync(path, 0o600);
-  } finally {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* preserve original error */ }
-    }
-    if (!renamed) {
-      try { unlinkSync(temporary); } catch { /* absent or already cleaned */ }
-    }
-  }
-}
-
-function shellQuote(value) {
-  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
-}
+const assertNoSymlinks = (home, paths) => assertNoInstallerSymlinks(home, paths, 'statusline-v1', 'statusline bridge');
 
 // CCM_TEST_PLATFORM：仅测试用的平台覆盖开关，任何宿主 OS 上都能验证 win32 分支，不需要真机 Windows。
 function currentPlatform() {
@@ -138,29 +62,18 @@ function looksLikeBridgeWrapper(command) {
     && /(?:^|[\\/])statusline-bridge\.js(?=['"\s]|$)/.test(command);
 }
 
-function refreshIntervalOf(settings) {
-  return Object.hasOwn(settings?.statusLine || {}, 'refreshInterval')
-    ? settings.statusLine.refreshInterval
-    : null;
-}
-
-function installedStateMatches(settings, manifest) {
-  return settings.statusLine?.command === manifest.installedCommand
-    && Object.is(refreshIntervalOf(settings), manifest.originalRefreshInterval);
-}
-
 function status(home = homedir()) {
   const paths = pathsForHome(home);
-  assertNoInstallerSymlinks(home, paths);
+  assertNoSymlinks(home, paths);
   // settings.json 还不存在是新装 claude 的合法起点：确定没装（与 ops 层 readStatuslineInstallState 同判）。
-  // install 仍要求它先存在——那里的 ENOENT 是有意的，见 app/src/ops/cli-statusline-bridge.js 头注。
-  const settings = lstatIfPresent(paths.settings) ? readSettings(paths.settings) : {};
+  // install 把这种情况当成还没配 statusLine，走 notConfigured 拒装。
+  const settings = readClaudeSettings(paths.settings);
   const currentCommand = typeof settings.statusLine?.command === 'string'
     ? settings.statusLine.command
     : null;
-  const manifest = readManifest(paths.manifest);
+  const manifest = readStatuslineManifest(paths.manifest);
   return {
-    state: manifest && installedStateMatches(settings, manifest) ? 'installed'
+    state: manifest && statuslineInstalledStateMatches(settings, manifest) ? 'installed'
       : manifest ? 'drifted'
         : 'not-installed',
     currentCommand,
@@ -179,10 +92,9 @@ function notConfigured(settingsPath) {
 
 function install(home = homedir()) {
   const paths = pathsForHome(home);
-  assertNoInstallerSymlinks(home, paths);
+  assertNoSymlinks(home, paths);
   // settings.json 还不存在＝新装 claude、肯定没配（同 status 的判法）；此前这里直接抛 fs 的 ENOENT
-  if (!lstatIfPresent(paths.settings)) throw notConfigured(paths.settings);
-  const settings = readSettings(paths.settings);
+  const settings = readClaudeSettings(paths.settings);
   if (!settings.statusLine || typeof settings.statusLine !== 'object' || Array.isArray(settings.statusLine)) {
     throw notConfigured(paths.settings);
   }
@@ -190,22 +102,21 @@ function install(home = homedir()) {
   if (typeof originalCommand !== 'string' || !originalCommand.trim()) {
     throw notConfigured(paths.settings);
   }
-  const existingManifest = readManifest(paths.manifest);
+  const existingManifest = readStatuslineManifest(paths.manifest);
   if (existingManifest) {
-    const refreshMatches = Object.is(refreshIntervalOf(settings), existingManifest.originalRefreshInterval);
-    if (originalCommand === existingManifest.installedCommand && refreshMatches) {
+    if (statuslineInstalledStateMatches(settings, existingManifest)) {
       return {
         state: 'installed',
         idempotent: true,
         installedCommand: existingManifest.installedCommand,
       };
     }
-    if (originalCommand !== existingManifest.originalCommand || !refreshMatches) {
+    if (originalCommand !== existingManifest.originalCommand || !statuslineRefreshMatches(settings, existingManifest)) {
       throw new Error('install refused: current statusLine command/refreshInterval drifted from the manifest');
     }
     // A manifest written before settings is a recoverable interrupted install.
     settings.statusLine.command = existingManifest.installedCommand;
-    atomicWriteJson(paths.settings, settings);
+    atomicWriteInstallerJson(paths.settings, settings);
     return {
       state: 'installed',
       idempotent: false,
@@ -216,33 +127,34 @@ function install(home = homedir()) {
   if (looksLikeBridgeWrapper(originalCommand)) {
     throw new Error('install refused: statusLine.command is already a bridge wrapper without its manifest');
   }
-  const originalRefreshInterval = refreshIntervalOf(settings);
+  const originalRefreshInterval = statuslineRefreshInterval(settings);
   const installedCommand = bridgeCommand(originalCommand, originalRefreshInterval);
   const manifest = { originalCommand, originalRefreshInterval, installedCommand };
 
-  atomicWriteJson(paths.manifest, manifest, { privateParent: true });
+  atomicWriteInstallerJson(paths.manifest, manifest, { privateParent: true });
   settings.statusLine.command = installedCommand;
-  atomicWriteJson(paths.settings, settings);
+  atomicWriteInstallerJson(paths.settings, settings);
   return { state: 'installed', idempotent: false, installedCommand };
 }
 
 function uninstall(home = homedir()) {
   const paths = pathsForHome(home);
-  assertNoInstallerSymlinks(home, paths);
-  const manifest = readManifest(paths.manifest);
+  assertNoSymlinks(home, paths);
+  const manifest = readStatuslineManifest(paths.manifest);
   if (!manifest) throw new Error('uninstall refused: statusline bridge manifest is missing');
-  const settings = readSettings(paths.settings);
+  const settings = readClaudeSettings(paths.settings);
   if (!settings.statusLine || typeof settings.statusLine !== 'object' || Array.isArray(settings.statusLine)) {
     throw new Error('uninstall refused: settings.statusLine is missing');
   }
-  if (!installedStateMatches(settings, manifest)) {
+  if (!statuslineInstalledStateMatches(settings, manifest)) {
     throw new Error('uninstall CAS refused: current command/refreshInterval no longer matches installed state');
   }
 
   settings.statusLine.command = manifest.originalCommand;
-  if (manifest.originalRefreshInterval === null) delete settings.statusLine.refreshInterval;
-  else settings.statusLine.refreshInterval = manifest.originalRefreshInterval;
-  atomicWriteJson(paths.settings, settings);
+  const originalRefreshInterval = manifest.originalRefreshInterval ?? null;
+  if (originalRefreshInterval === null) delete settings.statusLine.refreshInterval;
+  else settings.statusLine.refreshInterval = originalRefreshInterval;
+  atomicWriteInstallerJson(paths.settings, settings);
   unlinkSync(paths.manifest);
   // 自己的命名空间（快照）一并清掉；此前要等整体 npm run uninstall（验收 O35）
   removeBridgeNamespace(home, 'statusline-v1');

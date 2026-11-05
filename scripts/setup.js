@@ -594,9 +594,9 @@ async function main() {
 // 不能只比字符串：node 加载模块时会解析符号链接，import.meta.url 因此可能是 realpath，而 argv[1]
 // 是调用者原样传进来的（macOS 的 /var → /private/var 就会踩到）。两者不等时 main 从不执行、
 // `npm run setup` 静默退出 0 什么都不做——与本文件要根除的那类静默失败同源。
-function invokedDirectly() {
+export function invokedDirectly(metaUrl) {
   if (!process.argv[1]) return false;
-  const self = fileURLToPath(import.meta.url);
+  const self = fileURLToPath(metaUrl);
   if (self === resolve(process.argv[1])) return true;
   try {
     return self === realpathSync(process.argv[1]);
@@ -605,4 +605,4 @@ function invokedDirectly() {
   }
 }
 
-if (invokedDirectly()) main();
+if (invokedDirectly(import.meta.url)) main();

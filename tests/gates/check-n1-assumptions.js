@@ -20,19 +20,17 @@
 // 【与 safe-rm / safe-path 的关系】标记语法同款（`// 前缀: 理由`），但方向相反：
 // 那两个是「危险模式已被发现，要求写豁免理由」，本门禁是「立场依赖无法被发现，要求主动登记」。
 // 三种标记互不通用。
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { listFiles, SCAN_ROOTS } from './check-import-boundaries.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const REGISTRY_DOC = 'docs/hard-rules.md';
-// 扫描面 = 运行时源码，与 check-import-boundaries.js 的 SCAN_ROOTS + EXTRA_FILES 同口径
+// 扫描面 = 运行时源码，直接用 check-import-boundaries.js 的 listFiles
 // （app/server.js 今天只有几行，但它是运行时入口，将来放进状态就该能登记；漏掉它会让那个位置
 //   「登记就红、不登记也红」两头堵）。scripts/ 与 tests/ 不在面内：那里没有产品状态。
-const SCAN_ROOTS = ['app/src', 'app/public/js'];
-const SCAN_EXTRA_FILES = ['app/server.js'];
-
 const ID_RE = /N1-[A-Z0-9][A-Z0-9-]*/g;
 // 标记识别分两步，故意不合成一条正则：
 //   第一步认出「这是一条 n1 标记」（任何 `// n1:` 开头），第二步校验形态。
@@ -63,41 +61,11 @@ export function extractRegisteredIds(text) {
   return [...ids].sort();
 }
 
-function listSourceFiles(rootDir) {
-  const files = [];
-  const skip = new Set(['node_modules', '.git', 'data', '.ccm-uploads', 'vendor']);
-  const visit = dir => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        if (!skip.has(entry.name)) visit(join(dir, entry.name));
-      } else if (/\.(?:js|mjs)$/.test(entry.name)) {
-        files.push(relative(rootDir, join(dir, entry.name)));
-      }
-    }
-  };
-  for (const root of SCAN_ROOTS) {
-    try {
-      visit(join(rootDir, root));
-    } catch {
-      // 扫描根不存在（如单测夹具只建了一侧）→ 跳过
-    }
-  }
-  for (const extra of SCAN_EXTRA_FILES) {
-    try {
-      readFileSync(join(rootDir, extra));
-      files.push(extra);
-    } catch {
-      // 可选文件缺失 → 跳过
-    }
-  }
-  return files.sort();
-}
-
 // 返回 { markers, malformed }：格式不合的单列出来报错，不并进 markers 也不静默丢弃。
 export function collectMarkers(rootDir) {
   const markers = [];
   const malformed = [];
-  for (const rel of listSourceFiles(rootDir)) {
+  for (const rel of listFiles(rootDir)) {
     readFileSync(join(rootDir, rel), 'utf8').split('\n').forEach((line, index) => {
       const hit = line.match(MARKER_LINE_RE);
       if (!hit) return;

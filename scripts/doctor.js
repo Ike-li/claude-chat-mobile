@@ -339,6 +339,21 @@ function checkStatuslineConfig() {
   (result.status === 'ok' ? ok : warn)(result.name, result.detail);
 }
 
+// 走子进程而不是 ops 的读函数：ops 版不查 ~/.claude 的符号链接，判定会和 npm run *:status 分叉。
+function readBridgeState(script) {
+  const raw = execFileSync(process.execPath, [join(HERE, 'scripts', script), 'status'], {
+    cwd: HERE,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 3000,
+  });
+  const parsed = JSON.parse(raw);
+  if (!['installed', 'not-installed', 'drifted'].includes(parsed?.state)) {
+    throw new Error('status 返回了未知状态');
+  }
+  return parsed.state;
+}
+
 // D6: CLI statusline bridge 安装态。status 子命令是只读探针：不创建 manifest、不改 settings。
 // 这里只消费 state，不回显 currentCommand，避免 doctor 输出用户自定义命令内容。
 function checkStatuslineBridge() {
@@ -346,17 +361,7 @@ function checkStatuslineBridge() {
   const bridgeOff = process.env.CLI_STATUSLINE_BRIDGE === 'off';
   let installState;
   try {
-    const raw = execFileSync(process.execPath, [join(HERE, 'scripts', 'statusline-bridge-setup.js'), 'status'], {
-      cwd: HERE,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 3000,
-    });
-    const parsed = JSON.parse(raw);
-    if (!['installed', 'not-installed', 'drifted'].includes(parsed?.state)) {
-      throw new Error('status 返回了未知状态');
-    }
-    installState = parsed.state;
+    installState = readBridgeState('statusline-bridge-setup.js');
   } catch (err) {
     if (webOff || bridgeOff) {
       const result = statuslineBridgeDiagnostic({ webOff, bridgeOff, installState: 'not-installed', lang: LANG });
@@ -376,17 +381,7 @@ function checkHooksBridge() {
   const bridgeOff = process.env.CLI_HOOKS_BRIDGE === 'off';
   let installState;
   try {
-    const raw = execFileSync(process.execPath, [join(HERE, 'scripts', 'hooks-bridge-setup.js'), 'status'], {
-      cwd: HERE,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 3000,
-    });
-    const parsed = JSON.parse(raw);
-    if (!['installed', 'not-installed', 'drifted'].includes(parsed?.state)) {
-      throw new Error('status 返回了未知状态');
-    }
-    installState = parsed.state;
+    installState = readBridgeState('hooks-bridge-setup.js');
   } catch (err) {
     if (bridgeOff) {
       const result = hooksBridgeDiagnostic({ bridgeOff, installState: 'not-installed', lang: LANG });
