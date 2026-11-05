@@ -113,6 +113,45 @@ test('openSheet/closeSheet：Tab 陷阱在打开期间生效、关闭后摘除�
   assert.equal(doc.activeElement, trigger, '关闭动画结束后焦点必须还给打开前聚焦的那个元素');
 });
 
+// 这两条问的正是「rAF 落地之前发生了什么」：顶部的同步桩里 focusInto 抢在调用方之前跑完，永远绿
+function deferRAF(t) {
+  const queue = [];
+  const syncStub = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (fn) => queue.push(fn);
+  t.after(() => { globalThis.requestAnimationFrame = syncStub; });
+  return () => { for (const fn of queue.splice(0)) fn(); };
+}
+
+test('openSheet：调用方在打开的同一拍聚焦了 sheet 里的控件，rAF 不抢回容器', (t) => {
+  const flushRAF = deferRAF(t);
+  const { doc, controller } = harness();
+  const trigger = focusableNode(); trigger._doc = doc;
+  doc.activeElement = trigger;
+  const input = focusableNode(); input._doc = doc;
+  const sheet = sheetNode([input]); sheet._doc = doc;
+
+  controller.openSheet(sheet);
+  input.focus();
+  flushRAF();
+
+  assert.equal(doc.activeElement, input, '输入框的焦点被抢回容器：回车落不到输入框，改名静默丢失');
+});
+
+test('openSheet：重复打开时焦点本来就在 sheet 里，照旧收回容器', (t) => {
+  const flushRAF = deferRAF(t);
+  const { doc, controller } = harness();
+  const allow = focusableNode(); allow._doc = doc;
+  const sheet = sheetNode([allow]); sheet._doc = doc;
+  controller.openSheet(sheet);
+  flushRAF();
+  allow.focus();
+
+  controller.openSheet(sheet); // 排队的下一条审批
+  flushRAF();
+
+  assert.equal(doc.activeElement, sheet, '焦点留在「允许」上：防误触期一过，一个回车就批掉了下一条审批');
+});
+
 test('openSheet：背景滚动锁随栈增减（ccm-sheet-open）', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { doc, controller } = harness();

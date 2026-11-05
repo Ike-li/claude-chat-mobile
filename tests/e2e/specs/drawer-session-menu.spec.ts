@@ -322,6 +322,29 @@ test.describe('会话改名', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-ROW-MENU-11 打开后焦点留在输入框、当前名字全选：直接打字就替换，回车就保存', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openSessionMenu(page, archivedRow(page));
+    await sessionMenuItem(page, 'rename').click();
+    await expect(renameSheet(page)).toHaveClass(/sheet-open/);
+
+    // 等菜单收起：rAF 和菜单到点还焦都可能把焦点拿走，只看打开那一刻会假绿
+    await expect(menu(page)).toBeHidden();
+    const input = page.getByTestId('session-rename-input');
+    await expect(input).toBeFocused();
+
+    // 走真键盘：input.fill / input.press 自己会先聚焦，正好把这个问题盖住
+    await page.keyboard.type('Plan v3');
+    await expect(input).toHaveValue('Plan v3');
+    await page.keyboard.press('Enter');
+    await expect(renameSheet(page)).not.toHaveClass(/sheet-open/);
+    await expect(archivedRow(page)).toContainText('Plan v3');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-ROW-MENU-10 回执还没到就关掉 sheet、又给别的会话打开：迟到的结果不动新 sheet，成功的照样换名', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
