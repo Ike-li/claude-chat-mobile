@@ -355,6 +355,5 @@ export function createSheetController(context, {
     setGestureDismiss,
     _test: { onDragPointerDown, onDragPointerMove, endDrag, getDrag: () => drag, ensureGestureDismiss },
   };
-  context.state.sheets = controller;
   return controller;
 }

@@ -65,14 +65,6 @@ export function createSettingsController(context, {
   let drag = null;
   let focusBefore = null; // 打开前焦点所在，关闭时还回去
 
-  function lockBackgroundScroll() {
-    acquireSheetScrollLock(doc);
-  }
-
-  function unlockBackgroundScroll() {
-    releaseSheetScrollLock(doc);
-  }
-
   function resetSheetMotion() {
     const sheet = sheetEl();
     if (!sheet) return;
@@ -85,15 +77,14 @@ export function createSettingsController(context, {
     if (scrimEl()?.style) scrimEl().style.opacity = '';
   }
 
-  // 语言三选一是自绘按钮组，不是原生 <select>（为什么，见 index.html #prefLangGroup 那段注释）。
+  // 语言、主题三选一都是自绘按钮组，不是原生 <select>（为什么，见 index.html #prefLangGroup 那段注释）。
   // 选中态两条通道一起更新：配色给看得见的人，aria-checked 给读屏——只改样式的话，辅助技术
   // 用户读到的是三个一模一样的按钮、无从知道当前在哪一档（与 perm-tile 同一处置）。
-  function renderLangOptions() {
-    const group = dom.prefLangGroup;
+  function renderOptionList(group, itemSelector, checkSelector, datasetKey, pref) {
     if (!group) return;
-    const current = langPref.get();
-    for (const btn of group.querySelectorAll('[data-lang]')) {
-      const on = btn.dataset.lang === current;
+    const current = pref.get();
+    for (const btn of group.querySelectorAll(itemSelector)) {
+      const on = btn.dataset[datasetKey] === current;
       btn.setAttribute('aria-checked', on ? 'true' : 'false');
       // 显式互斥切换，而不是只 add 高亮类：border-line 与 border-accent 特异性相同，谁赢取决于
       // Tailwind 产出这两条 utility 的先后——留着旧类等于把结果交给 CSS 顺序。
@@ -104,26 +95,16 @@ export function createSettingsController(context, {
       btn.classList.toggle('bg-accent-wash', on);
       btn.classList.toggle('text-accent', on);
       // 用 opacity 不用 hidden：✓ 保留占位，切档时那行文字不会横向跳动。
-      btn.querySelector('[data-lang-check]')?.classList.toggle('opacity-0', !on);
+      btn.querySelector(checkSelector)?.classList.toggle('opacity-0', !on);
     }
   }
 
-  // 主题三选一与语言组同构（自绘 radio + aria-checked）；选中态同样双通道更新。
+  function renderLangOptions() {
+    renderOptionList(dom.prefLangGroup, '[data-lang]', '[data-lang-check]', 'lang', langPref);
+  }
+
   function renderThemeOptions() {
-    const group = dom.prefThemeGroup;
-    if (!group) return;
-    const current = themePref.get();
-    for (const btn of group.querySelectorAll('[data-theme-pref]')) {
-      const on = btn.dataset.themePref === current;
-      btn.setAttribute('aria-checked', on ? 'true' : 'false');
-      btn.classList.toggle('border-line', !on);
-      btn.classList.toggle('bg-surface', !on);
-      btn.classList.toggle('text-ink', !on);
-      btn.classList.toggle('border-accent', on);
-      btn.classList.toggle('bg-accent-wash', on);
-      btn.classList.toggle('text-accent', on);
-      btn.querySelector('[data-theme-check]')?.classList.toggle('opacity-0', !on);
-    }
+    renderOptionList(dom.prefThemeGroup, '[data-theme-pref]', '[data-theme-check]', 'themePref', themePref);
   }
 
   function syncPreferences() {
@@ -153,7 +134,7 @@ export function createSettingsController(context, {
     sheetEl()?.classList.remove('translate-y-full');
     scrimEl()?.classList.remove('hidden');
     setInertReason(sheetEl(), 'closed', false);
-    if (!alreadyOpen) lockBackgroundScroll();
+    if (!alreadyOpen) acquireSheetScrollLock(doc);
     try { onOpen(); } catch { /* 动态段渲染失败不能让面板打不开 */ }
     // 焦点进面板（验收 O77）：不移的话键盘用户按 Tab 走的还是背后的页面
     if (sheetEl()) focusInto(sheetEl());
@@ -171,7 +152,7 @@ export function createSettingsController(context, {
     scrimEl()?.classList.add('hidden');
     // 收起只是移出屏幕，里面的控件照样能被 Tab 到、回车触发
     setInertReason(sheetEl(), 'closed', true);
-    unlockBackgroundScroll();
+    releaseSheetScrollLock(doc);
     if (hadFocus) restoreFocus(focusBefore, doc);
     focusBefore = null;
   }
@@ -382,8 +363,6 @@ export function createSettingsController(context, {
     open,
     syncPreferences,
     isOpen,
-    lockBackgroundScroll,
-    unlockBackgroundScroll,
     // 供单测直接驱动手势
     _test: { onDragPointerDown, onDragPointerMove, endDrag, getDrag: () => drag },
   };

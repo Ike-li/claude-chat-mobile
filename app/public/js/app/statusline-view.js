@@ -5,7 +5,7 @@ import { formatAgoShort, formatCachePercent, formatStatuslineCollapsedSummary, f
 import { t } from '../i18n.js';
 
 export function createStatuslineView({
-  $, addBar, messagesEl, renderLiveLine, updateWorkspaceChangeBadge, getCurrentCwd, getLiveLine,
+  $, addBar, copyText, messagesEl, renderLiveLine, updateWorkspaceChangeBadge, getCurrentCwd, getLiveLine,
   getViewingInstanceId,
 } = {}) {
   const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
@@ -24,22 +24,8 @@ export function createStatuslineView({
         addBar(t('暂无状态可复制'), 'text-ink-faint');
         return;
       }
-      try {
-        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-        else {
-          const ta = document.createElement('textarea');
-          ta.value = text;
-          ta.style.position = 'fixed';
-          ta.style.left = '-9999px';
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          ta.remove();
-        }
-        addBar(t('已复制状态摘要'), 'text-success');
-      } catch {
-        addBar(t('复制失败'), 'text-danger');
-      }
+      const ok = await copyText(text);
+      addBar(ok ? t('已复制状态摘要') : t('复制失败'), ok ? 'text-success' : 'text-danger');
     });
   }
   // E16：status_line 渲染（原 dispatcher handler 方法体，#359 提成函数以便迁出）

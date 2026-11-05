@@ -728,15 +728,12 @@ test('settings Escape: 上层 sheet 已在捕获阶段处理（defaultPrevented�
   assert.equal(sheetClasses.has('translate-y-full'), true, '设置自己在顶层时 Esc 应关闭');
 });
 
-test('session workspace state exposes isolated caches through app context', () => {
-  const firstContext = createAppContext();
-  const secondContext = createAppContext();
-  const first = createSessionWorkspaceState(firstContext);
-  const second = createSessionWorkspaceState(secondContext);
+test('session workspace state exposes isolated caches', () => {
+  const first = createSessionWorkspaceState();
+  const second = createSessionWorkspaceState();
 
   first.sessionDrafts.set('s1', { text: 'draft' });
   assert.equal(second.sessionDrafts.has('s1'), false);
-  assert.equal(firstContext.state.sessionWorkspaces, first);
 });
 
 test('approval and question state caps answered IDs and recognizes grouped question IDs', () => {

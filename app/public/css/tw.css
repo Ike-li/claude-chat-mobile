@@ -926,10 +926,6 @@ video {
   display: none;
 }
 
-.h-0 {
-  height: 0px;
-}
-
 .h-1\.5 {
   height: 0.375rem;
 }
@@ -1044,10 +1040,6 @@ video {
 
 .min-h-\[36px\] {
   min-height: 36px;
-}
-
-.w-0 {
-  width: 0px;
 }
 
 .w-1\.5 {
@@ -1550,10 +1542,6 @@ video {
 
 .border-accent\/20 {
   border-color: color-mix(in srgb, var(--accent) calc(0.2 * 100%), transparent);
-}
-
-.border-accent\/30 {
-  border-color: color-mix(in srgb, var(--accent) calc(0.3 * 100%), transparent);
 }
 
 .border-accent\/40 {

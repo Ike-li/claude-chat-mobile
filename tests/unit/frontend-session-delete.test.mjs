@@ -147,9 +147,3 @@ test.describe('下发与回执', () => {
     assert.deepEqual(h.deleted, []);
   });
 });
-
-test('控制器挂进 context.state.sessionDelete', () => {
-  const h = harness();
-  assert.equal(h.context.state.sessionDelete, h.ctl);
-  assert.equal(typeof h.context.state.sessionDelete.openDeleteSession, 'function');
-});
