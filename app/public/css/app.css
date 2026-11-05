@@ -1059,7 +1059,7 @@ details.thinking.thinking-live > summary::before {
 }
 
 /* 驾驶态：底栏模型/权限/思考 chip 保持可见（只读冻结由 JS 拦截）；
-   驾驶提示仅靠上方 #mirrorBanner，不再隐藏设置 chip、不再注入「终端驾驶中」合并胶囊。 */
+   驾驶提示走 #input 的 placeholder，不再隐藏设置 chip、不再注入「终端驾驶中」合并胶囊。 */
 
 /* 工作区抽屉状态：文字是主语义，颜色仅辅助；会话行与目录行共用同一紧凑 chip。 */
 .drawer-status-chip {

@@ -723,4 +723,43 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // switchSessionWithFallback 的 4 秒兜底：服务端不回执时，用户只能靠它知道这次点击没生效。
+  // 回执扣在 mock 里（/__hold-next-switch），定时器交给 page.clock 走，不赌墙钟。
+  // 不测什么：其余五个入口共用同一份 helper，这里只从侧栏走；ack 报错见 P0-11f，重试见 P0-11aj。
+  test('P0-11aj4 切换 4 秒没回执落到目标会话的落地页，迟到的成功回执撤掉落地页并打开会话', async ({ page }) => {
+    await page.clock.install();
+    await gotoMock(page);
+    await page.request.post('/__hold-next-switch');
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+
+    await page.clock.runFor(4000);
+    const surface = page.locator('[data-testid="session-blocked-surface"]');
+    await expect(surface).toBeVisible();
+    await expect(page.locator('[data-testid="session-blocked-title"]')).toHaveText('Archived Planning Session');
+    await expect(page.locator('[data-testid="session-blocked-reason"]')).toContainText('切换无响应');
+
+    expect((await (await page.request.post('/__release-switch')).json()).released, '前提：切换一直扣着').toBe(1);
+    await expect(surface, '成功回执到了，落地页还在说切换无响应').toBeHidden();
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history', { timeout: 10_000 });
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-11aj5 切换已回执时，4 秒定时器走到也不报无响应', async ({ page }) => {
+    await page.clock.install();
+    await gotoMock(page);
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history', { timeout: 10_000 });
+
+    await page.clock.runFor(4000);
+    await expect(page.locator('[data-testid="session-blocked-surface"]'), '已经切过去了，又弹落地页说切换无响应').toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
 });

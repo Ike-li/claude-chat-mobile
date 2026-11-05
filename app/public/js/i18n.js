@@ -330,7 +330,6 @@ export const EN_DICT = Object.freeze({
   '展开/收起任务列表': 'Expand/collapse task list',
   '停止该后台任务': 'Stop this background task',
   '停止': 'Stop',
-  '刷新消息': 'Refresh messages',
   '续接 CLI 会话': 'Resume CLI session',
   '给 Claude 发消息...': 'Message Claude...',
   '默认': 'Default',
@@ -1269,7 +1268,6 @@ export const EN_DICT = Object.freeze({
   '强制立即续接': 'Force resume now',
   '强制立即续接？': 'Force resume now?',
   '尚未判定终端已停止。若终端其实还在跑同一会话，两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n请确认终端确实已关闭再继续。': 'The terminal has not been determined to be stopped yet. If it is actually still running this session, sending from both sides will fork the conversation (the other side\'s messages may become invisible downstream).\n\nMake sure the terminal is really closed before continuing.',
-  '已请求刷新：拉取终端最新消息': 'Refresh requested: pulling the terminal\'s latest messages',
 
   // —— 附件 ——
   '附件': 'attachment',

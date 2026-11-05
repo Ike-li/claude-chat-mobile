@@ -699,15 +699,6 @@
         <button type="button" id="autoContinueAction" class="hit-44 shrink-0 px-2 py-1 rounded-lg border border-accent text-accent font-semibold active:scale-95" data-testid="auto-continue-action"></button>
       </div>
 
-      <!-- 只读镜像：状态写进 #input placeholder（替换「给 Claude 发消息...」），主操作在发送钮「续接 CLI 会话」。
-           #mirrorBanner 及旧按钮 id 仅兼容保留，恒 hidden。 -->
-      <div id="mirrorBanner" class="hidden" aria-hidden="true">
-        <span id="mirrorBannerIcon"></span>
-        <span id="mirrorBannerText"></span>
-      </div>
-      <button id="btnMirrorSync" type="button" class="hidden" tabindex="-1" aria-hidden="true">刷新消息</button>
-      <button id="btnMirrorOverride" type="button" class="hidden" tabindex="-1" aria-hidden="true">续接 CLI 会话</button>
-
       <!-- 下一步建议：每轮收尾后由模型预测的下一句（CCM_PROMPT_SUGGESTION 开关）。点一下【填进输入框、
            不自动发送】——手机上照着灰字手打这句话的成本比它省下的思考更高，只读提示在这里等于没有。
            放在 pill 之上而非 chips 区：建议是整句话，塞进那条横向滚动的 chip 行会被截得读不出来。
