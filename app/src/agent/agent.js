@@ -1314,6 +1314,8 @@ export class AgentSession {
     };
     const _diagStartedAt = Date.now();
     let _diagOutcome = null, _diagTimedOut = false;
+    // CLI 可以先吐配对的 aborted_* 再回控制应答，来源要赶在让出之前记好。toDrop 还没送达 SDK，不算被中断的轮
+    if (this.pendingTurns > dropped) this._interruptedBy = decidedBy;
     try {
     try {
       await raceInterrupt();
@@ -1335,7 +1337,7 @@ export class AgentSession {
       // 时没有这条 result，标记置上就没人清，会把用户下一轮的正常完成标成「已中止」。
       this._awaitingInterruptResult = this.pendingTurns > 0;
       if (this.pendingTurns > 0) {
-        this._interruptedBy = decidedBy;
+        this._interruptedBy = decidedBy; // 等应答期间才开的轮：让出前没记过，_awaitingInterruptResult 也算到了它头上
         this._armInterruptSettleWatchdog(); // …但"即将"不保证到达，见方法注释
       }
       // AG-004：Stop 应对齐「取消在途工具审批/提问」——不依赖 SDK 是否 abort canUseTool signal。
