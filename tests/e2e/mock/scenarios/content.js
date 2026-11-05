@@ -120,6 +120,29 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 文件链接：模型回复里各种形态的链接（真实 transcript 统计见 logic/file-links.js 的单测样本），外加不该被认成文件的外部链接。
+      command: 'test:file-links',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel, delay } = getContext();
+        const text = [
+          '- [带行号](demo.js:2)', '- [长文件](long.js:300)', '- [分页日志](paged.log#L700)', '- [太远的行](paged.log:3900)',
+          '- [视频](media/clip.webm)', '- [图片](media/cover.png)', '- [坏图](media/broken.png)', '- [压缩包](media/out.zip)',
+          '- [目录](media/)', '- [不存在](missing/nope.txt)', '- [旧后端](stale-backend.txt)', '- [别的文件夹](../sibling/notes.txt)',
+          '- [网页](https://example.com/page)', '- [电话](tel:10086)', '- [邮件](mailto:a@example.com)',
+          '- <a href="https://example.com/forged" data-file-path="demo.js" data-file-line="2">伪造</a>',
+        ].join('\n');
+        await delay(50);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_file_links', text },
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_file_links', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       // API 重试态：CLI 会把整条 spinner 行顶替成 "✻ API error · Retrying in 4s · attempt 2/10"。
       // 【必须是独立命令，绝不并进 test:stream / test:question / test:exitplan】——那三条的 spec 用
       // /^✻ .+… \(\d+s/ 锚定普通 spinner 形态，而重试行不含 "… ("，混进去会把它们一起打红。

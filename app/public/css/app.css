@@ -147,6 +147,7 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
 .msg-body h1, .msg-body h2, .msg-body h3 { font-weight: 600; margin: .9rem 0 .4rem; line-height: 1.3; }
 .msg-body h1 { font-size: 1.3em; } .msg-body h2 { font-size: 1.18em; } .msg-body h3 { font-size: 1.05em; }
 .msg-body a { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
+a[data-file-path] { cursor: pointer; } /* 本机文件链接没有 href，浏览器不给手型 */
 .msg-body blockquote { border-left: 3px solid var(--line); padding-left: .8rem; margin: .5rem 0; color: var(--ink-soft); }
 /* 宽表格在自己内部横向滚动（同 GitHub markdown 的做法）：不然 375 宽下 12 列的表格把整个 #messages 撑出横向滚动、
    每格被压成一字一行（验收 O45） */
@@ -1214,6 +1215,7 @@ details.thinking.thinking-live > summary::before {
 .cm-ccm-viewer .CodeMirror-linenumber { color: var(--ink-faint); }
 .cm-ccm-viewer .CodeMirror-cursor { border-left-color: var(--ink); }
 .cm-ccm-viewer .CodeMirror-selected { background: var(--accent-wash); }
+.file-target-line { background: var(--accent-wash); } /* 文件链接带的行号：CM 的行背景层和 <pre> 里拆出的 span 共用 */
 .cm-ccm-viewer .cm-comment { color: var(--ink-faint); }
 .cm-ccm-viewer .cm-string, .cm-ccm-viewer .cm-string-2 { color: var(--success); }
 .cm-ccm-viewer .cm-number, .cm-ccm-viewer .cm-atom { color: var(--accent-deep); }

@@ -373,7 +373,11 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //      + logs:clientPerf（2026-11-01，前端性能记录攒批上报，落成 ccm-server.log 的 [client-perf] 行，scripts/perf-report.js
   //        按维度出分位值。不并进 logs:clientError：那条一次一个错误、给人读；这条是结构化批次、给统计读，清洗口径也不同。
   //        fire-and-forget、无回执，所以进 MOCK_INBOUND_EXEMPT。入向 74→75）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 75);
+  //      + file:open（2026-11-05，点消息里的本机文件链接：把模型写的路径定位到已连接文件夹，是文件再发一张 /f/ 票据。
+  //        不并进 browse:read：那条收的是 sheet 算好的 cwd + relPath，这条收模型写的任意形态路径，要归属到根；
+  //        超限的字节也不能走 socket。入向 75→76）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 76);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('file:open'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('logs:clientPerf'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:removeMissing'));

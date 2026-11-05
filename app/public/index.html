@@ -544,6 +544,7 @@
         <div id="fileBrowsePath" class="flex-1 min-w-0 text-xs font-mono text-ink-soft truncate"></div>
         <!-- CodeMirror 编辑+写回（files:write，见 file-browse.js writeFileInScope）：只在整份小文件在手
              （browse:read 带 contentHash）时出现；三态互斥，同一时刻只显其一。 -->
+        <button id="fileBrowseDownload" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-accent hover:bg-sunk active:scale-95" data-testid="file-download-btn">下载</button>
         <button id="fileBrowseEdit" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-accent hover:bg-sunk active:scale-95" data-testid="file-edit-btn">编辑</button>
         <button id="fileBrowseSave" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium bg-cta text-white active:brightness-95 disabled:opacity-50" data-testid="file-save-btn">保存</button>
         <button id="fileBrowseCancelEdit" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-ink-soft hover:bg-sunk active:scale-95" data-testid="file-cancel-edit-btn">取消</button>

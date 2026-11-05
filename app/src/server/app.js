@@ -88,7 +88,8 @@ import {
   snapshotResumeTranscript, startResumeDivergence, awaitResumeDivergence,
 } from '../sessions/resume-anchor.js';
 import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
-import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
+import { listDir, openInScope, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
+import { createFileTickets } from '../files/file-tickets.js';
 import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
 import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
 import { searchFiles } from '../files/file-search.js';
@@ -152,6 +153,7 @@ import { createSocketEventRegistrar, registerSocketConnection } from './socket.j
 import { createMirrorEngine } from './mirror-engine.js';
 import { createAutoContinue } from './auto-continue.js';
 import { registerFileSocketHandlers, OUT_OF_SCOPE_ERROR } from './socket-files.js';
+import { registerFileTicketRoute } from './file-ticket-route.js';
 import { registerFolderSocketHandlers } from './socket-folders.js';
 import { CLAUDE_PROJECTS_DIR, claudeHome } from '../shared/claude-home.js';
 import { appendRegularFileSync } from '../shared/regular-file.js';
@@ -845,6 +847,11 @@ registerOperationalRoutes({
     hostHeader: req.headers?.host || '',
   }, clientIp),
 });
+
+// 文件链接的字节出口：票据由 file:open 签发（已过设备审批的 socket），每次请求重查身份、设备、范围。
+// n1: N1-FILE-TICKET 进程内单例、重启清零、全服务端共用 200 张上限，不分账号——多用户下一个人连点就能把别人的票据挤掉。
+const fileTickets = createFileTickets();
+registerFileTicketRoute({ app, tickets: fileTickets, strategy: authStrategy, isDeviceTrusted, scopeRootsFor: fileScopeRootsFor });
 
 // Historical replay stays on the authenticated session:history socket event;
 // the HTTP data plane intentionally exposes no unauthenticated transcript route.
@@ -4596,6 +4603,8 @@ registerSocketConnection(io, socket => {
     getWorkDirs: () => workDirs,
     listDir,
     browseReadFile,
+    openInScope,
+    fileTickets,
     locateStoredAttachment,
     listGitChanges,
     readGitDiff,
