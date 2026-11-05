@@ -490,3 +490,93 @@ test.describe('AskUserQuestion', () => {
     s.dispose();
   });
 });
+
+// ---- 取消挂起的提问 ----
+test.describe('取消挂起的提问', () => {
+  const questions = [{ question: 'Q1', options: ['A'] }, { question: 'Q2', options: ['B'] }];
+  const exitedQuery = {
+    [Symbol.asyncIterator]() { return { next() { return Promise.resolve({ done: true }); } }; },
+  };
+
+  // request_resolved 属于 server 的 STATE_BOUNDARY：onEvent 末尾同步广播 instances，stateOf 读 pendingQuestions.size。
+  // 所以要在事件发出的那一刻采样，等循环跑完再看就分不出先后了。
+  function sampleOnResolved(s) {
+    const samples = [];
+    const forward = s.onEvent;
+    s.onEvent = (event) => {
+      if (event.type === 'request_resolved' && event.payload.kind === 'question') {
+        samples.push({ ...event.payload, pendingAtEmit: s.pendingQuestions.size });
+      }
+      forward(event);
+    };
+    return samples;
+  }
+
+  const paths = [
+    { name: 'dispose', cancel: s => s.dispose(), denyKind: undefined },
+    { name: 'consume 收尾（CLI 自己退出）', cancel: s => s.consume(exitedQuery), denyKind: undefined },
+    {
+      name: 'interrupt 成功',
+      cancel: (s) => { s.q = { interrupt() { return Promise.resolve(); } }; return s.interrupt(); },
+      denyKind: 'cancelled',
+    },
+    {
+      name: 'interrupt 被拒且有在途轮（强制结算）',
+      cancel: (s) => {
+        s.pendingTurns = 1;
+        s.q = { interrupt() { return Promise.reject(new Error('rejected')); } };
+        return s.interrupt();
+      },
+      denyKind: 'cancelled',
+    },
+  ];
+
+  for (const { name, cancel, denyKind } of paths) {
+    test(`${name}：deny + interrupt，逐题 request_resolved(aborted)，发出时提问已摘除`, async () => {
+      const { s } = makeSession();
+      const samples = sampleOnResolved(s);
+      const promise = s.handleQuestion({ questions }, { signal: new AbortController().signal, toolUseID: 'q1' });
+
+      await cancel(s);
+
+      assert.deepEqual(
+        samples.map(({ requestId, outcome }) => ({ requestId, outcome })),
+        [{ requestId: 'q1#0', outcome: 'aborted' }, { requestId: 'q1#1', outcome: 'aborted' }],
+        '少一题，其它设备上那张提问卡就关不掉',
+      );
+      assert.deepEqual(
+        samples.map(q => q.pendingAtEmit), [0, 0],
+        '发 request_resolved 时提问还挂着，同步广播的 instances 会把已取消的提问报成 permission',
+      );
+      assert.equal(s.pendingQuestions.size, 0);
+      assert.equal(s.denyKinds.get('q1'), denyKind);
+      const result = await promise;
+      assert.equal(result.behavior, 'deny');
+      assert.equal(result.interrupt, true, '取消要真的停下这一轮，否则模型会接着跑');
+      s.dispose();
+    });
+  }
+
+  test('interrupt 等待期间实例已 dispose：照样 deny + interrupt，但不再发 request_resolved', async () => {
+    const { s } = makeSession();
+    const samples = sampleOnResolved(s);
+    let promise;
+    s.q = {
+      interrupt() {
+        s.dispose();
+        // dispose 之后才到的 canUseTool：只有 interrupt 的 disposed 分支结算得到它，否则这轮 Promise 永远悬着
+        promise = s.handleQuestion({ questions }, { signal: new AbortController().signal, toolUseID: 'q1' });
+        return Promise.resolve();
+      },
+    };
+
+    await s.interrupt();
+
+    assert.equal(s.pendingQuestions.size, 0);
+    assert.equal(s.denyKinds.get('q1'), 'cancelled');
+    assert.deepEqual(samples, [], '实例已弃用没有监听者，不该再往外发事件');
+    const result = await promise;
+    assert.equal(result.behavior, 'deny');
+    assert.equal(result.interrupt, true);
+  });
+});
