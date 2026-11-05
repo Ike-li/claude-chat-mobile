@@ -3,6 +3,7 @@
 // 覆盖：目录不存在/无 jsonl 的空数组回落 · title/model/entrypoint 提取
 //       · entrypoint-marker 假行不得冒充真实 entrypoint（判错驱动方会打穿单驾驶员模型）
 //       · ai-title 优先于首条 user 文本 · peekSessionListTitle 与 listSessions 同源
+//       · 标题搜索纯函数（空 query 全匹配、大小写不敏感、搜索键收集、展示标题优先级）
 // 这份从原 history.test.mjs 拆出，同源的还有 -files（路径编码）、-messages、-sync。
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,7 +12,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { getProjectDir, listSessions, listSessionsPage, listSessionsByIds, sessionFileMtime, peekSessionListTitle, peekSessionListTitleTimed } from '../../app/src/sessions/history.js';
+import { getProjectDir, listSessions, listSessionsPage, listSessionsByIds, sessionFileMtime, peekSessionListTitle, peekSessionListTitleTimed, matchesSessionTitle, sessionTitleSearchKeys, matchesSessionSearch, resolveSessionListTitle } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -624,4 +625,53 @@ test('listSessionsByIds: 按 lastUsedAt 降序（与列表主体同序，两次�
 test('listSessionsByIds: 空/无效入参不读盘，直接返回 []', async () => {
   assert.deepEqual(await listSessionsByIds('/no/such/cwd', [], { baseDir: BASE }), []);
   assert.deepEqual(await listSessionsByIds('/no/such/cwd', null, { baseDir: BASE }), []);
+});
+
+test('matchesSessionTitle: 空/空白 query 全匹配', () => {
+  assert.equal(matchesSessionTitle('Hello', ''), true);
+  assert.equal(matchesSessionTitle('Hello', '   '), true);
+  assert.equal(matchesSessionTitle('Hello', null), true);
+});
+
+test('matchesSessionTitle: 大小写不敏感子串', () => {
+  assert.equal(matchesSessionTitle('Alpha Plan', 'alpha'), true);
+  assert.equal(matchesSessionTitle('ALPHA notes', 'pha n'), true);
+  assert.equal(matchesSessionTitle('beta', 'alpha'), false);
+});
+
+test('sessionTitleSearchKeys: 收集 summary/aiTitle/firstUser/firstCmd，去掉空白', () => {
+  assert.deepEqual(
+    sessionTitleSearchKeys({
+      summary: 'CLI /resume 标题',
+      aiTitle: 'AI 生成标题',
+      firstUser: '首条用户问题',
+      firstCmd: '/compact',
+    }),
+    ['CLI /resume 标题', 'AI 生成标题', '首条用户问题', '/compact'],
+  );
+  assert.deepEqual(sessionTitleSearchKeys({ summary: '  ', aiTitle: null, firstUser: '' }), []);
+});
+
+test('matchesSessionSearch: 任一键命中即可（抽屉可见 summary ≠ readHeadMeta 时仍能搜到）', () => {
+  const keys = sessionTitleSearchKeys({
+    summary: 'Renamed Visible Title',
+    firstUser: 'hello world from the first prompt',
+  });
+  assert.equal(matchesSessionSearch(keys, 'Renamed Visible'), true);
+  assert.equal(matchesSessionSearch(keys, 'HELLO WORLD'), true);
+  assert.equal(matchesSessionSearch(keys, 'nope'), false);
+  assert.equal(matchesSessionSearch(keys, '  '), true);
+});
+
+test('matchesSessionSearch: firstUser 超过展示 60 字的尾部仍能命中', () => {
+  const firstUser = `${'x'.repeat(80)}UniqueTailToken`;
+  const keys = sessionTitleSearchKeys({ firstUser, aiTitle: firstUser.slice(0, 60) });
+  assert.equal(matchesSessionSearch(keys, 'UniqueTailToken'), true);
+});
+
+test('resolveSessionListTitle: 展示优先 SDK summary（与浏览行同源），否则 meta，再否则占位', () => {
+  assert.equal(resolveSessionListTitle({ summary: 'CLI /resume 同款标题', metaTitle: '首条用户' }), 'CLI /resume 同款标题');
+  assert.equal(resolveSessionListTitle({ summary: '', metaTitle: '首条用户' }), '首条用户');
+  assert.equal(resolveSessionListTitle({}), '(无标题)');
+  assert.equal(resolveSessionListTitle({ metaTitle: 'y'.repeat(80) }), 'y'.repeat(60));
 });

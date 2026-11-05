@@ -694,7 +694,7 @@ test.describe('fetchUsage()（statusline 5h/7d 数据源：实验性 usage RPC +
     s.dispose();
   });
 
-  test('RPC 超时 → null（不阻塞，照 statusline getContextUsageSafe 1500ms 模式）', async () => {
+  test('RPC 超时 → null（不阻塞）', async () => {
     const { s } = makeSession();
     s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}) }; // 永不 resolve
     assert.equal(await s.fetchUsage(10, { minIntervalMs: 0 }), null); // 10ms 超时

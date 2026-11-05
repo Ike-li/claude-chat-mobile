@@ -170,12 +170,6 @@ export function shouldShowBusyWithMirror({ mirrorReadonly = false, busy = false 
 // ultracode = CLI /effort 菜单最高档（会话 Settings.ultracode + effort xhigh）。
 // SDK Options.effort 只认 low..max；UI 在 xhigh-capable 上追加 ultracode 菜单项（与 CLI 对齐），
 // spawn 时 server 映射为 effort=xhigh + settings:{ultracode:true}，不改写用户正文。
-// withUltracodeKeyword：仅当用户自己在消息里写 ultracode 时仍原样发送（CLI 关键词 trigger）；Web 切档不自动注入。
-export function withUltracodeKeyword(text) {
-  const trimmed = String(text ?? '').trim();
-  if (!trimmed) return 'ultracode';
-  return /^ultracode(?:\s|$)/i.test(trimmed) ? trimmed : `ultracode ${trimmed}`;
-}
 
 // 思考档位列表：ultracode 仅在模型支持 xhigh 时追加（对齐 CLI /effort），幂等。
 export function withUltracodeTier(levels) {
@@ -191,12 +185,6 @@ export function withAutoTier(levels) {
   const arr = Array.isArray(levels) ? levels : [];
   if (!arr.length || arr.includes('auto')) return arr;
   return [...arr, 'auto'];
-}
-
-// UI 档 → SDK 参数：ultracode → { effort:'xhigh', ultracode:true }；其余原样。
-export function resolveEffortSelection(uiLevel) {
-  if (uiLevel === 'ultracode') return { effort: 'xhigh', ultracode: true };
-  return { effort: uiLevel || null, ultracode: false };
 }
 
 // 模型桥接：把规范名 / 网关后缀名（如 claude-opus-4-8[1m]）匹配到 models 候选项。

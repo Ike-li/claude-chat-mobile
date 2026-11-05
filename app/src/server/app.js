@@ -1983,10 +1983,7 @@ function statusOwnerFor(agent, instanceId = viewingInstanceId) {
   if (agent?.externalObserved) return 'cli';
   if (statusBridgeOff || !agent?.sessionId) return 'sdk';
   // 只看 mirror 锁：externalDirty 管发送前置换，不把 statusline 锁到 CLI（见 selectStatusOwner 注释）。
-  return selectStatusOwner({
-    mirrorReadonly: mirrorOwnedBy(agent.sessionId, instanceId),
-    externalDirty: agent.externalDirty === true, // 兼容形参，selectStatusOwner 忽略
-  });
+  return selectStatusOwner({ mirrorReadonly: mirrorOwnedBy(agent.sessionId, instanceId) });
 }
 
 function replayStatusLineTo(socket) {

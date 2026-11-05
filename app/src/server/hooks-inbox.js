@@ -65,7 +65,7 @@ export function createHooksInbox({
     timer.unref?.();
   }
 
-  // 目录在就盯，不在就等——**不替用户建**（验收 O35）。此前启动就 ensureHooksDirectory 自建，为的是
+  // 目录在就盯，不在就等——**不替用户建**（验收 O35）。此前启动就自建目录，为的是
   // 「先起 server 后装 hooks」免重启；代价是没装过桥、或刚卸载干净的机器，server 一重启 ~/.claude/ccm
   // 又冒出来。现在由下面的定时检查兑现免重启：装上（目录出现）就盯上并立刻扫一遍——安装器的 verify 事件
   // 可能已经落在里面等回执；卸掉（目录被删）就放手——Linux 的 inotify 盯的是 inode，目录删了再建，

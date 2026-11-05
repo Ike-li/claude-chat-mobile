@@ -154,16 +154,6 @@ export function resolveTurnEndScroll({ hasFileChangesCard = false } = {}) {
   return hasFileChangesCard ? 'file-changes' : 'bottom';
 }
 
-// bindView 切视图时是否该清空输入框未发送草稿。思考强度/模型切档在 SDK 层无运行时切换能力，后端 dispose
-// 旧实例 + resume 同会话开新实例（instanceId 变了、sessionId 不变），前端只看 viewingInstanceId 变化就判定
-// 为「切到另一个会话」而清空草稿——这是误伤：用户视角仍在同一个聊天里，只是底层实例被静默替换。
-// 判定：新旧 sessionId 相同且非空 ⇒ 同一会话静默换实例，保留草稿；否则（真实切会话/切到全新未开会话/
-// 任一端为空）⇒ 清空（保守默认，不吞真实导航场景）。
-// 注：真实切会话时不应「丢弃」草稿——见 planSessionDraftSwap（按 sessionId 存/取）。
-export function shouldClearInputOnBindView({ prevSessionId, newSessionId } = {}) {
-  return !(newSessionId && newSessionId === prevSessionId);
-}
-
 // 未发送草稿缓存的 key：有真 sessionId 就用它，否则退回 `new:<cwd>`。
 // 【为什么需要后一半】「新会话已就绪」页在首发之前根本没有 sessionId。只认 sessionId 时
 // prevSessionId 为 null ⇒ save 恒为 null，用户在那一页打的字从来没被存过，回来时也没有

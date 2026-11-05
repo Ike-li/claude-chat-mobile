@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setLang } from '../../app/public/js/i18n.js';
-import { esc, formatToolSummary, localizeServerThinkingText, toolOutputHighlightClass, toolInputHighlightClass, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';
+import { esc, formatToolSummary, localizeServerThinkingText, toolOutputHighlightClass, toolInputHighlightClass, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeTier, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';
 
 test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
@@ -375,30 +375,6 @@ test('isFileMutationTool: 写盘工具 true，Read 与无关工具 false', () =>
   assert.equal(isFileMutationTool({}), false);
 });
 
-test('countContentLines / estimateMutationLineStats: 行数估算', () => {
-  assert.equal(countContentLines(''), 0);
-  assert.equal(countContentLines(null), 0);
-  assert.equal(countContentLines('a'), 1);
-  assert.equal(countContentLines('a\nb\nc'), 3);
-  assert.deepEqual(
-    estimateMutationLineStats('Edit', { old_string: 'a\nb', new_string: 'a\nb\nc\nd' }),
-    { added: 4, removed: 2 },
-  );
-  assert.deepEqual(
-    estimateMutationLineStats('Write', { content: 'line1\nline2' }),
-    { added: 2, removed: 0 },
-  );
-  assert.deepEqual(
-    estimateMutationLineStats('MultiEdit', {
-      edits: [
-        { old_string: 'x', new_string: 'y\nz' },
-        { old_string: 'a\nb', new_string: 'a' },
-      ],
-    }),
-    { added: 3, removed: 3 },
-  );
-});
-
 test('accumulateTurnFileChange + summarizeTurnFileChanges: 聚合同路径、忽略 Read', () => {
   const map = new Map();
   accumulateTurnFileChange(map, {
@@ -427,30 +403,14 @@ test('accumulateTurnFileChange + summarizeTurnFileChanges: 聚合同路径、忽
   assert.equal(summarizeTurnFileChanges(new Map()), null);
 });
 
-test('withUltracodeKeyword: 单轮 ultracode 关键词前缀且不重复', () => {
-  assert.equal(withUltracodeKeyword('重构日期工具'), 'ultracode 重构日期工具');
-  assert.equal(withUltracodeKeyword('  重构日期工具  '), 'ultracode 重构日期工具');
-  assert.equal(withUltracodeKeyword('ultracode 重构日期工具'), 'ultracode 重构日期工具');
-  assert.equal(withUltracodeKeyword('UltraCode 重构日期工具'), 'UltraCode 重构日期工具');
-  assert.equal(withUltracodeKeyword(''), 'ultracode');
-});
-
 // ultracode 是 CLI /effort 菜单 xhigh 之上的最高档（= xhigh effort + workflow 编排），
-// 仅在支持 xhigh 的模型上出现。这两个纯函数把「档位列表拼装」与「选中后的行为解析」抽出可测。
+// 仅在支持 xhigh 的模型上出现。
 test('withUltracodeTier: 含 xhigh 才追加 ultracode 最高档（镜像 CLI /effort），幂等', () => {
   assert.deepEqual(withUltracodeTier(['low', 'medium', 'high', 'xhigh']), ['low', 'medium', 'high', 'xhigh', 'ultracode']);
   assert.deepEqual(withUltracodeTier(['low', 'medium']), ['low', 'medium']); // 无 xhigh → 该模型不够格，不加
   assert.deepEqual(withUltracodeTier([]), []);
   assert.deepEqual(withUltracodeTier(['low', 'xhigh', 'ultracode']), ['low', 'xhigh', 'ultracode']); // 已含 → 不重复
   assert.deepEqual(withUltracodeTier(null), []);
-});
-
-test('resolveEffortSelection: ultracode → xhigh + flag；其余档不武装', () => {
-  assert.deepEqual(resolveEffortSelection('ultracode'), { effort: 'xhigh', ultracode: true });
-  assert.deepEqual(resolveEffortSelection('xhigh'), { effort: 'xhigh', ultracode: false });
-  assert.deepEqual(resolveEffortSelection('low'), { effort: 'low', ultracode: false });
-  assert.deepEqual(resolveEffortSelection(''), { effort: null, ultracode: false });
-  assert.deepEqual(resolveEffortSelection(null), { effort: null, ultracode: false });
 });
 
 // unifiedDiffLines：Edit/MultiEdit 工具卡「预览变更」的行级 diff（LCS），输出交给 git-changes.js

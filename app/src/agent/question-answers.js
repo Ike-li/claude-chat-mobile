@@ -35,11 +35,6 @@ export function formatCliAnswer(value) {
   return value.map(l => (l.includes(', ') || l.includes('"') ? JSON.stringify(l) : l)).join(', ');
 }
 
-// 给人看的答案（留痕条、交互日志）：多选用顿号，与前端 questionDraftLabel 同一口径
-export function questionAnswerDisplay(value) {
-  return Array.isArray(value) ? value.join('、') : String(value ?? '');
-}
-
 // entries[i]：{ value } 已答 / { unanswered: 'skipped'|'dismissed' } 没答（标注只在 annotate 时带）/ null 没答也不标。
 // questions 只用来取题目原文作键，与 input.questions 逐题对应（入口归一化不改题序与题目原文）。
 export function buildQuestionUpdatedInput(input, questions, entries, { annotate = false } = {}) {
