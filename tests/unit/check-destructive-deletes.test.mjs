@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkFile, collectFiles, collectScanFiles } from '../../tests/gates/check-destructive-deletes.js';
+import { checkFile, collectScanFiles } from '../../tests/gates/check-destructive-deletes.js';
 
 const check = src => checkFile(src, 'x.test.mjs');
 
@@ -331,20 +331,18 @@ test('豁免: argv 形态同样可用 safe-rm 放行', () => {
   `), []);
 });
 
-// ── 扫描面：collectFiles 此前只认 .js/.mjs，整棵 Playwright spec 树（.spec.ts / .config.ts）
+// ── 扫描面：此前只认 .js/.mjs，整棵 Playwright spec 树（.spec.ts / .config.ts）
 // 从未被扫描过。头注声称「把只覆盖已知变成覆盖所有未来的」，扩展名死角与这句话不符。
-test('扫描面: collectFiles 认 .ts 文件（此前只认 .js/.mjs，整棵 spec 树不在扫描面内）', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ccm-collect-files-'));
-  mkdirSync(join(dir, 'specs'), { recursive: true });
-  writeFileSync(join(dir, 'a.test.mjs'), '');
-  writeFileSync(join(dir, 'specs', 'b.spec.ts'), '');
-  writeFileSync(join(dir, 'specs', 'c.config.ts'), '');
-  writeFileSync(join(dir, 'd.txt'), '');
-  const found = collectFiles(dir).sort();
-  assert.equal(found.length, 3, `应找到 3 个 .mjs/.ts 文件，实际：${JSON.stringify(found)}`);
-  assert.ok(found.some(f => f.endsWith('a.test.mjs')));
-  assert.ok(found.some(f => f.endsWith('b.spec.ts')));
-  assert.ok(found.some(f => f.endsWith('c.config.ts')));
+test('扫描面: collectScanFiles 认 .ts 文件（此前只认 .js/.mjs，整棵 spec 树不在扫描面内）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-collect-files-'));
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  mkdirSync(join(root, 'tests', 'specs'), { recursive: true });
+  writeFileSync(join(root, 'tests', 'a.test.mjs'), '');
+  writeFileSync(join(root, 'tests', 'specs', 'b.spec.ts'), '');
+  writeFileSync(join(root, 'tests', 'specs', 'c.config.ts'), '');
+  writeFileSync(join(root, 'tests', 'd.txt'), '');
+  const rels = collectScanFiles(root).testFiles.map(f => f.slice(root.length + 1)).sort();
+  assert.deepEqual(rels, ['tests/a.test.mjs', 'tests/specs/b.spec.ts', 'tests/specs/c.config.ts']);
 });
 
 // ── 扫描面：被 .gitignore 忽略的本地产物不在扫描面内 ──────────────────────────

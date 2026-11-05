@@ -24,7 +24,7 @@
 // 名字随机、不可能撞上任何既有数据。而"看起来在 /tmp 下"是字符串判断，被测代码算歪之后
 // 恰恰就不成立了——那正是这次事故的形态。判据必须锚在【来源】上，不能锚在【长相】上。
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { maskCodePositions } from './mutate.js';
 
@@ -39,20 +39,6 @@ const SAFE_SOURCE = /\bmkdtemp(Sync)?\b|\btmpdir\s*\(/;
 // 豁免必须绑定到"当初批准的是哪件事"上：批的是有界的单文件删除，就不该覆盖无界的递归删除。
 const EXEMPT_MARKER = /\/\/\s*safe-rm:\s*(.+)/;          // 递归删除的豁免
 const PATH_EXEMPT_MARKER = /\/\/\s*safe-path:\s*(.+)/;   // 「目录段由代码算出」的豁免
-
-// 递归收集测试目录下的 js/mjs
-export function collectFiles(dir, out = []) {
-  let entries;
-  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
-  for (const e of entries) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) { collectFiles(p, out); continue; }
-    // .ts/.mts 补进来：整棵 Playwright spec 树（tests/e2e/specs/*.spec.ts、tests/infra/*.config.ts）
-    // 此前只被 .js/.mjs 过滤掉，从未被这道闸扫描过。stripNonCode 的字符串/注释掩码对 TS 语法同样适用。
-    if (/\.(m?[jt]s)$/.test(e.name)) out.push(p);
-  }
-  return out;
-}
 
 // 收集「标识符 → 它可能的来源表达式们」。覆盖四种写法：
 //   const/let X = <expr>      普通赋值
@@ -390,6 +376,8 @@ export function checkSourceFile(rawSource, relPath) {
 // 不用 readdirSync 遍历，是因为它看不见 .gitignore——机主本机跑验收留下的
 // tests/acceptance/local/ 产物会被扫进来，本机恒红而 CI 干净检出恒绿（2026-10-22）。
 // --cached 会列出工作区里已删但未提交的文件，所以再按存在性过滤一遍。
+// 扩展名含 .ts/.mts：整棵 Playwright spec 树（tests/e2e/specs/*.spec.ts、tests/infra/*.config.ts）
+// 曾只被 .js/.mjs 过滤掉，从未被这道闸扫描过。stripNonCode 的字符串/注释掩码对 TS 语法同样适用。
 export function collectScanFiles(rootDir = ROOT) {
   const list = paths => execFileSync(
     'git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...paths],

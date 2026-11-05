@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 // 扫描根：运行时源码三处。tests/scripts 不设边界（工具与测试可跨域引用）。
-const SCAN_ROOTS = ['app/src', 'app/public/js'];
+export const SCAN_ROOTS = ['app/src', 'app/public/js'];
 const EXTRA_FILES = ['app/server.js'];
 
 // 静态 import/export-from（行首锚定）；动态 import('...') 单独一条（可出现在行中任意位置，
@@ -60,7 +60,7 @@ export const SHARED_ALLOWLIST = new Set([
   'app/public/js/canonicalize.js', // app/src/auth/fingerprint.js 与浏览器共用规范化
 ]);
 
-function listFiles(root) {
+export function listFiles(root) {
   const files = [];
   const skip = new Set(['node_modules', '.git', 'data', '.ccm-uploads']);
   const visit = dir => {

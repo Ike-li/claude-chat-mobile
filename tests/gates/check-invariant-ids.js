@@ -32,7 +32,7 @@
 // 首列是结构化的，不会有这种噪音；而正向检查（守护行→登记表）用全文包含即可，
 // README 正文里叙述性提到某个编号也算「查得到」——那半是「有没有定义」，不是「有没有守护」。
 import { readFileSync, readdirSync } from 'node:fs';
-import { join, relative, resolve, dirname } from 'node:path';
+import { basename, join, relative, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -68,18 +68,9 @@ function extractGuardIds(headLines) {
 }
 
 function listFiles(rootDir, dir, filter) {
-  const out = [];
-  const walk = (relDir) => {
-    let entries;
-    try { entries = readdirSync(join(rootDir, relDir), { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const rel = join(relDir, entry.name);
-      if (entry.isDirectory()) walk(rel);
-      else if (filter(entry.name)) out.push(rel);
-    }
-  };
-  walk(dir);
-  return out.sort();
+  let entries;
+  try { entries = readdirSync(join(rootDir, dir), { recursive: true }); } catch { return []; }
+  return entries.filter(rel => filter(basename(rel))).map(rel => join(dir, rel)).sort();
 }
 
 export function checkInvariantIds({ rootDir = ROOT } = {}) {
