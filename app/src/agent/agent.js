@@ -995,16 +995,7 @@ export class AgentSession {
     this._approvalExpiredInTurn = false;
     this.bgTasks.clear();         // 实例结束清空活后台注册表，防残留误亮 ⏳
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy: 'system:exit' });
-    // F2：清理挂起的 AskUserQuestion（直接 resolve，不走 resolveQuestion 避免重复逻辑）
-    for (const [toolUseID, pending] of this.pendingQuestions) {
-      pending.signal?.removeEventListener('abort', pending.abortHandler);
-      if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
-      for (let i = 0; i < pending.questions.length; i++) {
-        this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
-      }
-      pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
-    }
-    this.pendingQuestions.clear();
+    this._cancelPendingQuestions();
     this._cancelPendingElicitations();
     this.denyKinds.clear(); // 与 dispose 路径对称：无论哪种退出，denyKind 残留都应清理
     // AG-005：自然退出（CLI 进程结束）也要标 disposed/inputEnded——否则 onExit 删 Map 前的竞态窗口里
@@ -1308,16 +1299,7 @@ export class AgentSession {
       this._awaitingInterruptResult = false; // 无伴随 result 可消费
       this._clearLocalCommandProgress();      // 同 settle 看门狗：强制收口须带上本地命令状态机（review #1）
       for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy });
-      for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
-        pending.signal?.removeEventListener('abort', pending.abortHandler);
-        if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
-        this.pendingQuestions.delete(toolUseID);
-        for (let i = 0; i < pending.questions.length; i++) {
-          this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
-        }
-        setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
-        try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
-      }
+      this._cancelPendingQuestions();
       this._cancelPendingElicitations();
       if (droppedIds.length > 0) {
         this.emit('system', { message: '尚未送达的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
@@ -1338,13 +1320,7 @@ export class AgentSession {
         this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
         this._dropOpenTurnSlots(dropped);
         for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy });
-        for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
-          pending.signal?.removeEventListener('abort', pending.abortHandler);
-          if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
-          this.pendingQuestions.delete(toolUseID);
-          setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
-          try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
-        }
+        this._cancelPendingQuestions({ silent: true });
         this._cancelPendingElicitations({ silent: true });
         _diagOutcome = 'disposed';
         return;
@@ -1361,16 +1337,7 @@ export class AgentSession {
       // 注意：Map.keys() 的元素是字符串，for-of 解构 for (const [id] of keys) 会把 't1' 拆成字符 't'——
       // 必须 for (const id of keys) 或 entries() 解构。
       for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy });
-      for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
-        pending.signal?.removeEventListener('abort', pending.abortHandler);
-        if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
-        this.pendingQuestions.delete(toolUseID);
-        for (let i = 0; i < pending.questions.length; i++) {
-          this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
-        }
-        setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
-        pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
-      }
+      this._cancelPendingQuestions();
       this._cancelPendingElicitations();
       // 被丢弃消息的可见性：前端据 clientMessageIds 把对应气泡标「已取消」（含 buffer 回放收敛）
       if (droppedIds.length > 0) {
@@ -2065,6 +2032,24 @@ export class AgentSession {
     this.pendingQuestions.delete(toolUseID);
     this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome }); // M4 整组终态
     pending.resolve({ behavior: 'allow', updatedInput: buildQuestionUpdatedInput(pending.input, pending.questions, pending.answers, { annotate }) });
+  }
+
+  // F2：实例结束 / 中断时把挂着的提问都结算成 deny + interrupt（等价终端 Esc）。直接 resolve，不走 resolveQuestion 避免重复逻辑。
+  // 先摘除再 emit：request_resolved 让 server 同步广播 instances，条目还在就会把已取消的提问报成 permission。
+  // 先 emit 再 resolve：保证多设备收到问题取消通知（否则前端弹窗永远不消失）。silent：实例已 dispose、没有监听者，不再发事件。
+  _cancelPendingQuestions({ silent = false } = {}) {
+    for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
+      pending.signal?.removeEventListener('abort', pending.abortHandler);
+      if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
+      this.pendingQuestions.delete(toolUseID);
+      if (!silent) {
+        for (let i = 0; i < pending.questions.length; i++) {
+          this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
+        }
+      }
+      setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
+      pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
+    }
   }
 
   // ---- MCP elicitation（#460）：服务器要表单输入或 URL 授权 ----
@@ -2801,18 +2786,7 @@ export class AgentSession {
     if (this._textTimer) { clearTimeout(this._textTimer); this._textTimer = null; }
     if (this._thinkTimer) { clearTimeout(this._thinkTimer); this._thinkTimer = null; }
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy: 'system:dispose' });
-    // F2：清理挂起的 AskUserQuestion——与 consume 清理路径一致：先 emit request_resolved 再 resolve，
-    // 保证多设备收到问题取消通知（否则前端弹窗永远不消失）
-    for (const [toolUseID, pending] of this.pendingQuestions) {
-      pending.signal?.removeEventListener('abort', pending.abortHandler);
-      if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
-      for (let i = 0; i < pending.questions.length; i++) {
-        this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
-      }
-      setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
-      pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
-    }
-    this.pendingQuestions.clear();
+    this._cancelPendingQuestions();
     this._cancelPendingElicitations();
     this.denyKinds.clear(); // 防 dispose 后残留（实例即弃，无 tool_result 来消费）
     this.lastToolName = null;
