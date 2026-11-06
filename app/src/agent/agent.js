@@ -279,7 +279,13 @@ export function buildAgentQueryOptions(session, env = process.env) {
     effort: session.effort || undefined,                 // SDK 0.3+ 一等 Options.effort；null=模型默认不传
     // flag settings 叠加，不替代 user/project/local（与 CLI /effort ultracode 同语义）；两者皆无则整个不传
     ...(settings ? { settings } : {}),
-    ...(chromeDefaultEnabled(session.claudeGlobalConfigPath) ? { extraArgs: { chrome: null } } : {}),
+    extraArgs: {
+      // 手机上等回复时，思考摘要是最早出现的内容。CLI 默认发 display:"updates"，近 30 天 SDK 会话只有 17% 的
+      // thinking 块有文字；设置 showThinkingSummaries 只是去掉 display，同样没有文字（2026-11-06 真实请求对比）。
+      // 用这个参数而不是 Options.thinking：后者多带 --thinking=adaptive，这里只改显示，开不开仍归 CLI 和用户配置。
+      'thinking-display': 'summarized',
+      ...(chromeDefaultEnabled(session.claudeGlobalConfigPath) ? { chrome: null } : {}),
+    },
     permissionMode: session.sdkPermissionMode(),         // bypass 映射为 SDK default
     // 附件已不落在 cwd 内（见 files/uploads.js 头注释），这一行把附件根纳入权限范围，Read 才免审批。
     // 映射到 CLI 的 --add-dir。**只加 uploads 这一个子目录**，绝不是整个 dataDir——那里有设备信任
@@ -315,6 +321,9 @@ const DRIVING_CWD_TOOLS = Object.freeze({
   EnterWorktree: r => r?.worktreePath,
   ExitWorktree: r => r?.originalCwd,
 });
+const WRITES_LOST_CAUSES = Object.freeze({ ENOSPC: '磁盘已满', EDQUOT: '磁盘配额已用完' });
+const WRITES_LOST_LABELS = Object.freeze({ transcript: '会话记录', global_config: '全局配置（~/.claude.json）' });
+const DENIED_REASON_CAP = 200;            // 自动拒绝提示里原因的上限：deny 规则的原因带完整命令，可以是整段 heredoc
 const TOOL_INPUT_MAX = 40;                // FIFO 容量上限（Map 插入序淘汰最旧），防内存涨
 // live 工具截图在实例内存里的总量上限，按真正留在内存里的 base64 字符数计。只为盖住「事件已到、
 // transcript 还没落盘」那几秒，挤出去的由 image:get 回落读 transcript；按体积而不按条数，computer use
@@ -449,7 +458,7 @@ function toolResultRaw(toolName, structured, content) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir, claudeGlobalConfigPath, ephemeral = false }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, onSessionWritesLost, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir, claudeGlobalConfigPath, ephemeral = false }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（instance-manager 的 nextId）。
     this.instanceId = instanceId;
@@ -478,6 +487,7 @@ export class AgentSession {
     // (wall) => void，主循环撞上 rate_limit 墙时上报给 server 的自动续跑调度（server/auto-continue.js）。
     // 只交事实不做判定：判定在 agent/quota-auto-continue.js 的 planQuotaWall，这里的三个字段是它的输入。
     this.onQuotaWall = onQuotaWall;
+    this.onSessionWritesLost = onSessionWritesLost; // 磁盘满写丢的上报，见 _reportSessionWritesLost
     this._turnOrigin = null;            // 本轮由谁发起：'human' | 'auto-continuation' | 'task-notification'（合成轮）
     this._turnHadOutput = false;        // 本轮是否已有真模型输出——续跑后「一个字没产出又撞墙」才算空转
     this._lastRejectedRateLimit = null; // 本轮收到的 rejected rate_limit_info：老 CLI 的墙不带 quotaLimits 时的重置时刻来源
@@ -529,6 +539,7 @@ export class AgentSession {
                                             // ——一次性消费。不能靠嗅探 SDK 的 result.subtype（如 'error_during_execution'）
                                             // 反推"是不是用户中断"：该 subtype 是"执行过程中出错"的泛化分类，与
                                             // error_max_turns/error_max_budget_usd 同级，也可能是真实的独立异常。
+    this._deniedNoticed = new Set();       // 本轮已提示过的自动拒绝（工具 + 原因类型），见 _noticePermissionDenied
     // 在途轮 settle 槽（FIFO）。send/auto-turn 开槽；result 出槽。settleForce/disposed 收口把槽标
     // forceSettled——abort 前 for-await 可能还吐出已缓冲的消息，force 槽在这个窄窗吸收迟到 result、
     // 不再 --pendingTurns。结算看门狗（子进程存活）的清账则直接弃槽，见 _armInterruptSettleWatchdog。
@@ -929,7 +940,12 @@ export class AgentSession {
     let caught = null;
     try {
       for await (const msg of q) {
-        if (this.disposed) break;
+        if (this.disposed) {
+          // 其余帧都没有归属了，但要读到流结束：session_writes_lost 是 CLI 退出时的最后一帧，前面可能有任意
+          // 别的帧。这段时间到的控制请求由 handleCanUseTool / handleElicitation 开头的 disposed 守卫挡住。
+          if (msg.type === 'system' && msg.subtype === 'session_writes_lost') this._reportSessionWritesLost(msg);
+          continue;
+        }
         this.lastActivity = Date.now();
         // 诊断 tap（DEBUG_SDK_MESSAGES=1 开启）：map 前打印原始消息骨架，
         // 用于排查"后台任务完成通知在 web 端丢失"——观察 SDK 到底投不投递、以什么 type/subtype/parent 投递。
@@ -1143,6 +1159,7 @@ export class AgentSession {
   // result 上的 user_message_uuid 就是它，据此精确出槽，见 _settleOneResultTurn。
   _openTurnSlot(msgUuid = null) {
     this._interruptedBy = null; // 配对 result 可能永不到（见 _armInterruptSettleWatchdog），不能带进新一轮
+    this._deniedNoticed.clear();
     const id = ++this._turnIdSeq;
     this._openTurns.push({ id, forceSettled: false, msgUuid });
     return id;
@@ -1664,6 +1681,8 @@ export class AgentSession {
 
   // ---- 权限闸门（第二层）+ AskUserQuestion 特判（F2）----
   handleCanUseTool(name, input, { suggestions, signal, toolUseID, mcpServer }) {
+    // 实例已销毁：没人能答，审批却会无条件推到手机上，Promise 也永远不结算。
+    if (this.disposed) return { behavior: 'deny', message: '会话已关闭', interrupt: true };
     // F2：canAskUserQuestion 在 SDK 0.1.77 不存在（静默被忽略），AskUserQuestion 走此统一入口。
     // ⚠️ 必须在 bypass 短路之前：AskUserQuestion 是模型「向用户提问」，与「绕过工具权限审批」正交——
     // bypass 也应弹窗作答。若放在 bypass 之后，bypass 档会先 return allow 把提问当普通工具放行，
@@ -2066,7 +2085,7 @@ export class AgentSession {
   // request_resolved（kind:'elicitation'）让别的设备关卡。结果是 MCP 的 ElicitResult：{ action, content? }。
   // requestId 用 SDK 给的 control_request id（唯一、不会撞号）；缺了才自己发号。
   handleElicitation(request, { signal, requestId } = {}) {
-    if (signal?.aborted) return Promise.resolve({ action: 'cancel' });
+    if (signal?.aborted || this.disposed) return Promise.resolve({ action: 'cancel' }); // disposed 同 handleCanUseTool
     const id = typeof requestId === 'string' && requestId ? requestId : `elicit_${++this.elicitSeq}`;
     const view = describeElicitation(request);
     return new Promise(resolve => {
@@ -2886,6 +2905,47 @@ export class AgentSession {
     this.emit('system', { message: text, kind: 'notice', level });
   }
 
+  // 工具调用被自动拒绝、没有弹权限框（dontAsk、deny 规则、auto 模式分类器）。走 canUseTool 的询问不发这条。
+  // 原因先取 decision_reason；它对 rule/mode/subcommandResults 恒缺，这时取 message 的第一句，
+  // 后面那段「IMPORTANT: You *may* attempt…」是写给模型的，不上屏。
+  //
+  // 同工具同原因类型一轮只提示一次：并行调用会连发，真机上一段时间内也会反复撞（单会话最密 7 条/3 分钟）。
+  // 按轮次而不按时间窗：间隔常有十几秒，短窗口挡不住；每张工具卡本来就各自报错，归并掉的不会看不见。
+  // 原因正文不进键：分类器的 decision_reason 每次措辞都不一样。
+  _noticePermissionDenied(msg) {
+    const tool = stringify(msg.tool_name).trim() || '未知工具';
+    const reasonType = stringify(msg.decision_reason_type).trim();
+    interactionLog.addSessionLog(this.logKey(), 'sys_info', `[SYS] 工具被自动拒绝: ${tool}（${reasonType || '未说明类型'}）`);
+    const key = `${tool}\0${reasonType}`;
+    if (this._deniedNoticed.has(key)) return;
+    this._deniedNoticed.add(key);
+    const message = stringify(msg.message).trim();
+    const reason = stringify(msg.decision_reason).trim() || (message.match(/^.+?[.!?。！？](?=\s|$)/s)?.[0] ?? message);
+    this.emitNotice(`${msg.agent_id ? '子 agent 的工具' : '工具'} ${tool} 被自动拒绝${reason ? `：${truncate(reason, DENIED_REASON_CAP)}` : ''}`, 'warning');
+  }
+
+  // 磁盘满或超配额，transcript / ~/.claude.json 写丢了。CLI 只在退出时发一次（排在最后一个 result 之后），
+  // 这时实例不是在被回收就是已被 dispose：回收时没人在看它，dispose 后事件带的 instanceId 前端直接丢。
+  // 而「恢复可能缺内容」要在接着用这个会话时才用得上，所以除了能发就发，还交给 server，下次发消息时补上。
+  _reportSessionWritesLost(msg) {
+    const code = stringify(msg.error_code).trim();
+    const cause = WRITES_LOST_CAUSES[code] ?? `磁盘写入失败${code ? `（${code}）` : ''}`;
+    const lost = asArray(msg.lost);
+    const what = lost.map(v => WRITES_LOST_LABELS[v] ?? stringify(v)).filter(Boolean).join('和') || '部分数据';
+    const sessionIds = asArray(msg.transcript_session_ids).filter(id => id && typeof id === 'string');
+    // 「这个会话」指看到提示的那个会话：/clear 换了会话之后丢的可能是之前那个，补发时看的人也换了
+    const textFor = viewer => {
+      const targets = sessionIds.map(id => (id === viewer ? '这个会话' : `会话 ${id.slice(0, 8)}`));
+      const resume = lost.includes('transcript') ? `恢复${targets.join('、') || '这个会话'}时可能缺内容。` : '';
+      return `${cause}，${what}没存上。${resume}先腾出空间再继续。`;
+    };
+    const text = textFor(this.sessionId);
+    interactionLog.addSessionLog(this.logKey(), 'sys_info', `[SYS] ${text}`);
+    if (!this.disposed) this.emitNotice(text, 'warning');
+    const affected = sessionIds.length ? sessionIds : [msg.session_id ?? this.sessionId].filter(Boolean);
+    for (const id of affected) this.onSessionWritesLost?.(id, textFor(id));
+  }
+
   // 「slash 命令静默长跑」提示：CLI 内置 skill 的 getContext() 在非交互（SDK）会话下恒返回 "fork"
   // ——整条命令跑在一个独立 fork 上下文里，主链一条消息都不投。真机上 /code-review 就这样静默跑了
   // 13 分钟，用户两次以为卡死点了停止（2026-08-03）。结果本身现在能上屏（见 map() 的
@@ -3331,6 +3391,10 @@ export class AgentSession {
         } else if (msg.subtype === 'status' && msg.compact_error) {
           // 压缩失败。上面的 compacting 分支判据是 status==='compacting'，compact_result:'failed' 会漏掉。
           this.emitNotice(msg.compact_error, 'warning');
+        } else if (msg.subtype === 'permission_denied') {
+          this._noticePermissionDenied(msg);
+        } else if (msg.subtype === 'session_writes_lost') {
+          this._reportSessionWritesLost(msg);
         } else if (msg.subtype === 'local_command_output') {
           // 本地 slash 命令（/code-review、/usage、/context、/insights…）的输出。sdk.d.ts 的
           // SDKLocalCommandOutputMessage 注释原话：「Displayed as assistant-style text in the transcript」
@@ -3723,6 +3787,7 @@ export class AgentSession {
         this.turnOutputTokens = 0;
         this._msgOutBase = 0;
         this.lastToolName = null; // 清空工具名跟踪
+        this._deniedNoticed.clear(); // 回合结束后还在跑的后台子 agent 再撞上要重新说，开新轮那处清理等不到它
         // 在途前台工具随本轮收尾清账：工具不可能跨轮存活。中断/审批取消时 tool_result 可能永不回来，
         // 只靠上面的 delete 会留下残条目，让下一轮被无依据地豁免看护。
         this.pendingToolUses.clear();

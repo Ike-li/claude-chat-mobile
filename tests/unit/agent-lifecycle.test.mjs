@@ -1009,6 +1009,55 @@ test.describe('consume() 退出路径', () => {
     assert.equal(settled, true, '消息流结束（CLI 已退）后必须结算，否则删除每次都要白等到上限');
   });
 
+  // session_writes_lost 只在 CLI 退出时发（真 CLI 2.1.318 实测：abort 后 2ms 到，紧跟着流抛 Operation aborted）。
+  // 关标签、切 effort、规则 5 置换都先 dispose 再 abort，泵一见到帧就 break 的话，这条就只丢不报。
+  // 它前面可能有任意别的帧（rate_limit_event、prompt_suggestion 都不是 system），所以要一直读到流结束。
+  test('dispose 之后：CLI 退出时报的写丢仍要上报，排在任何帧后面都一样', async () => {
+    const reports = [];
+    const { s, events } = makeSession({ onSessionWritesLost: (id, text) => reports.push({ id, text }) });
+    const frames = [
+      { type: 'system', subtype: 'task_updated', task_id: 't1', patch: {} },
+      { type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } },
+      { type: 'assistant', message: { content: [] } },
+      {
+        type: 'system', subtype: 'session_writes_lost', error_code: 'ENOSPC', lost: ['transcript'],
+        transcript_session_ids: ['sess-a'], uuid: 'u1', session_id: 'sess-a',
+      },
+    ];
+    const fakeQ = {
+      [Symbol.asyncIterator]() {
+        return { next: () => Promise.resolve(frames.length ? { value: frames.shift(), done: false } : { done: true }) };
+      },
+    };
+    s.dispose();
+    const before = events.length;
+    await s.consume(fakeQ);
+
+    assert.deepEqual(reports.map(r => r.id), ['sess-a']);
+    assert.ok(reports[0].text.includes('磁盘已满'));
+    assert.equal(events.length, before, '实例已摘除：别的帧不再映射，也不从它身上发事件（见 R3，2026-08-06）');
+  });
+
+  // consume 要读到流结束，dispose 与 CLI 退出之间到的控制请求就都会进来。它们自己带着推送（审批无条件推），
+  // 不挡的话，已经关掉的会话会往锁屏手机上弹一张没人能答的审批卡。
+  test('dispose 之后到的控制请求：拒绝并取消，不弹审批、提问、表单', async () => {
+    const { s, events } = makeSession();
+    s.dispose();
+    const before = events.length;
+    // 没有守卫时这几个 Promise 永不结算：比一下，让它红在断言上而不是挂死
+    const settled = p => Promise.race([p, new Promise(resolve => setImmediate(() => resolve({})))]);
+
+    const tool = await settled(s.handleCanUseTool('Bash', { command: 'touch a' }, { toolUseID: 'toolu_late' }));
+    const question = await settled(s.handleCanUseTool('AskUserQuestion', { questions: [{ question: 'q?', options: [] }] }, { toolUseID: 'toolu_q' }));
+    const form = await settled(s.handleElicitation({ serverName: 'notes', message: '填表' }, { requestId: 'el_1' }));
+
+    assert.equal(tool.behavior, 'deny');
+    assert.equal(question.behavior, 'deny');
+    assert.equal(form.action, 'cancel');
+    assert.equal(s.pendingPermissions.size + s.pendingQuestions.size + s.pendingElicitations.size, 0);
+    assert.equal(events.length, before);
+  });
+
   test('正常结束 + sawInit 未到 + resumeId 存在 → resumeFailed + emit error(recoverable:false) + onExit', async () => {
     let exited = false;
     const { s, events } = makeSession({ resumeId: 'bad-id', onExit() { exited = true; } });

@@ -2258,6 +2258,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, author
     effort: effNorm.sdk,
     ultracode: effNorm.ultracode,
     effortAuto: effNorm.ui === 'auto',
+    onSessionWritesLost: instanceManager.noteWritesLost,
     // 没指定时 CLI 实际生效的档变了 → 合成一条 effort_mode 带上它（server 合成、seq 0，不进回放环）。
     onEffortEffective: effective => io.to('approved').emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: instance.sessionId, instanceId: id, ts: Date.now(),
@@ -3254,6 +3255,10 @@ registerSocketConnection(io, socket => {
       // 用户自己接着发了：这个会话的「到点自动继续」作废（人已经接手，到点再代发就是插队的第二条）
       autoContinue.onManualSend(a.sessionId);
       noteLiveTerminalOnTakeover(a);
+      // 上一个 CLI 退出时报的磁盘写丢，放到这里才说：视图已绑定，且正是用户要接着用这段上下文的时候。
+      // 不能在创建实例时发：notice 进环形缓冲后 replayed > 0，无 DOM 缓存的入场走 'reload'，缓冲被整批丢掉。
+      const writesLost = instanceManager.takeWritesLost(a.sessionId);
+      if (writesLost) a.emitNotice(writesLost, 'warning');
       diagLog.record(a.logKey(), 'message', 'enqueued', { ms: Date.now() - t0, hasAttachments }); // Part C
       if (viewingInstanceId === a.instanceId && mirrorEngine.isReadonly()) {
         // 前端显式接管后第一条消息已成功入 Web SDK 队列：服务端此刻也切换驾驶方，避免 statusline 继续

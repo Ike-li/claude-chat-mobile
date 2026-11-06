@@ -603,3 +603,275 @@ test.describe('map() — init 的 capabilities 存下来供按能力开关', () 
     s.dispose();
   });
 });
+
+// 工具调用被自动拒绝、没有弹权限框（dontAsk、deny 规则、auto 模式分类器……）。此前撞 map() 的兜底分支，
+// 手机上只看到工具卡报错，看不到是权限策略拦的。
+//
+// 夹具是 2026-11-06 用真 CLI 2.1.318 + 本地假 API 抓的帧（零 token）。sdk.d.ts 看不出的三点都来自实测：
+//   · decision_reason 对 rule/mode/subcommandResults 恒缺（CLI 的 D4e 直接 return undefined），只能回落 message
+//   · mode 的 message 后半段是写给模型的「IMPORTANT: You *may* attempt…」，不该上屏
+//   · 并行工具调用时同样的帧 20ms 内连发，而 2 个多月的真机日志里单会话最密 7 条/3 分钟，间隔常有十几秒
+test.describe('map() — permission_denied（工具调用被自动拒绝）', () => {
+  const MODE_FRAME = {
+    type: 'system', subtype: 'permission_denied',
+    tool_name: 'Bash', tool_use_id: 'toolu_fake0_ww7e17', decision_reason_type: 'mode',
+    message: "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways.",
+    uuid: '1615373a-f409-416e-b8cd-2fc8e812e719', session_id: 'd37b3672-60c9-4ce4-83cf-7ea0f51b8560',
+  };
+
+  test('提示说清工具和原因，写给模型的后半段不上屏', () => {
+    const { s, events } = makeSession();
+    s.map(MODE_FRAME);
+
+    const [n] = notices(events);
+    assert.ok(n, '应发出 notice');
+    assert.ok(n.payload.message.includes('Bash'), '要说清是哪个工具');
+    assert.ok(n.payload.message.includes("don't ask mode"), '要说清原因');
+    assert.ok(!n.payload.message.includes('IMPORTANT'), '这段是给模型的行为指引，用户看了是噪音');
+    assert.equal(n.payload.level, 'warning');
+    s.dispose();
+  });
+
+  test('decision_reason 优先于 message（auto 模式分类器的形状）', () => {
+    const { s, events } = makeSession();
+    s.map({
+      ...MODE_FRAME, tool_name: 'Write', decision_reason_type: 'classifier',
+      decision_reason: 'Writes outside the project need review',
+      message: 'Permission for this action has been denied.',
+    });
+    assert.ok(notices(events)[0].payload.message.includes('Writes outside the project need review'));
+    assert.ok(!notices(events)[0].payload.message.includes('Permission for this action'));
+    s.dispose();
+  });
+
+  test('deny 规则：message 自带具体命令，整句保留', () => {
+    const { s, events } = makeSession();
+    s.map({
+      ...MODE_FRAME, decision_reason_type: 'subcommandResults',
+      message: 'Permission to use Bash with command touch a.txt has been denied.',
+    });
+    assert.ok(notices(events)[0].payload.message.includes('touch a.txt'));
+    s.dispose();
+  });
+
+  test('超长原因（命令可以是整段 heredoc）截到一条提示放得下的长度', () => {
+    const { s, events } = makeSession();
+    const command = 'x'.repeat(5000);
+    s.map({ ...MODE_FRAME, message: `Permission to use Bash with command ${command} has been denied.` });
+    assert.ok(notices(events)[0].payload.message.length <= 240, '手机上是一条横条，不是详情页');
+    s.dispose();
+  });
+
+  test('并行调用连发同样的拒绝：一轮只提示一次（每张工具卡仍各自报错）', () => {
+    const { s, events } = makeSession();
+    for (const id of ['toolu_a', 'toolu_b', 'toolu_c']) s.map({ ...MODE_FRAME, tool_use_id: id });
+    assert.equal(notices(events).length, 1);
+    s.dispose();
+  });
+
+  test('间隔再长也算同一轮：归并按轮次，不按时间窗（真机最密时间隔十几秒）', () => {
+    const { s, events } = makeSession();
+    const realNow = Date.now;
+    try {
+      s.map(MODE_FRAME);
+      Date.now = () => realNow() + 5 * 60_000;
+      s.map({ ...MODE_FRAME, tool_use_id: 'toolu_later' });
+    } finally { Date.now = realNow; }
+    assert.equal(notices(events).length, 1);
+    s.dispose();
+  });
+
+  test('不同工具、不同原因类型不互相吞掉', () => {
+    const { s, events } = makeSession();
+    s.map(MODE_FRAME);
+    s.map({ ...MODE_FRAME, tool_name: 'Write' });
+    s.map({ ...MODE_FRAME, decision_reason_type: 'classifier', decision_reason: '分类器判定有风险' });
+    assert.equal(notices(events).length, 3);
+    s.dispose();
+  });
+
+  test('下一轮再撞上同样的拒绝，要重新提示', () => {
+    const { s, events } = makeSession();
+    s.map(MODE_FRAME);
+    s.send('再试一次');
+    s.map({ ...MODE_FRAME, tool_use_id: 'toolu_next_turn' });
+    assert.equal(notices(events).length, 2, '用户是看到上一轮的提示才重试的，这一轮不说就像没拒绝');
+    s.dispose();
+  });
+
+  test('被归并的那几次仍留在交互日志里，且不再算「未映射」', () => {
+    const { s } = makeSession();
+    // map() 会采纳帧里的 session_id 当日志键，共用 MODE_FRAME 的用例日志会累积到一起，这里给一个独占的
+    const frame = { ...MODE_FRAME, session_id: 'denied-log-session' };
+    const logs = () => getSessionLogs(s.logKey()).map(e => String(e.text || ''));
+    for (const id of ['toolu_a', 'toolu_b']) s.map({ ...frame, tool_use_id: id });
+    assert.equal(logs().filter(t => t.includes('被自动拒绝') && t.includes('Bash')).length, 2);
+    assert.equal(logs().filter(t => t.includes('未映射')).length, 0);
+    s.dispose();
+  });
+
+  test('回合结束后后台子 agent 再撞上，要重新提示：没有新轮次来清记录，它的工具卡又折叠着', () => {
+    const { s, events } = makeSession();
+    s.map(MODE_FRAME);
+    s.map({ type: 'result', subtype: 'success', is_error: false, result: 'ok' });
+    s.map({ ...MODE_FRAME, tool_use_id: 'toolu_bg', agent_id: 'agent-bg' });
+    assert.equal(notices(events).length, 2);
+    s.dispose();
+  });
+
+  test('子 agent 的拒绝要标明来源：主链上找不到对应的工具卡', () => {
+    const { s, events } = makeSession();
+    s.map({ ...MODE_FRAME, agent_id: 'agent-1' });
+    assert.ok(notices(events)[0].payload.message.includes('子 agent'));
+    s.dispose();
+  });
+
+  test('字段缺失不抛错：消息形状归 SDK 管', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'permission_denied' });
+    assert.ok(notices(events)[0].payload.message.includes('被自动拒绝'));
+    s.dispose();
+  });
+});
+
+// 磁盘满或超配额，transcript / ~/.claude.json 写丢了（CLI 2.1.318 起）。
+//
+// 夹具是 2026-11-06 用真 CLI 2.1.318 在写满的 8MB 卷上抓的帧。类型在 sdk.d.ts 0.3.318 才有（本仓还是 0.3.316，
+// 但 SDK 只管转发，收得到）。这条只在 CLI 退出时发一次，排在最后一个 result 之后，所以它撞上的几乎都是
+// 正在收尾的实例：怎么送到人手里见 agent-lifecycle 的 consume 用例与 integration/session-writes-lost。
+test.describe('map() — session_writes_lost（会话记录写丢）', () => {
+  const SID = 'fbfd5dc0-2c9a-4858-9bc6-3ef047c50be0';
+  const FRAME = {
+    type: 'system', subtype: 'session_writes_lost', error_code: 'ENOSPC',
+    lost: ['transcript', 'global_config'], transcript_session_ids: [SID],
+    uuid: '509ae321-675e-4319-aaae-78ced4da3094', session_id: SID,
+  };
+
+  test('两样都丢：说清原因、丢了什么、恢复时的后果', () => {
+    const { s, events } = makeSession();
+    s.map(FRAME);
+
+    const [n] = notices(events);
+    assert.ok(n, '应发出 notice');
+    assert.equal(n.payload.level, 'warning');
+    for (const part of ['磁盘已满', '会话记录', '~/.claude.json', '恢复这个会话时可能缺内容']) {
+      assert.ok(n.payload.message.includes(part), `缺「${part}」：${n.payload.message}`);
+    }
+    s.dispose();
+  });
+
+  test('只丢全局配置：不提会话记录，也不吓唬用户恢复会缺内容', () => {
+    const { s, events } = makeSession();
+    const { transcript_session_ids: _omit, ...configOnly } = FRAME;
+    s.map({ ...configOnly, error_code: 'EDQUOT', lost: ['global_config'] });
+
+    const { message } = notices(events)[0].payload;
+    assert.ok(message.includes('配额'));
+    assert.ok(message.includes('~/.claude.json'));
+    assert.ok(!message.includes('会话记录'));
+    assert.ok(!message.includes('缺内容'));
+    s.dispose();
+  });
+
+  test('只丢会话记录：不提全局配置', () => {
+    const { s, events } = makeSession();
+    s.map({ ...FRAME, lost: ['transcript'] });
+    assert.ok(!notices(events)[0].payload.message.includes('~/.claude.json'));
+    s.dispose();
+  });
+
+  // sdk.d.ts：「A CLI that started a new session after the loss, as /clear does, lists the earlier session,
+  // and lists session_id only if that session lost lines too.」
+  test('/clear 之后丢的是之前那个会话：要点名，不能说成「这个会话」', () => {
+    const { s, events } = makeSession();
+    s.map({ ...FRAME, session_id: 'b0000000-new-session', transcript_session_ids: ['a1b2c3d4-old-session'] });
+
+    const { message } = notices(events)[0].payload;
+    assert.ok(message.includes('a1b2c3d4'), message);
+    assert.ok(!message.includes('这个会话'), message);
+    s.dispose();
+  });
+
+  test('暂存给各会话的正文按它自己的视角写：补发时「这个会话」要指对', () => {
+    const reports = [];
+    const { s } = makeSession({ onSessionWritesLost: (id, text) => reports.push({ id, text }) });
+    s.map({ ...FRAME, session_id: 'b0000000-new', transcript_session_ids: ['a1b2c3d4-old', 'b0000000-new'] });
+
+    const [old, cur] = reports;
+    assert.equal(old.id, 'a1b2c3d4-old');
+    assert.ok(old.text.includes('恢复这个会话、会话 b0000000时'), old.text);
+    assert.equal(cur.id, 'b0000000-new');
+    assert.ok(cur.text.includes('恢复会话 a1b2c3d4、这个会话时'), cur.text);
+    s.dispose();
+  });
+
+  test('当前会话和之前的会话都丢了：两个都要说到', () => {
+    const { s, events } = makeSession();
+    s.map({ ...FRAME, transcript_session_ids: ['a1b2c3d4-old-session', SID] });
+
+    const { message } = notices(events)[0].payload;
+    assert.ok(message.includes('a1b2c3d4'), message);
+    assert.ok(message.includes('这个会话'), message);
+    s.dispose();
+  });
+
+  // sdk.d.ts 两处都写了「More codes/values may be added」
+  test('上游新增的错误码和 lost 取值：照样提示，不蒸发', () => {
+    const { s, events } = makeSession();
+    s.map({ ...FRAME, error_code: 'EIO', lost: ['plugins'], transcript_session_ids: undefined });
+
+    const { message } = notices(events)[0].payload;
+    assert.ok(message.includes('EIO'), message);
+    assert.ok(message.includes('plugins'), message);
+    s.dispose();
+  });
+
+  test('字段缺失不抛错', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'session_writes_lost' });
+    assert.equal(notices(events).length, 1);
+    s.dispose();
+  });
+
+  test('把受影响的会话和正文交给 server，好带到下一个实例', () => {
+    const reports = [];
+    const { s, events } = makeSession({ onSessionWritesLost: (id, text) => reports.push({ id, text }) });
+    s.map(FRAME);
+
+    assert.deepEqual(reports.map(r => r.id), [SID]);
+    assert.equal(reports[0].text, notices(events)[0].payload.message);
+    s.dispose();
+  });
+
+  test('只丢全局配置时没有 transcript_session_ids，归到 CLI 当前会话', () => {
+    const reports = [];
+    const { s } = makeSession({ onSessionWritesLost: id => reports.push(id) });
+    const { transcript_session_ids: _omit, ...configOnly } = FRAME;
+    s.map({ ...configOnly, lost: ['global_config'] });
+    assert.deepEqual(reports, [SID]);
+    s.dispose();
+  });
+
+  test('不再落「未映射」交互日志，但留一行可查的记录', () => {
+    const { s } = makeSession();
+    const frame = { ...FRAME, session_id: 'writes-lost-log-session', transcript_session_ids: ['writes-lost-log-session'] };
+    s.map(frame);
+    const logs = getSessionLogs(s.logKey()).map(e => String(e.text || ''));
+    assert.equal(logs.filter(t => t.includes('未映射')).length, 0);
+    assert.equal(logs.filter(t => t.includes('磁盘已满')).length, 1);
+    s.dispose();
+  });
+});
+
+// 2026-11-06 盘点时判定不需要显示的那批。这里的名字取自真机日志里实际出现过的未映射子类型。
+test('其余只记日志的子类型行为不变：不上屏，继续落「未映射」', () => {
+  const { s, events } = makeSession();
+  const unmapped = () => getSessionLogs(s.logKey()).filter(e => String(e.text || '').includes('未映射')).length;
+  const subtypes = ['vcs_state_changed', 'permission_check_status', 'code_change_published', 'session_title_changed', 'dev_intent'];
+  const before = unmapped();
+  for (const subtype of subtypes) s.map({ type: 'system', subtype });
+
+  assert.equal(notices(events).length, 0);
+  assert.equal(unmapped() - before, subtypes.length);
+  s.dispose();
+});
