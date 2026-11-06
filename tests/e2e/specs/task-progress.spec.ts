@@ -165,6 +165,63 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 运行中看输出（对齐终端 /tasks 详情页）。这条守真 DOM 上才看得见的东西：行怎么展开、输出不被当 HTML、
+  // 滚动跟随、手机宽度不横向溢出、visibilitychange 真接在 document 上。隐藏期间不轮询、单飞这些时序在
+  // tests/unit/frontend-task-live-output.test.mjs 用假定时器守；真 server 那一侧在 socket-task-output.test.mjs。
+  test('P0-17v 运行中的后台命令展开就能看输出并持续刷新，子代理没有这个入口', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:taskoutput-running');
+
+    await page.locator('#taskBannerToggle').click(); // 两个任务默认折叠
+    const rows = page.locator('[data-testid="bg-task-row"]');
+    const output = page.locator('[data-testid="bg-task-live-output"]');
+    const list = page.locator('[data-testid="bg-task-list"]');
+
+    await rows.filter({ hasText: 'Explore' }).click();
+    await expect(page.locator('[data-testid="bg-task-expand"][aria-expanded="true"]')).toHaveCount(1);
+    await expect(output).toHaveCount(0);
+
+    await rows.filter({ hasText: 'npm run build' }).click();
+    await expect(output).toBeVisible();
+    await expect(output).toContainText('POLL_1_END');
+    await expect(output).toContainText('…（仅显示末尾）');
+    await expect(output).toContainText('<b>not html</b>');
+    await expect(output.locator('b')).toHaveCount(0);
+
+    // 没人操作也会刷新，最新一行在视野里（8 KiB 的输出比列表高，要看的是末尾）
+    await expect(output).toContainText('POLL_2_END', { timeout: 6_000 });
+    const tailInView = () => page.evaluate(() => {
+      const bottom = (testid: string) => document.querySelector(`[data-testid="${testid}"]`)!.getBoundingClientRect().bottom;
+      return bottom('bg-task-live-output') <= bottom('bg-task-list') + 1;
+    });
+    await expect.poll(tailInView).toBe(true);
+    const overflow = await output.evaluate(el => el.scrollWidth - el.clientWidth);
+    expect(overflow, '手机宽度下长行要换行，不能撑出横向滚动').toBeLessThanOrEqual(0);
+
+    // 往上翻着看的时候不把人拽回末尾
+    await list.evaluate(el => { el.scrollTop = 0; });
+    await expect(output).toContainText('POLL_3_END', { timeout: 6_000 });
+    expect(await list.evaluate(el => el.scrollTop)).toBe(0);
+
+    // 回到前台不用等下一拍：上一拍刚落地，离下一拍还有约 3 秒，1 秒内出现新内容只可能来自 visibilitychange
+    await page.evaluate(() => {
+      for (const state of ['hidden', 'visible']) {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+        document.dispatchEvent(new Event('visibilitychange'));
+      }
+    });
+    await expect(output).toContainText('POLL_4_END', { timeout: 1_000 });
+
+    // 收起就没了
+    await rows.filter({ hasText: 'npm run build' }).click();
+    await expect(output).toHaveCount(0);
+
+    await waitForIdle(page);
+    await expect(page.locator('#taskProgressBanner')).toBeHidden();
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-17k 点击任务行展开详情面板显示进度历史，再次点击收起', async ({ page }) => {
     await gotoMock(page);
 

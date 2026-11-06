@@ -1,6 +1,7 @@
 import { locationError } from '../sessions/session-location.js';
 import { realpathSync, openSync, readSync, closeSync, fstatSync } from 'node:fs';
 import { basename, relative } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 import { inlineTypeOf } from '../files/file-tickets.js';
 import { assertSafeRelPath } from '../files/git-workspace.js';
 import { isBareStoredName } from '../files/uploads.js';
@@ -17,6 +18,14 @@ function unreadableError(result) {
   if (result?.notOpenable) return '这个文件类型不能预览';
   if (result?.notFound) return NOT_FOUND_ERROR;
   return null;
+}
+
+// 命令输出是写给终端的：颜色、光标序列和 \r 重绘的进度条到手机上全是乱码，还原成终端最后显示的样子。
+function toReadableOutput(output) {
+  return stripVTControlCharacters(output)
+    .split('\n')
+    .map(line => line.split('\r').filter(Boolean).at(-1) ?? '')
+    .join('\n');
 }
 
 export function registerFileSocketHandlers({
@@ -388,13 +397,22 @@ export function registerFileSocketHandlers({
   // CLI 上报的值——那意味着 CLI 已被攻破，而被攻破的 CLI 本就能直接读任何文件，这道闸拦不住它，
   // 只会制造"已加固"的错觉。真正有价值的两条防御在下面：非常规文件拒读（/dev/zero 之类会无限读），
   // 以及只读尾部（日志可能几百 MB，全读会撑爆内存并阻塞事件循环）。
+  //
+  // 【运行中的任务】还没有 output_file，这时问 CLI 要末尾 8 KiB（agent.readRunningTaskOutput）。任务一结束就回到读文件：
+  // 同一份内容，但尾部 64KB 比 8 KiB 多。两条路都只收 taskId。
   const OUTPUT_TAIL_MAX = 64 * 1024; // 只读尾部 64KB：错误与结论总在末尾，够看且不撑爆
   on(socket, 'task:output', async ({ instanceId, taskId } = {}, ack) => {
     if (typeof ack !== 'function') return;
     const agent = routeInstance(instanceId);
     if (!agent) return ack({ ok: false, error: '实例不存在' });
     const file = agent.getTaskOutputFile(taskId);
-    if (!file) return ack({ ok: false, error: '输出不可用（任务未完成、CLI 未提供输出文件，或记录已淘汰）' });
+    if (!file) {
+      const live = await agent.readRunningTaskOutput(taskId);
+      if (live.ok) return ack({ ok: true, text: toReadableOutput(live.text), truncated: live.truncated, size: live.size });
+      if (live.reason === 'unsupported') return ack({ ok: false, error: '子代理、工作流这类任务运行中看不了输出，只有后台命令和 Monitor 可以' });
+      if (live.reason === 'error') return ack({ ok: false, error: `读取失败：${live.error}` });
+      return ack({ ok: false, error: '输出不可用（任务未完成、CLI 未提供输出文件，或记录已淘汰）' });
+    }
 
     let fd;
     try {
@@ -407,7 +425,7 @@ export function registerFileSocketHandlers({
       if (len <= 0) return ack({ ok: true, text: '', truncated: false, size: st.size });
       const buf = Buffer.alloc(len);
       readSync(fd, buf, 0, len, start);
-      return ack({ ok: true, text: buf.toString('utf8'), truncated: start > 0, size: st.size });
+      return ack({ ok: true, text: toReadableOutput(buf.toString('utf8')), truncated: start > 0, size: st.size });
     } catch (error) {
       return ack({ ok: false, error: `读取失败：${error.message}` });
     } finally {

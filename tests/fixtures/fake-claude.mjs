@@ -104,6 +104,9 @@ const LISTED_MODEL = process.env.CCM_FAKE_CLAUDE_MODEL_LIST_FILE
 const MCP_STATUS = process.env.CCM_FAKE_CLAUDE_MCP_STATUS ? JSON.parse(process.env.CCM_FAKE_CLAUDE_MCP_STATUS) : null;
 const MCP_RECONNECT_ERROR = process.env.CCM_FAKE_CLAUDE_MCP_RECONNECT_ERROR || '';
 const CONTROL_LOG = process.env.CCM_FAKE_CLAUDE_CONTROL_LOG || '';
+// 后台任务输出：getTaskOutput() 发 get_task_output 控制请求。显式 opt-in（CCM_FAKE_CLAUDE_TASK_OUTPUT=<{task_id: 回包} 的 JSON>）
+// 才这样应答，回包形状和表外 id 的报错原文照 CLI 2.1.318 零 token 实测。不置位时照旧回 success + {}。
+const TASK_OUTPUT = process.env.CCM_FAKE_CLAUDE_TASK_OUTPUT ? JSON.parse(process.env.CCM_FAKE_CLAUDE_TASK_OUTPUT) : null;
 // 斜杠命令清单（#456）。SDK 的 supportedCommands() 同样读 initialize 响应（commands 字段），真 CLI 的 system/init
 // 只带名字（slash_commands: string[]）。显式 opt-in（CCM_FAKE_CLAUDE_COMMANDS=<SlashCommand[] 的 JSON>）才两处都带；
 // 不置位时 initialize 响应与 init 逐字不变。
@@ -169,6 +172,16 @@ rl.on('line', (line) => {
     if (CONTROL_LOG) appendFileSync(CONTROL_LOG, `${JSON.stringify(msg.request)}\n`);
     if (MCP_RECONNECT_ERROR && msg.request?.subtype === 'mcp_reconnect') {
       out({ type: 'control_response', response: { subtype: 'error', request_id: msg.request_id, error: MCP_RECONNECT_ERROR } });
+      return;
+    }
+    if (TASK_OUTPUT && msg.request?.subtype === 'get_task_output') {
+      const answer = TASK_OUTPUT[msg.request.task_id];
+      out({
+        type: 'control_response',
+        response: answer
+          ? { subtype: 'success', request_id: msg.request_id, response: answer }
+          : { subtype: 'error', request_id: msg.request_id, error: 'get_task_output: no shell or Monitor task with that task_id in this session' },
+      });
       return;
     }
     if (MCP_STATUS && msg.request?.subtype === 'mcp_status') {

@@ -8,8 +8,10 @@ import {
   formatBgTaskBannerCopy,
   formatProgressHistoryEntry,
   formatProgressTimestamp,
+  formatTaskOutput,
   groupBgTasksForList,
   taskDetailState,
+  taskHasLiveOutput,
 } from '../../app/public/js/logic.js';
 
 test.describe('formatProgressHistoryEntry（后台任务进度历史条目）', () => {
@@ -238,4 +240,28 @@ test.describe('bgTaskUsageText（后台任务耗时/用量）', () => {
     assert.equal(bgTaskUsageText({ totalTokens: 999 }), '999 tok');
     assert.equal(bgTaskUsageText({ totalTokens: 1000 }), '1.0k tok');
   });
+});
+
+// 运行中能看输出的判据：只有 CLI 认的 local_bash。多放一种，手机上点开就是一条报错；少放一种，入口就没了。
+test('taskHasLiveOutput：后台命令（Monitor 工具也是 local_bash）才有入口', () => {
+  assert.equal(taskHasLiveOutput({ taskId: 'b123', taskType: 'local_bash' }), true);
+  for (const taskType of ['local_agent', 'local_workflow', 'monitor_mcp', 'monitor_ws', 'mcp_task', null, undefined]) {
+    assert.equal(taskHasLiveOutput({ taskId: 'b123', taskType }), false, `${taskType} 被 CLI 拒绝`);
+  }
+});
+
+test('taskHasLiveOutput：合成键和空 id 没有入口', () => {
+  for (const taskId of ['__notask_local_bash', 'localcmd:a', '', null, undefined]) {
+    assert.equal(taskHasLiveOutput({ taskId, taskType: 'local_bash' }), false, `${taskId} 在 SDK 侧不存在`);
+  }
+  assert.equal(taskHasLiveOutput(), false);
+});
+
+test('formatTaskOutput：完成条和运行中共用的显示规则', () => {
+  assert.equal(formatTaskOutput({ ok: true, text: 'hi', truncated: false }), 'hi');
+  assert.equal(formatTaskOutput({ ok: true, text: 'hi', truncated: true }), '…（仅显示末尾）\nhi');
+  assert.equal(formatTaskOutput({ ok: true, text: '', truncated: false }), '（空输出）');
+  assert.equal(formatTaskOutput({ ok: false, error: '读取失败：x' }), '读取失败：x');
+  assert.equal(formatTaskOutput({ ok: false }), '输出不可用');
+  assert.equal(formatTaskOutput(null), '输出不可用');
 });

@@ -102,6 +102,7 @@ const CONTROL_TAG_SUBSYSTEM = {
   set_model: 'control',
   set_permission_mode: 'control',
   apply_flag_settings: 'control',
+  get_task_output: 'task_output', // 单列一档：它是轮询，diag-log 按心跳限额，别和 control 的状态转换混着
 };
 
 // fetchUsage 节流窗。SDK get_usage 不是"读一个内存里的百分比"：CLI 2.1.220 实测，它在 CLI 侧
@@ -2401,6 +2402,25 @@ export class AgentSession {
   getTaskOutputFile(taskId) {
     const rec = typeof taskId === 'string' && taskId ? this.finishedTasks.get(taskId) : null;
     return rec?.outputFile || null;
+  }
+
+  // 运行中后台命令的输出末尾（最多 8 KiB），终端 /tasks 详情页读的是同一份。只读、不开 turn，可以轮询。
+  // CLI 只认 local_bash（Monitor 工具的任务也是这个类型），子代理、工作流、monitor_mcp/ws 都拒绝（2.1.318 实测）。
+  // 这里先挡住，手机上才是一句明确的话，而不是 CLI 的英文报错。
+  // getTaskOutput 在 sdk.mjs 里有、sdk.d.ts 的 Query 没声明，上游不承诺方法和回包形状，所以两样都先判。
+  // 结果分档给 socket 层写文案：unsupported · unavailable（不在运行 / 实例没了 / SDK 没这个方法）· error。不向外抛。
+  async readRunningTaskOutput(taskId) {
+    const task = typeof taskId === 'string' ? this.bgTasks.get(taskId) : null;
+    if (!task) return { ok: false, reason: 'unavailable' };
+    if (task.taskType !== 'local_bash') return { ok: false, reason: 'unsupported' };
+    if (this.disposed || typeof this.q?.getTaskOutput !== 'function') return { ok: false, reason: 'unavailable' };
+    try {
+      const res = await this._raceControlRequest(() => this.q.getTaskOutput(taskId), 'get_task_output');
+      if (typeof res?.output !== 'string') return { ok: false, reason: 'unavailable' };
+      return { ok: true, text: res.output, truncated: res.truncated === true, size: res.total_bytes };
+    } catch (err) {
+      return { ok: false, reason: 'error', error: String(err?.message || err || 'error').slice(0, 500) };
+    }
   }
 
   finishedTasksList() {

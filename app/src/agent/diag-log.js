@@ -15,7 +15,7 @@ export const MAX_DETAIL_CHARS = 1000;
 // 现场 14:07 的 queue/turn_settled 就是这么丢的，根因因此没能闭环。
 // 对策不是删埋点（"还在轮询"本身有价值），而是让它只挤自己人：心跳独立限额，绝不占事件级配额。
 export const MAX_HEARTBEAT_ENTRIES = 5;
-const HEARTBEAT_KEYS = new Set(['catchup/tick']);
+const HEARTBEAT_KEYS = new Set(['catchup/tick', 'task_output/race_settle']); // 后者：手机盯着运行中任务的输出时每几秒一条
 const isHeartbeat = (subsystem, event) => HEARTBEAT_KEYS.has(`${subsystem}/${event}`);
 
 const buffers = new Map(); // sessionKey → entry[]

@@ -664,3 +664,128 @@ test('#402 bg-task-row click (not only expand btn) opens detail panel', () => {
   cardHeaderRow(context.dom.taskProgressList.children[0]).click();
   assert.equal(cardDetail(context.dom.taskProgressList.children[0]), null, 'row click again collapses');
 });
+
+// ---- 运行中任务的输出（对齐终端 /tasks 详情页）。轮询本身的时序在 frontend-task-live-output.test.mjs ----
+
+const isLiveOutputBody = node => String(node?.html || '').includes('bg-task-live-output');
+const liveOutputBody = card => cardDetail(card)?.children.find(isLiveOutputBody) || null;
+
+function liveOutputHarness() {
+  const sent = [];
+  const banner = taskCardFakeNode();
+  const taskBannerToggle = taskCardFakeNode();
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText: { textContent: '' }, taskBannerToggle },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  context.setSocket({ timeout: () => ({ emit: (event, payload, ack) => sent.push({ event, payload, ack }) }) });
+  const status = createTaskStatusController(context, {
+    createElement: (html) => Object.assign(taskCardFakeNode(html), { getBoundingClientRect: () => ({ bottom: 0 }) }),
+  });
+  const show = (tasks) => status.onProgress({ instanceId: 'inst-1', payload: { tasks } });
+  const cards = () => context.dom.taskProgressList.children;
+  return { context, status, sent, show, cards, taskBannerToggle };
+}
+
+const SHELL = { taskId: 'b1', taskType: 'local_bash', message: 'npm test' };
+const AGENT = { taskId: 'a1', taskType: 'local_agent', message: 'review' };
+const shellCard = cards => cards.find(c => rowExpandBtn(c)?.getAttribute?.('data-task-focus') === 'b1:expand'); // 混合任务时列表里还有分组头
+
+test('后台命令：展开就开始读输出，回执到了原地更新', () => {
+  const { sent, show, cards } = liveOutputHarness();
+  show([SHELL]);
+  assert.equal(sent.length, 0, '没展开不拉：不看的时候不花这次请求');
+  rowExpandBtn(cards()[0]).click();
+  assert.deepEqual(sent.map(x => x.payload), [{ instanceId: 'inst-1', taskId: 'b1' }]);
+  const body = liveOutputBody(cards()[0]);
+  assert.ok(body, '展开的后台命令要有输出区');
+  assert.equal(body.textContent, '加载中…');
+  sent[0].ack(null, { ok: true, text: '<b>line</b>\n', truncated: false, size: 12 });
+  assert.equal(body.textContent, '<b>line</b>\n', '写进 textContent，不进 innerHTML');
+  assert.equal(body.innerHTML, undefined);
+});
+
+test('后台命令没有描述、没有进度历史：详情块照样出来', () => {
+  const { show, cards } = liveOutputHarness();
+  show([{ taskId: 'b1', taskType: 'local_bash' }]);
+  rowExpandBtn(cards()[0]).click();
+  assert.ok(liveOutputBody(cards()[0]), '否则点开什么都没有');
+});
+
+test('子代理：展开只有进度历史，不拉输出', () => {
+  const { sent, show, cards } = liveOutputHarness();
+  show([{ ...AGENT, description: 'doing' }]);
+  rowExpandBtn(cards()[0]).click();
+  assert.equal(sent.length, 0);
+  assert.equal(liveOutputBody(cards()[0]), null);
+  assert.ok(cardDetail(cards()[0]), '进度历史照旧');
+});
+
+test('心跳重绘后输出还在：renderTaskList 每拍重建节点', () => {
+  const { sent, show, cards, taskBannerToggle } = liveOutputHarness();
+  show([SHELL, AGENT]);
+  taskBannerToggle.click(); // 多任务默认折叠，真实操作也是先展开列表才点得到行
+  rowExpandBtn(shellCard(cards())).click();
+  sent[0].ack(null, { ok: true, text: 'kept', truncated: false, size: 4 });
+  show([SHELL, { ...AGENT, message: 'next step' }]);
+  assert.equal(liveOutputBody(shellCard(cards())).textContent, 'kept');
+  assert.equal(sent.length, 1, '重绘不等于再问一次');
+});
+
+test('心跳重绘之后到的回执画到新节点上', () => {
+  const { sent, show, cards } = liveOutputHarness();
+  show([SHELL]);
+  rowExpandBtn(cards()[0]).click();
+  show([SHELL]);
+  sent[0].ack(null, { ok: true, text: 'late', truncated: false, size: 4 });
+  assert.equal(liveOutputBody(cards()[0]).textContent, 'late');
+});
+
+test('再点一下收起：不再看就不再拉', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { sent, show, cards } = liveOutputHarness();
+  show([SHELL]);
+  rowExpandBtn(cards()[0]).click();
+  rowExpandBtn(cards()[0]).click();
+  sent[0].ack(null, { ok: true, text: 'x', truncated: false, size: 1 });
+  t.mock.timers.tick(60_000);
+  assert.equal(sent.length, 1);
+});
+
+test('折叠整张列表也算不看了，再展开接着拉', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { sent, show, cards, taskBannerToggle } = liveOutputHarness();
+  show([SHELL]);
+  rowExpandBtn(cards()[0]).click();
+  taskBannerToggle.click();
+  sent[0].ack(null, { ok: true, text: 'x', truncated: false, size: 1 });
+  t.mock.timers.tick(60_000);
+  assert.equal(sent.length, 1, '列表 hidden 时用户看不见输出');
+  taskBannerToggle.click();
+  assert.equal(sent.length, 2);
+  assert.ok(liveOutputBody(cards()[0]));
+});
+
+test('任务结束：卡片没了，轮询跟着停', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { status, sent, show, cards, taskBannerToggle } = liveOutputHarness();
+  show([SHELL, AGENT]);
+  taskBannerToggle.click();
+  rowExpandBtn(shellCard(cards())).click();
+  assert.equal(sent.length, 1);
+  status.onComplete({ instanceId: 'inst-1', payload: { taskId: 'b1', status: 'completed' } });
+  sent[0].ack(null, { ok: true, text: 'x', truncated: false, size: 1 });
+  t.mock.timers.tick(60_000);
+  assert.equal(sent.length, 1);
+});
+
+test('快照里任务消失（横幅整体撤下）：轮询跟着停', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { sent, show, cards } = liveOutputHarness();
+  show([SHELL]);
+  rowExpandBtn(cards()[0]).click();
+  show([]);
+  sent[0].ack(null, { ok: true, text: 'x', truncated: false, size: 1 });
+  t.mock.timers.tick(60_000);
+  assert.equal(sent.length, 1);
+});
