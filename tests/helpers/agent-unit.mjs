@@ -30,6 +30,8 @@ export function makeSession(opts = {}) {
     onEffortEffective: opts.onEffortEffective,
     onQuotaWall: opts.onQuotaWall,   // 缺省不传：没人接也不得影响撞墙既有的 notice / error
     onSessionWritesLost: opts.onSessionWritesLost,
+    onTurnEnded: opts.onTurnEnded,
+    onCliIdle: opts.onCliIdle,
   });
   return { s: session, events, dispose: () => session.dispose() };
 }

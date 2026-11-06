@@ -682,6 +682,8 @@ const ACK_SHAPES = [
   // 布防——S2 的假 CLI 不产出额度墙，造不出来，只覆盖两条免夹具的失败支。
   { event: 'user:autoContinue', branch: '非法 sessionId', payload: () => ({ sessionId: '../x', action: 'cancel' }), required: ['ok', 'error'], check: ack => assert.equal(ack.error, 'invalid_payload') },
   { event: 'user:autoContinue', branch: '没有布防', payload: () => ({ sessionId: 'no-such-session', action: 'cancel' }), required: ['ok', 'error'], check: ack => assert.equal(ack.ok, false) },
+  { event: 'user:takeQueued', branch: '非法 sessionId', payload: () => ({ sessionId: '../x', clientMessageId: 'c1' }), required: ['ok', 'error'], check: ack => assert.equal(ack.error, 'invalid_payload') },
+  { event: 'user:takeQueued', branch: '没有这条', payload: () => ({ sessionId: 'no-such-session', clientMessageId: 'c1' }), required: ['ok', 'error'], check: ack => assert.equal(ack.error, 'not_found') },
 ];
 
 // 未纳入（各有理由，不是遗漏）：

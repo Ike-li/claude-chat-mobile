@@ -137,6 +137,16 @@ test('SESSION-04：终端最后重贴、手机那段不在会接上的链上 →
   });
 });
 
+test('SESSION-04：带 queue 的请求撞上分叉 → 同样拒收，不进队列', async () => {
+  await withSeededSession({ terminalWroteLast: true }, async ({ cwd, instanceId, emitAck, bubbles }) => {
+    const ack = await emitAck('user:message', { text: '排一条', instanceId, cwd, clientMessageId: 'rd-q', queue: true });
+    assert.equal(ack.ok, false);
+    assert.equal(ack.reason, 'resume_divergent', `分叉闸排在排队判定之前，实际 ${JSON.stringify(ack)}`);
+    assert.equal(ack.queued, undefined);
+    assert.equal((await bubbles()).length, 0);
+  });
+});
+
 // 判定要读整份 transcript（长会话数十 MB），2026-10-31 起不挡切换回执：回执先回，判定在后台只读 spawn 前那一刻的
 // 字节，发送闸等它落定再判。这条守的是「挪出关键路径」没把闸挪漏——回执一到就发，照样要拦。
 const PAD_LINES = 60_000; // 约 45MB，判定的整份读盘约 0.3s（宿主机实测）；切换的其余部分只读尾窗

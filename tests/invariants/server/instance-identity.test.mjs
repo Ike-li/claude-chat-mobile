@@ -216,6 +216,29 @@ test('MSG-02：重放带着入队时的会话，命中的实例跑的已是别�
   }
 });
 
+test('MSG-02：排队请求带的会话对不上 → stale，不改投也不收下；对得上才排上', async () => {
+  const dirs = makeRoot();
+  try {
+    await withBoot(dirs, { CCM_FAKE_CLAUDE_MODE: 'init' }, async ({ connect }) => {
+      const b = await connect('b');
+      const first = await b.call('user:message', { text: '在跑的一轮', cwd: dirs.projB, clientMessageId: 'b-1' });
+      assert.equal(first.ok, true, JSON.stringify(first));
+      const init = await waitForCondition(() => b.events.find(e => e.type === 'init' && e.sessionId), { timeoutMs: 5000, label: '首轮拿到 sessionId' });
+      const queue = payload => b.call('user:message', { cwd: dirs.projB, instanceId: first.instanceId, queue: true, ...payload });
+
+      const foreign = await queue({ text: '发给别的会话的', sessionId: `${init.sessionId}-other`, clientMessageId: 'q-foreign' });
+      assert.equal(foreign.stale, true, `不带 fromOutbox 的排队不改投，对不上只能拒收，实际 ${JSON.stringify(foreign)}`);
+      assert.equal(foreign.queued, undefined);
+
+      // 正对照：会话对得上照常排上——否则上面那条 stale 可能只是「带了 queue 就一律拒」
+      const own = await queue({ text: '就是这个会话的', sessionId: init.sessionId, clientMessageId: 'q-own' });
+      assert.equal(own.queued, true, `会话对得上要排上，实际 ${JSON.stringify(own)}`);
+    });
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+  }
+});
+
 // ④ 的时序照 external-dirty.test.mjs：catchUpTick 每 2500ms 一拍，先建基线再判增长——在基线之前追加，
 // 追加的内容会被当成基线本身，externalDirty 永不置位，第 1 条就不会置换，这条用例测的就是空气。
 const TICK_MS = 2500;

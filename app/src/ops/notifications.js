@@ -92,7 +92,7 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
   const identity = (title) => ({ title: formatNotifyIdentity(title, { cwd, sessionTitle }), ntfyTitle: formatNotifyIdentity(title, { cwd }) });
   switch (type) {
     case 'result':
-      if (hasClients) return null;
+      if (hasClients || p.queuedNext) return null; // queuedNext：排队的消息马上开跑，这时说「任务完成」是假的
       // 对齐 CLI：interrupt 终态 result 即使 is_error/ede_diagnostic，也是「已中止」不是「出错」
       // 无 previewBody：result 本身只是轮次终态元数据（耗时/costUsd/isError），没有可预览的正文内容
       // ——真正的对话内容在 assistant 的 text_delta 流里，不在这个事件上。

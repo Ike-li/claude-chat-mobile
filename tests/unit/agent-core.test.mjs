@@ -22,6 +22,7 @@ test('sdkChildEnv：SDK 子进程带项目自有 origin 标记且调用方不能
     KEEP: 'yes',
     CCM_STATUSLINE_ORIGIN: 'web-sdk',
     CCM_HOOKS_ORIGIN: 'web-sdk',
+    CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
   });
 });
 

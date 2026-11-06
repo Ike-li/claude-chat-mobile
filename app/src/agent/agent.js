@@ -458,7 +458,7 @@ function toolResultRaw(toolName, structured, content) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, onSessionWritesLost, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir, claudeGlobalConfigPath, ephemeral = false }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, onSessionWritesLost, onTurnEnded, onCliIdle, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir, claudeGlobalConfigPath, ephemeral = false }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（instance-manager 的 nextId）。
     this.instanceId = instanceId;
@@ -487,6 +487,8 @@ export class AgentSession {
     // (wall) => void，主循环撞上 rate_limit 墙时上报给 server 的自动续跑调度（server/auto-continue.js）。
     // 只交事实不做判定：判定在 agent/quota-auto-continue.js 的 planQuotaWall，这里的三个字段是它的输入。
     this.onQuotaWall = onQuotaWall;
+    this.onTurnEnded = onTurnEnded;   // (facts) => 'release' | 'hold' | undefined：账面归零时报这一轮的结局（消息排队）
+    this.onCliIdle = onCliIdle;       // () => void：CLI 报 session_state_changed:idle，它真的闲了（消息排队）
     this.onSessionWritesLost = onSessionWritesLost; // 磁盘满写丢的上报，见 _reportSessionWritesLost
     this._turnOrigin = null;            // 本轮由谁发起：'human' | 'auto-continuation' | 'task-notification'（合成轮）
     this._turnHadOutput = false;        // 本轮是否已有真模型输出——续跑后「一个字没产出又撞墙」才算空转
@@ -3335,6 +3337,16 @@ export class AgentSession {
           }
           if (msg.patch?.is_backgrounded === true) this._dropForegroundTask(updatedTaskId);
           this.bgTaskPatch(updatedTaskId, msg.patch);
+        } else if (msg.subtype === 'session_state_changed') {
+          // sdkChildEnv 打开的帧。idle 表示 CLI 真的闲了：汇报轮紧跟时 result 后不报，通知并进当前回合时立刻报，
+          // 后台子 agent 跑完才报（2.1.318 实测）。只有排队用它判断能不能发下一条，running 用不上。
+          if (msg.state === 'idle') {
+            try {
+              this.onCliIdle?.();
+            } catch (err) {
+              console.error('[agent] onCliIdle 回调异常（已隔离，不影响会话）:', err?.message || err);
+            }
+          }
         } else if (msg.subtype === 'task_started') {
           // 后台任务开始：background_tasks_changed 全量快照紧邻投递、已覆盖新增，故【增删】不在此处理——
           // 也不落 else 兜底刷「未映射 system 子类型」交互日志（每个后台任务都会发）。
@@ -3798,7 +3810,7 @@ export class AgentSession {
         // 前缀判定 + 原样透传，正是为此；旧 CLI 不发这个字段 → null，各判据自动退回原样。
         const terminalReason = typeof msg.terminal_reason === 'string' ? msg.terminal_reason : null;
         // settle 槽：uuid 精确出槽 → 中断跳过 force 槽 → FIFO 回落，三路见 _settleOneResultTurn
-        this._settleOneResultTurn(msg.user_message_uuid, terminalReason);
+        const settled = this._settleOneResultTurn(msg.user_message_uuid, terminalReason);
         // 本轮收表：账面仍有在途轮（后台任务合成轮等）→ 立即重开；否则清零（status_line 不再带 turn 段）
         if (this.pendingTurns > 0) { this.turnStartedAt = Date.now(); } else { this.turnStartedAt = null; }
         this.turnOutputTokens = 0;
@@ -3826,6 +3838,18 @@ export class AgentSession {
         const approvalExpired = this._approvalExpiredInTurn;
         this._approvalExpiredInTurn = false;
         this._clearInterruptSettleWatchdog(); // 配对 result 已到：撤销兜底，否则悬挂计时会误清后续轮次的账
+        // 同步回调、排在 emit('result') 之前：推送和建议条要据此决定。applied:false 是迟到的强制结算 result，
+        // 或 CLI 自己起的轮的 result 而人发的消息还排在后面，都不算这一轮结束。包 try 理由同 onQuotaWall。
+        let queuedNext = false;
+        if (settled.applied && this.pendingTurns === 0) {
+          try {
+            queuedNext = this.onTurnEnded?.({
+              isError: !!msg.is_error, interrupted: wasInterrupted, approvalExpired, terminalReason,
+            }) === 'release';
+          } catch (err) {
+            console.error('[agent] onTurnEnded 回调异常（已隔离，不影响会话）:', err?.message || err);
+          }
+        }
         diagLog.record(this.logKey(), 'queue', 'turn_settled', {
           pendingTurnsAfter: this.pendingTurns, wasInterrupted, interruptedBy, isError: !!msg.is_error, durationMs: msg.duration_ms,
           terminalReason, // 排障时能直接看到 CLI 的死因，不必再从消息形态倒推
@@ -3842,6 +3866,7 @@ export class AgentSession {
           ...(interruptedBy ? { interruptedBy } : {}), // user / system:idle-watchdog / cli
           ...(approvalExpired ? { approvalExpired: true } : {}), // 本轮有审批等到过期（推送据此改说「审批已过期」）
           ...(terminalReason ? { terminalReason } : {}), // CLI 权威死因；旧 CLI 无此字段时整个不带
+          ...(queuedNext ? { queuedNext: true } : {}), // 排队的消息马上开跑：这不是「任务完成」，不推不响
         });
         // 下一步建议：**必须在 emit('result') 之后**且 fire-and-forget——它有一次网络往返，
         // 挂在结算路径上会把每一轮的收尾都拖慢一整个 RTT（前端的 busy→idle 也跟着晚）。
@@ -3849,7 +3874,7 @@ export class AgentSession {
         void this.maybeSuggest({
           isError: !!msg.is_error,
           interrupted: wasInterrupted,
-          enabled: process.env.CCM_PROMPT_SUGGESTION !== '0',
+          enabled: process.env.CCM_PROMPT_SUGGESTION !== '0' && !queuedNext, // 下一轮马上开始，这条建议注定被丢弃
         }).catch(() => {});
         const { model: modelStr, effort: effortStr, permissionMode: permStr } = this.logMeta(); // 统一解析，消除与 send 的漂移
         const durationStr = `[result] ${msg.subtype} duration=${msg.duration_ms}ms`; // model/effort/permission 走独立 chip 字段，不再进文本
