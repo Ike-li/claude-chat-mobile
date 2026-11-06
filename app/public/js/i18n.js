@@ -809,6 +809,7 @@ export const EN_DICT = Object.freeze({
   '这个环境已经不在了': 'This environment no longer exists.',
   '这台设备还没批准，不能改环境': 'This device is not approved yet, so it can’t change environments.',
   '保存失败，稍后再试': 'Couldn’t save. Try again later.',
+  '连接已断开，重连后再试': 'Disconnected. Try again after reconnecting.',
   '还没有连接文件夹': 'No folders connected yet',
   '已连接的文件夹都找不到了': 'Your connected folders can\'t be found',
   '这个文件夹已经不在已连接的清单里了': 'This folder is no longer in your connected list',

@@ -24,6 +24,8 @@ export function createSavedEnvironments({ $, el, socket, openSheet, closeSheet, 
   let listShown = false; // 列表开着时 refresh 回来才重画，不打断正在填的表单
 
   const emit = (event, payload) => new Promise(resolve => {
+    // 断线时 socket.io 会把事件缓冲到重连后再发：界面已经报了失败，写操作却悄悄生效，再点一次就撞重名
+    if (!socket.connected) { resolve({ ok: false, error: 'disconnected' }); return; }
     let settled = false;
     const done = res => { if (!settled) { settled = true; resolve(res); } };
     socket.emit(event, payload, res => done(res || { ok: false }));
@@ -169,14 +171,14 @@ export function createSavedEnvironments({ $, el, socket, openSheet, closeSheet, 
     };
     form.onsubmit = ev => {
       ev.preventDefault();
-      void save(env ?? current);
+      void save(env ?? environmentFromCurrent(getCurrent())); // 提交时现读：表单开着期间可能重连，当前设置已经变了
     };
 
     if (env) {
       if (canSave(current.cwd)) {
         const update = el('<button type="button" class="w-full px-3 py-2 rounded-lg text-xs font-semibold border border-line text-ink hover:bg-sunk active:scale-95" data-testid="environment-update"></button>');
         update.textContent = t('用当前设置更新');
-        update.onclick = () => { haptic('tap'); void save(current); };
+        update.onclick = () => { haptic('tap'); void save(environmentFromCurrent(getCurrent())); };
         form.appendChild(update);
       }
       const remove = el('<button type="button" class="w-full px-3 py-2 rounded-lg text-xs font-semibold text-danger hover:bg-sunk active:scale-95" data-testid="environment-delete"></button>');

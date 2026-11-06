@@ -8,6 +8,7 @@ const ERROR_TEXT = {
   out_of_range: tk('这个文件夹不在已连接的范围内'),
   not_found: tk('这个环境已经不在了'),
   device_not_approved: tk('这台设备还没批准，不能改环境'),
+  disconnected: tk('连接已断开，重连后再试'),
 };
 
 // 选择框的空串、CLI 的 default 与环境里的 null 都是「跟随默认」

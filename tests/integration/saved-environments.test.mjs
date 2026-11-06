@@ -59,6 +59,8 @@ async function connect(handle) {
   });
   sockets.push(sock);
   const client = {
+    sock,
+    events,
     latest: () => events.filter(e => e.type === 'instances').at(-1)?.payload,
     emit: (event, payload) => new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`${event} 的 ack 超时`)), 10000);
@@ -115,6 +117,19 @@ test('范围外的文件夹、「无文件夹」的键都存不进去', async ()
     assert.deepEqual(await c.emit('environments:save', { ...ENV(), cwd }), { ok: false, error: 'out_of_range' }, cwd);
   }
   assert.deepEqual(await c.list(), []);
+});
+
+test('选环境时连发 session:new 和 user:setEffort：档位留得住，新会话页拿到的就是它', async () => {
+  const srv = await startServer(fresh());
+  const c = await connect(srv);
+  c.sock.emit('session:new', { cwd: A });
+  c.sock.emit('user:setEffort', { level: 'high' });
+  await waitFor(() => c.events.some(e => e.type === 'effort_mode' && e.payload?.level === 'high'), 'effort_mode 回执');
+
+  // session:new 后面的 L3 刷新还会补广播，用新连接读快照，不依赖那次广播什么时候到
+  await new Promise(r => setTimeout(r, 300));
+  const other = await connect(srv);
+  assert.equal(other.latest().defaultEffort, 'high', '待应用档位被 session:new 的后续处理冲掉了');
 });
 
 test('文件夹断开后环境还在、标 available=false，能改名；重新连接后恢复', async () => {

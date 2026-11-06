@@ -59,6 +59,7 @@ test('suggestEnvironmentName：默认用文件夹名，重名就往后编号', (
 test('environmentErrorText：已知错误码说人话，未知的不把代码露给用户', () => {
   assert.match(environmentErrorText('duplicate_name'), /同名/);
   assert.match(environmentErrorText('out_of_range'), /文件夹/);
+  assert.match(environmentErrorText('disconnected'), /连接/);
   assert.doesNotMatch(environmentErrorText('weird_code'), /weird_code/);
   assert.ok(environmentErrorText(undefined));
 });

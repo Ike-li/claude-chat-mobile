@@ -89,7 +89,7 @@ test('删除：删掉就没了，重启也不回来；删不存在的如实说',
   assert.deepEqual(createSavedEnvironmentsStore({ file, log: quietLog() }).list(), []);
 });
 
-test('文件损坏不挡启动：当作没有并打警告，同时把原文件留下来', () => {
+test('文件损坏不挡启动：当作没有并打警告，同时把原文件备份下来', () => {
   const file = fixture();
   writeFileSync(file, '{坏了');
   const warnings = [];
@@ -107,6 +107,29 @@ test('结构不对的条目丢弃，好的留下', () => {
   const file = fixture();
   const good = { id: 'a', ...ENV };
   writeFileSync(file, JSON.stringify([good, { id: 'b' }, 'x']));
-  const store = createSavedEnvironmentsStore({ file, log: quietLog() });
+  const warnings = [];
+  const store = createSavedEnvironmentsStore({ file, log: { warn: m => warnings.push(m), error() {} } });
   assert.deepEqual(store.list(), [good]);
+  // 丢掉的条目也是用户存的：下一次保存就覆盖了，得先留底
+  assert.equal(warnings.length, 1);
+  assert.deepEqual(JSON.parse(readFileSync(`${file}.corrupt`, 'utf8')), [good, { id: 'b' }, 'x']);
+});
+
+test('条目全部合法时不留底、不警告', () => {
+  const file = fixture();
+  writeFileSync(file, JSON.stringify([{ id: 'a', ...ENV }]));
+  const warnings = [];
+  createSavedEnvironmentsStore({ file, log: { warn: m => warnings.push(m), error() {} } });
+  assert.deepEqual(warnings, []);
+  assert.equal(existsSync(`${file}.corrupt`), false);
+});
+
+test('退出时写盘失败不抛：后面还有 io.close 和兜底退出，抛出去进程就挂着不退了', () => {
+  const blocked = fixture();
+  writeFileSync(blocked, '这是文件，当不了目录');
+  const errors = [];
+  const store = createSavedEnvironmentsStore({ file: join(blocked, 'environments.json'), log: { warn() {}, error: m => errors.push(m) } });
+  store.create(ENV);
+  assert.doesNotThrow(() => store.flushSaveSync());
+  assert.equal(errors.length, 1, '写不进去要记一条，不能静默丢');
 });

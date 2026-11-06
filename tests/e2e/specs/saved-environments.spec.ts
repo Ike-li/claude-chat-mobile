@@ -6,7 +6,7 @@
 // 选中后开出来的会话却没带上。
 
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 
 const HOME_REPO = '/Users/you/code/claude-chat-mobile';
 const OTHER_REPO = '/Users/you/code/another-react-project';
@@ -61,8 +61,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillEffortText')).toContainText('high');
     await expect(page.getByTestId('compose-environment-chip')).toContainText('React 隔离');
 
-    await sendChatMessage(page, '在环境里开工');
+    // 胶囊写对不算数：要看发到服务端的是什么
+    await sendChatMessage(page, 'test:fresh-settings-echo');
     await expect(page.locator('#messages')).toContainText('[MOCK_INFO] worktree requested from dev');
+    await waitForIdle(page);
+    const reply = page.locator('[data-testid="assistant-message"]').last();
+    await expect(reply).toContainText('新会话设置回显：model=claude-3-5-sonnet');
+    // effort 在 P0-ENV-2f 验：mock 的 worktree 分支先开一次实例，把待应用档位消费掉了，echo 再开时已经没有
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-ENV-2f 换文件夹时 model、effort 都真的发到服务端，不是只有胶囊写着', async ({ page }) => {
+    await openCompose(page, [{ id: 'e1', name: 'React', cwd: OTHER_REPO, model: 'claude-3-5-sonnet', effort: 'high', worktree: false }]);
+    await page.request.post('/__set-connected-folders', { params: { dirs: `${HOME_REPO},${OTHER_REPO}` } });
+    await expect(page.getByTestId('compose-surface')).toBeVisible();
+    await page.getByTestId('compose-environment-chip').click();
+    await page.getByTestId('environment-row').filter({ hasText: 'React' }).getByTestId('environment-select').click();
+    await expect(page.getByTestId('compose-environment-chip')).toContainText('React');
+
+    await sendChatMessage(page, 'test:fresh-settings-echo');
+    await waitForIdle(page);
+    const reply = page.locator('[data-testid="assistant-message"]').last();
+    await expect(reply).toContainText('新会话设置回显：model=claude-3-5-sonnet');
+    await expect(reply).toContainText('effort=high');
 
     await expectNoBrowserErrors(page);
   });
@@ -74,6 +96,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillModelText')).toContainText('my-custom-model');
     await expect(page.locator('#modelInput')).toHaveValue('my-custom-model');
     await expect(page.getByTestId('compose-environment-chip')).toContainText('自定义模型');
+
+    await sendChatMessage(page, 'test:fresh-settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('新会话设置回显：model=my-custom-model');
 
     await expectNoBrowserErrors(page);
   });
@@ -193,6 +219,25 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(row.getByTestId('environment-edit')).toBeEnabled();
 
     await expectNoBrowserErrors(page);
+  });
+
+  test('P0-ENV-8 断线时保存：当场说明，不留到重连后才悄悄生效', async ({ page }) => {
+    await openCompose(page);
+    await page.getByTestId('compose-environment-save').click();
+    await page.getByTestId('environment-name').fill('断线时存的');
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.getByTestId('environment-form-save').click();
+    await expect(page.getByTestId('environment-picker-status')).toContainText('连接');
+
+    // 重连后那次写操作不能补发：否则用户再点一次就撞「已有同名环境」
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+    await page.getByTestId('environment-form-save').click();
+    await expect(page.getByTestId('environment-picker')).toBeHidden();
+    await expect(page.getByTestId('compose-environment-chip')).toContainText('断线时存的');
   });
 
   test('P0-ENV-7 「无文件夹」页：能选环境，但当前设置没有文件夹可存', async ({ page }) => {
