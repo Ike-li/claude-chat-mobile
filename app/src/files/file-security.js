@@ -152,23 +152,3 @@ export function writeOwnerOnlyFile(path, content) {
   // 二次确认权限（某些文件系统可能忽略 mode）
   fixPermissions(path, false);
 }
-
-/**
- * 检查路径列表的权限，返回有问题的路径
- * 用于 doctor 批量检查
- */
-export function checkPermissions(paths, isDir = false) {
-  const problems = [];
-  for (const path of paths) {
-    try {
-      lstatSync(path);  // 不存在会抛 → 下面 catch 跳过
-    } catch {
-      continue;
-    }
-
-    if (!isOwnerOnly(path, isDir)) {
-      problems.push(path);
-    }
-  }
-  return problems;
-}

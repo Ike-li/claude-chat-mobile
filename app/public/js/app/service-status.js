@@ -244,8 +244,8 @@ export function createServiceStatus(context, {
 
   // 服务状态与安全日志是两个 ack，但必须凑齐了画一次：renderServiceStatus 是 replaceChildren
   // 全量重绘，各自到达各自渲染会互相冲掉（先到的那段被后到的整体替换掉）。
-  const emitServiceAck = (event, payload) => new Promise(resolve => {
-    socket.timeout(3000).emit(event, payload, (err, res) => resolve(err ? null : res));
+  const emitServiceAck = (event, payload, ms = 3000) => new Promise(resolve => {
+    socket.timeout(ms).emit(event, payload, (err, res) => resolve(err ? null : res));
   });
   async function loadServiceStatus() {
     if (!serviceStatusModal || !serviceStatusModal.classList.contains('sheet-open')) return;
@@ -442,9 +442,7 @@ export function createServiceStatus(context, {
     body.classList.remove('hidden');
     body.replaceChildren(el('<div class="p-2.5 text-xs text-ink-faint"></div>'));
     body.firstChild.textContent = t('读取中…');
-    const res = await new Promise(resolve => {
-      socket.timeout(8000).emit('logs:server', { limit: 200 }, (err, r) => resolve(err ? null : r));
-    });
+    const res = await emitServiceAck('logs:server', { limit: 200 }, 8000);
     body.replaceChildren();
     const card = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs space-y-1"></div>');
     const pathRow = el('<div class="text-[10px] text-ink-faint break-all"></div>');
@@ -548,9 +546,7 @@ export function createServiceStatus(context, {
     wrap.appendChild(cv);
   }
   async function revealQr() {
-    const res = await new Promise(resolve => {
-      socket.timeout(8000).emit('connect:qr', { target: 'lan' }, (err, r) => resolve(err ? null : r));
-    });
+    const res = await emitServiceAck('connect:qr', { target: 'lan' }, 8000);
     if (!res?.ok) {
       addBar(res?.error || t('二维码生成失败'), 'text-danger');
       qrShowStep(1);
@@ -583,9 +579,7 @@ export function createServiceStatus(context, {
   // 审批规则（只读）。按需拉——不进 instances 广播，理由见 server 侧 handler 头注。
   let permissionRulesCache = null;
   async function loadPermissionRules() {
-    const res = await new Promise(resolve => {
-      socket.timeout(5000).emit('permissions:rules', { cwd: requestCwd() || null }, (err, r) => resolve(err ? null : r));
-    });
+    const res = await emitServiceAck('permissions:rules', { cwd: requestCwd() || null }, 5000);
     // 断线/读失败：保留上一次拿到的名单，不把已经显示对的东西刷成空
     if (res?.ok === true) permissionRulesCache = res.rules;
     renderPermissionRules();

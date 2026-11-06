@@ -484,6 +484,15 @@ function feedHistory(s, entry, liveUuids) {
       return true;
     }
 
+    // 中断同理：这一行是这轮被打断的唯一痕迹。只换这里的回显，isCliSystemLine 不能动——回退候选和
+    // 尾部形态判定都靠它把这行当系统行。子 agent 支线的中断不代表这一轮被打断，照旧丢弃。
+    if (isMainChainInterruptMarker(entry)) {
+      const marker = { role: 'system', kind: 'interrupted', content: '', timestamp: entry.timestamp };
+      if (entry.entrypoint) marker.entrypoint = entry.entrypoint;
+      pushCapped(s, marker);
+      return true;
+    }
+
     const role = entry.message?.role || entry.type;
     const isSide = Boolean(entry.isSidechain || entry.parent_tool_use_id);
     const parentFromDisk = entry.parent_tool_use_id || entry.parentToolUseId || entry.agentId || null;
@@ -1078,6 +1087,15 @@ function isLocalCommandWrapped(text) {
   return /^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t);
 }
 
+const INTERRUPT_MARKER_RE = /^\[Request interrupted by user[^\]]*\]$/;
+
+function isMainChainInterruptMarker(entry) {
+  if (entry.type !== 'user' || entry.isSidechain || entry.parent_tool_use_id) return false;
+  const content = entry.message?.content;
+  const text = Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' ? content[0].text : content;
+  return typeof text === 'string' && INTERRUPT_MARKER_RE.test(text.trim());
+}
+
 export function isCliSystemLine(content) {
   const t = content.trim();
   if (isLocalCommandWrapped(t)) return true;
@@ -1089,7 +1107,7 @@ export function isCliSystemLine(content) {
   const ide = /^<(ide_[a-z_]+)>/.exec(t);
   if (ide && new RegExp(`</${ide[1]}>`).test(t)) return true;
   // 用户打断标记（含 [Request interrupted by user] 与 [... for tool use] 变体）。
-  if (/^\[Request interrupted by user[^\]]*\]$/.test(t)) return true;
+  if (INTERRUPT_MARKER_RE.test(t)) return true;
   // Continue/继续 触发的 resume 空 turn 占位（assistant）。
   if (t === 'No response requested.') return true;
   return false;
@@ -1413,8 +1431,7 @@ async function readCwdEvidence(file, tailBytes = 0) {
   return out;
 }
 
-// 标题子串匹配（大小写不敏感）。空/空白 query 视为全匹配。前后端各有一份同语义纯函数（前端在
-// public/js/logic/session-search.js）；两边不能互相 import（边界闸）。
+// 标题子串匹配（大小写不敏感）。空/空白 query 视为全匹配。
 export function matchesSessionTitle(title, query) {
   const q = typeof query === 'string' ? query.trim().toLowerCase() : '';
   if (!q) return true;
@@ -1920,6 +1937,19 @@ export function lastMessageActivityMs(entries) {
   return null;
 }
 
+// 从已打开的 fh 读末尾 tailBytes 并逐行解析。起点切中的半行、写入中的截断尾行 parse 失败即跳过。
+async function readTailEntries(fh, size, tailBytes = TAIL_READ_BYTES) {
+  const start = size > tailBytes ? size - tailBytes : 0;
+  const buf = Buffer.allocUnsafe(size - start);
+  const { bytesRead } = await fh.read(buf, 0, size - start, start);
+  const entries = [];
+  for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+    if (!line.trim()) continue;
+    try { entries.push(JSON.parse(line)); } catch { /* 跳过 */ }
+  }
+  return entries;
+}
+
 // 读 transcript 尾窗，解析最后主链消息时间。size 可注入（缺省用 fstat 的）；失败/空文件 → null。
 async function readLastMessageActivityMs(file, size) {
   try {
@@ -1927,15 +1957,7 @@ async function readLastMessageActivityMs(file, size) {
     try {
       size ??= st.size;
       if (!size) return null;
-      const start = size > LIST_ACTIVITY_TAIL_BYTES ? size - LIST_ACTIVITY_TAIL_BYTES : 0;
-      const buf = Buffer.allocUnsafe(size - start);
-      const { bytesRead } = await fh.read(buf, 0, size - start, start);
-      const entries = [];
-      for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
-        if (!line.trim()) continue;
-        try { entries.push(JSON.parse(line)); } catch { /* 尾窗起点切中的半行：跳过 */ }
-      }
-      return lastMessageActivityMs(entries);
+      return lastMessageActivityMs(await readTailEntries(fh, size, LIST_ACTIVITY_TAIL_BYTES));
     } finally {
       await fh.close().catch(() => {});
     }
@@ -1959,29 +1981,9 @@ export function lastPermissionMode(entries) {
 // 从 transcript 尾部读回末条 permission-mode（tail-oriented：档记录随会话推进落盘，最后一条在文件尾）。
 // 只读末尾 TAIL_READ_BYTES：与 readHeadMeta 尾窗同款权衡——极端超大会话里若末条档记录距尾 >512KB
 // 则读不到、返回 null 优雅回落（不误、不崩）。size 可注入（缺省用 fstat 的）；baseDir 供单测指向 tmpdir。
-export async function readLastPermissionMode(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
-  if (!isSafeSessionId(sessionId)) return null; // SS-003
-  const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
-  try {
-    const { fh, st } = await openRegularFile(file);
-    try {
-      size ??= st.size;
-      if (size === 0) return null;
-      const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
-      const buf = Buffer.allocUnsafe(size - start);
-      const { bytesRead } = await fh.read(buf, 0, size - start, start);
-      const entries = [];
-      for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
-        if (!line.trim()) continue;
-        try { entries.push(JSON.parse(line)); } catch { /* 尾窗起点切中的半行/截断尾行：跳过 */ }
-      }
-      return lastPermissionMode(entries);
-    } finally {
-      await fh.close().catch(() => {});
-    }
-  } catch {
-    return null; // 文件不存在/读失败：回落上层默认
-  }
+export async function readLastPermissionMode(sessionId, cwd, opts) {
+  const entries = await readTranscriptTailEntries(sessionId, cwd, opts);
+  return entries ? lastPermissionMode(entries) : null; // 读不到：回落上层默认
 }
 
 // 纯函数：给一串已解析 transcript 条目，返回末条真实 assistant 消息的 message.model，无则 null。
@@ -1998,31 +2000,11 @@ export function lastAssistantModel(entries) {
   return null;
 }
 
-// 从 transcript 尾部读回末条 assistant 模型。尾窗/半行处理与 readLastPermissionMode 同款：
+// 从 transcript 尾部读回末条 assistant 模型。
 // 只读末尾 TAIL_READ_BYTES，极端超大会话读不到则返回 null 优雅回落。
-export async function readLastAssistantModel(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
-  if (!isSafeSessionId(sessionId)) return null; // SS-003
-  const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
-  try {
-    const { fh, st } = await openRegularFile(file);
-    try {
-      size ??= st.size;
-      if (size === 0) return null;
-      const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
-      const buf = Buffer.allocUnsafe(size - start);
-      const { bytesRead } = await fh.read(buf, 0, size - start, start);
-      const entries = [];
-      for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
-        if (!line.trim()) continue;
-        try { entries.push(JSON.parse(line)); } catch { /* 尾窗起点切中的半行/截断尾行：跳过 */ }
-      }
-      return lastAssistantModel(entries);
-    } finally {
-      await fh.close().catch(() => {});
-    }
-  } catch {
-    return null; // 文件不存在/读失败：回落上层默认
-  }
+export async function readLastAssistantModel(sessionId, cwd, opts) {
+  const entries = await readTranscriptTailEntries(sessionId, cwd, opts);
+  return entries ? lastAssistantModel(entries) : null; // 读不到：回落上层默认
 }
 
 // 切入预锁 / 疑似中断共用阈值：慢工具（长编译/深度搜索）常见 1-3 分钟零写入，5 分钟大概率真死了。
@@ -2210,7 +2192,7 @@ function classifyChainTail(entries, sidechainOnly) {
     // user
     if (blocks?.some(b => b?.type === 'tool_result')) return { verdict: 'pending', lastChainTs, lastChainEntrypoint };
     const text = typeof c === 'string' ? c : (blocks || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
-    if (/^\[Request interrupted by user[^\]]*\]$/.test(text.trim())) return { verdict: 'settled', lastChainTs, lastChainEntrypoint };
+    if (INTERRUPT_MARKER_RE.test(text.trim())) return { verdict: 'settled', lastChainTs, lastChainEntrypoint };
     if (isCliSystemLine(text)) continue; // local-command / bash / ide 噪音：不当链尾
     // 本地命令只存在于主链；子链不认这条收尾。收尾成立的前提是【链尾这条 user 自己就是那条 slash】——
     // 本地命令的输出只能给它自己的调用收尾，不能给任意一条 user 消息收尾，否则「终端发了真实请求、
@@ -2268,7 +2250,7 @@ export function classifyTailEntries(entries) {
   return { ...main, autonomous }; // 主链 settled（子链无活动或也已 settled）
 }
 
-// 读 transcript 尾窗（TAIL_READ_BYTES）并逐行解析。尾窗/半行处理与 readLastPermissionMode 同款。
+// 读 transcript 尾窗（TAIL_READ_BYTES）并逐行解析。
 // 读不到（非法 id / 文件不存在 / IO 失败）返回 null，空文件返回 []——两者对调用方意义不同：
 // classifyTranscriptTail 两种都判 settled（不锁），而自动续跑必须把「无法核实」当成不代发的理由。
 export async function readTranscriptTailEntries(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
@@ -2279,15 +2261,7 @@ export async function readTranscriptTailEntries(sessionId, cwd, { baseDir = CLAU
     try {
       size ??= st.size;
       if (size === 0) return [];
-      const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
-      const buf = Buffer.allocUnsafe(size - start);
-      const { bytesRead } = await fh.read(buf, 0, size - start, start);
-      const entries = [];
-      for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
-        if (!line.trim()) continue;
-        try { entries.push(JSON.parse(line)); } catch { /* 尾窗起点切中的半行/写入中的截断尾行：跳过 */ }
-      }
-      return entries;
+      return await readTailEntries(fh, size);
     } finally {
       await fh.close().catch(() => {});
     }
@@ -2466,13 +2440,7 @@ export async function scanSubagents(sessionId, cwd, { baseDir = CLAUDE_DIR, sinc
         const { size, mtimeMs } = st;
         entry.lastActivityMs = mtimeMs;
         if (size > 0) {
-          const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
-          const buf = Buffer.allocUnsafe(size - start);
-          const { bytesRead } = await fh.read(buf, 0, size - start, start);
-          for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
-            if (!line.trim()) continue;
-            let e;
-            try { e = JSON.parse(line); } catch { continue; }
+          for (const e of await readTailEntries(fh, size)) {
             const content = e?.message?.content;
             if (!Array.isArray(content)) continue;
             for (const b of content) {                       // 同一条 assistant 可含多个 tool_use，取最后一个

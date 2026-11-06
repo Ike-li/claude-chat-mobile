@@ -46,6 +46,7 @@ import {
   resolveDeepLinkTarget,
   armedTakeoverStep,
   presentTurnResult,
+  interruptLabel,
   isSoftKeyboardPrimaryDevice,
   userBubbleFold,
   historyLoadedNotice,
@@ -197,7 +198,7 @@ import { createGateFocusController } from './app/focus-layers.js';
 import { createConsoleModal } from './app/console-modal.js';
 import { createServiceStatus } from './app/service-status.js';
 import { createStatuslineView } from './app/statusline-view.js';
-import { createEmptySurfaces } from './app/empty-surfaces.js';
+import { createEmptySurfaces, starterPromptsHtml, wireStarterPrompts } from './app/empty-surfaces.js';
 import { createSessionSidebar } from './app/session-sidebar.js';
 import { createComposerControls } from './app/composer-controls.js';
 import { createKeyboardInset } from './app/keyboard-inset.js';
@@ -218,11 +219,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   let deviceToken = localStorage.getItem('device_token');
   if (!deviceToken) {
     const array = new Uint8Array(16);
-    if (window.crypto && window.crypto.getRandomValues) {
-      window.crypto.getRandomValues(array);
-    } else {
-      for (let i = 0; i < 16; i++) array[i] = Math.floor(Math.random() * 256);
-    }
+    window.crypto.getRandomValues(array);
     deviceToken = Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
     localStorage.setItem('device_token', deviceToken);
   }
@@ -256,9 +253,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     const onScheme = () => {
       if (readThemePref(k => localStorage.getItem(k)) === 'system') applyStoredTheme();
     };
-    // 新旧 Safari：addEventListener 与 addListener 都要兜
-    if (typeof systemDarkMq.addEventListener === 'function') systemDarkMq.addEventListener('change', onScheme);
-    else if (typeof systemDarkMq.addListener === 'function') systemDarkMq.addListener(onScheme);
+    systemDarkMq.addEventListener('change', onScheme);
   }
 
   // ---- DOM ----
@@ -266,10 +261,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   const messagesEl = $('messages'), inputEl = $('input'), statusEl = $('statusLine'), connDot = $('connDot'), connRttEl = $('connRtt'), connDotWrap = $('connDotWrap');
   const connBannerEl = $('connBanner'), connBannerTextEl = $('connBannerText'), connBannerDetailEl = $('connBannerDetail');
   const connBannerSpinnerEl = $('connBannerSpinner'), connBannerRetryEl = $('connBannerRetry');
-  const btnSend = $('btnSend'), btnStop = $('btnStop'), btnNew = $('btnNew'), btnHome = $('btnHome'), btnSessions = $('btnSessions');
+  const btnSend = $('btnSend'), btnNew = $('btnNew'), btnHome = $('btnHome'), btnSessions = $('btnSessions');
   // 流内 live 活动行（懒创建 #streamLiveStatus）；composer 顶条 #activeStatusPill 已移除
-  const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
-  const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
   const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), taskBannerLabel = $('taskBannerLabel'), btnTaskStop = $('btnTaskStop'), taskBannerToggle = $('taskBannerToggle'), taskBannerChevron = $('taskBannerChevron');
   const unreadPillEl = $('unreadPill'), unreadPillCountEl = $('unreadPillCount'); // 未读角标悬浮胶囊
   const sessionPanel = $('sessionPanel');
@@ -298,7 +291,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   const modelInput = $('modelInput');   // 模型 select：候选由 models 事件填充；任意名走 /model 拦截动态插入
   const modelIntent = createModelIntent(); // 当前会话里亲手选过模型没有（发送意图，见 app/model-intent.js）
   const statuslineView = createStatuslineView({
-    $, addBar: (...args) => addBar(...args), messagesEl, renderLiveLine, updateWorkspaceChangeBadge,
+    $, addBar: (...args) => addBar(...args), copyText, messagesEl, renderLiveLine, updateWorkspaceChangeBadge,
     getCurrentCwd: () => currentCwd, getLiveLine: () => liveLine,
     getViewingInstanceId: () => viewingInstanceId,
   });
@@ -385,6 +378,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   const fileBrowseTools = $('fileBrowseTools'), fileBrowseBack = $('fileBrowseBack'),
         fileBrowsePath = $('fileBrowsePath'),
         fileBrowseBody = $('fileBrowseBody'), fileBrowseEdit = $('fileBrowseEdit'),
+        fileBrowseDownload = $('fileBrowseDownload'),
         fileBrowseSave = $('fileBrowseSave'), fileBrowseCancelEdit = $('fileBrowseCancelEdit'),
         fileBrowseSaveError = $('fileBrowseSaveError');
   // git 变更（只读）——改动 tab
@@ -497,7 +491,6 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   const toolCards = new Map();
   // 本轮主会话文件变更账本（Edit/Write/…）；result 时汇总成卡后清空。子 agent 内改动不入（嵌在子卡里）。
   let turnFileChanges = new Map();
-  const agentToolIds = new Set(); // 跟踪 Agent/Task 工具的 toolUseId，用于在 tool_result 时隐藏活动横幅
   // 子 agent 可折叠卡：parentToolUseId → { el, body, titleEl, type, running, streams, thinkings }
   // 键 = 主会话 Agent/Task 的 toolUseId（后端 parent_tool_use_id）。默认 <details> 收起。
   const subagentCards = new Map();
@@ -582,13 +575,17 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   let latestServiceHealth = null;
   // 服务告警的「忽略」（#301）：本机记住忽略到哪个指纹，状态在模块内，此处只持句柄。
   const noticeDismissals = createNoticeDismissals();
-  let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
+  let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 时加入新目录）
+  // UX-007：当前文件夹只在切到它的那一刻自动展开一次，之后听用户的：重建抽屉不再碰展开集合（2026-11-04）。
+  function setCurrentCwd(cwd) {
+    if (cwd && cwd !== currentCwd) expandedDirs.add(cwd);
+    currentCwd = cwd;
+  }
   const SESSION_PANEL_REVALIDATE_MS = 12_000;
   // P3：面板"结构性"指纹（dirs 集合 + viewingInstanceId）；只有这两者变化才全量重建整个面板
   // （低频、全量更简单可靠）。纯状态变化、或只是某个目录下实例变化，都不再经它判定——见下方按目录分键。
   let _lastPanelStructKey = null;
-  // 纯换序（拖动排序广播回来的新顺序，集合不变）单独判——不算结构性变化，只挪 DOM 位置，不触发
-  // openSessionPanel 的 UX-007 强制展开（2026-10-26 回归：挪别的文件夹顺序，当前工作区被连带强制展开）。
+  // 纯换序（拖动排序广播回来的新顺序，集合不变）单独判——不算结构性变化，只挪 DOM 位置，不走 openSessionPanel 全量重建。
   let _lastDirOrderKey = null;
   // P3：按目录分键的实例签名（cwd → 签名片段，见 logic.js buildDirInstanceSignatures）+ diff 出的
   // "签名变了的目录"只重建那几个目录的 DOM 子树，其余目录保持原样（不撤离滚动位置/侧滑态等本地态）。
@@ -707,6 +704,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       fileBrowsePath,
       fileBrowseBody,
       fileBrowseEdit,
+      fileBrowseDownload,
       fileBrowseSave,
       fileBrowseCancelEdit,
       fileBrowseSaveError,
@@ -767,7 +765,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     lastSeq: { enumerable: true, get: () => lastSeq, set: value => { lastSeq = value; } },
     currentSessionId: { enumerable: true, get: () => currentSessionId, set: value => { currentSessionId = value; } },
   });
-  const sessionWorkspaceState = createSessionWorkspaceState(appContext);
+  const sessionWorkspaceState = createSessionWorkspaceState();
   const {
     sessionDomCache,
     sessionDraftCache,
@@ -1125,15 +1123,13 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   let pillFlashTimer = null;
   function flashStatusPills() {
     // 底栏只剩一条摘要 chip；空态档位变更靠它闪一下反馈
-    const pills = [pillDefaults].filter(p => p && !p.classList.contains('hidden'));
-    for (const p of pills) {
-      p.classList.remove('status-pill-flash');
-      void p.offsetWidth;
-      p.classList.add('status-pill-flash');
-    }
+    if (!pillDefaults || pillDefaults.classList.contains('hidden')) return;
+    pillDefaults.classList.remove('status-pill-flash');
+    void pillDefaults.offsetWidth;
+    pillDefaults.classList.add('status-pill-flash');
     if (pillFlashTimer) clearTimeout(pillFlashTimer);
     pillFlashTimer = setTimeout(() => {
-      for (const p of pills) p.classList.remove('status-pill-flash');
+      pillDefaults.classList.remove('status-pill-flash');
       pillFlashTimer = null;
     }, 800);
   }
@@ -1307,11 +1303,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     if (item.instanceId !== displayedInstanceId && !sameSession) return false;
     if (inputEl.value.trim() || attachments.items().length) return false;
     dropPendingUserBubble(item.bubbleEl);
-    inputEl.value = item.text || '';
-    inputEl.dispatchEvent(new Event('input'));
+    setComposerText(item.text || '');
     if (Array.isArray(item.attachments) && item.attachments.length) attachments.setItems(item.attachments);
-    autosize();
-    updateSendButtonState();
     return true;
   }
 
@@ -1414,14 +1407,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     const btn = el(`<button type="button" class="ml-2 underline decoration-dotted" data-testid="outbox-parked-goto">${t('回到该会话')}</button>`);
     btn.onclick = () => {
       haptic('tap');
-      let acked = false;
-      const blocked = message => showSessionBlockedSurface({ sessionId: item.sessionId, cwd: item.cwd, message });
-      socket.emit('session:switch', { sessionId: item.sessionId, cwd: item.cwd }, res => {
-        acked = true;
-        if (!res?.ok) blocked(res?.error || t('切换失败'));
-        else dismissBlockedSurfaceIfTarget(item.sessionId, item.cwd);
+      switchSessionWithFallback(item, {
+        onFailure: message => showSessionBlockedSurface({ sessionId: item.sessionId, cwd: item.cwd, message }),
       });
-      setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     };
     bar.appendChild(btn);
   }
@@ -2414,7 +2402,6 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       }
     }
     toolCards.clear();
-    agentToolIds.clear();
   }
 
   // 停止时丢弃「尚未送达 SDK」的消息（send 完成到输入泵取走之间的窄窗）：气泡落灰色终态而非删除，
@@ -2790,15 +2777,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       }
       scrollBottom();
       if (isSubagentPayload(p)) setBusyFromSubagentEvent(ev); else setBusyFromStreamEvent(ev);
-      // 子代理/Workflow 活动横幅（主会话 spawn 工具；嵌套内部 Agent 不再叠横幅）
       // Agent/Task：预建空卡占位。Workflow 多数阶段只走 task_progress、常无 parent 子流——
       // 预建会留下「🤖 workflow 已完成」空壳（实测观感怪），故等首条 parentToolUseId 事件再建卡。
-      if (!isSubagentPayload(p) && isSpawnToolName(p.name)) {
-        agentToolIds.add(p.toolUseId);
-        if (isMergedSpawn) {
-          const subType = extractInput(p.inputSummary, ['subagent_type', 'subagentType'], '');
-          adoptSpawnCard(ensureSubagentCard(p.toolUseId, subType || null), p);
-        }
+      if (isMergedSpawn) {
+        const subType = extractInput(p.inputSummary, ['subagent_type', 'subagentType'], '');
+        adoptSpawnCard(ensureSubagentCard(p.toolUseId, subType || null), p);
       }
       // 对齐 CLI：spinner 行不挂工具后缀（命令由上方工具卡显示）；工具启动只终结 thinking burst
       // !ev?.replay：同 text_delta，回放里旧轮的工具不得终结当前这一轮的 thinking burst
@@ -2825,13 +2808,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 否则它会一直停在「进行中」或被收尾判成「已中止」（PR #233 review）。历史卡与 live 卡同构（.t-status / .t-out）。
       const card = toolCards.get(p.toolUseId) || histToolCards.get(p.toolUseId);
       histToolCards.delete(p.toolUseId);
-      if (!card) {
-        // 无工具卡时仍处理 Agent 横幅（预建了子 agent 卡但 tool 卡可能被清过）
-        if (agentToolIds.has(p.toolUseId)) {
-          agentToolIds.delete(p.toolUseId);
-        }
-        return;
-      }
+      if (!card) return;
       // 审批的 deny+message 通道结果被 SDK 标 is_error（ok:false），真实语义由 denyKind 决定（agent.js）：
       // denied=已拒绝 🚫 / cancelled=已取消 🚫——均非工具报错。AskUserQuestion 的作答 #455 起走 allow，结果本身就是
       // 成功的，按 CLI 文案分已回答 / 没回答（askQuestionResultView，与历史回放同一个判法）；其余按 ok 显 ✅/❌。
@@ -2863,10 +2840,6 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       const shots = transcriptImages.render(p.images, { sessionId: ev?.sessionId, cwd: ev?.cwd, instanceId: ev?.instanceId });
       if (shots) (card.querySelector('.t-out')?.parentElement || card).appendChild(shots);
       toolCards.delete(p.toolUseId);
-      // 子代理/Workflow 完成时隐藏活动横幅（仅当所有并行 Agent 都完成才隐藏）
-      if (agentToolIds.has(p.toolUseId)) {
-        agentToolIds.delete(p.toolUseId);
-      }
     },
     // F3：user_message 事件渲染右侧气泡（已入缓冲，多设备/重载均可回放）
     // E17：p.attachments=[{name,mimeType,size,thumb?}]——图片显 thumb（data URI，CSP img-src data: 已许），其他显 📎 chip
@@ -3035,7 +3008,6 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       const ui = presentTurnResult(p);
       logClientEvent('recv', `[WEB_RECV] ${ui.statusBar.text}`); // send↔recv 对账：turn 结果在客户端到达
       if (ui.failToolsMessage) failPendingToolCards(ui.failToolsMessage);
-      agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
       alertCue(ui.haptic); // success / warning / error：音+震（各自开关门控）
       addBar(ui.statusBar.text, ui.statusBar.cls);
       announceTurn(ui.statusBar.text); // 读屏的回合结束端点（#379）：与状态条同一句
@@ -3107,10 +3079,10 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         clearInterruptPending(viewingInstanceId, { keepLiveOverride: p.kind === 'interrupted' });
       }
       if (p.kind === 'interrupted') {
-        announceTurn(t('已中止')); // 读屏的回合结束端点（#379）：interrupted 走这里，不发 result
+        announceTurn(interruptLabel(p.interruptedBy)); // 读屏的回合结束端点（#379）：interrupted 走这里，不发 result
         finalizeStreams();
         // E3：interrupt 成功/settleForce 走 system interrupted 时没有 result，须收口工具卡与子 agent 卡
-        failPendingToolCards(t('已中止'));
+        failPendingToolCards(interruptLabel(p.interruptedBy));
         markAllSubagentCardsDone();
         clearBusyFromTurnEndEvent(ev); // 中止也是轮次终点：与 result 同样解锁发送闸，不等 instances 广播
         updateSendButtonState();
@@ -3591,10 +3563,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // 映射到本地的两步面板，最终仍落在 session:rewind:preview / confirm 上。
     if (/^\/rewind(\s|$)/.test(rawText) && !hasSlashCommand(window.availableSkills, 'rewind')) {
       if (!displayedSessionId) { addBar(t('还没有会话可回退'), 'text-info'); return; }
-      inputEl.value = '';
-      inputEl.dispatchEvent(new Event('input'));
-      autosize();
-      updateSendButtonState();
+      setComposerText('');
       rewindCommand.openPanel(displayedSessionId, drivingCwdOf(displayedInstanceId)); // 驾驶轴，同 requestSessionFork
       return;
     }
@@ -3904,7 +3873,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     leftSidebar, modelInput, modelIntent, permModeSelect, pillDefaults, pillEffort, pillEffortText,
     pillModelText, pillPermText, projectsState,
     refreshComposeDefaultsSummary: (...args) => refreshComposeDefaultsSummary(...args), requestCwd, send,
-    socket, topContextPill, updateSendButtonState, getComposeReady: () => _composeReady,
+    socket, topContextPill, getComposeReady: () => _composeReady,
     getComposing: () => composing, getCurrentEffort: () => currentEffort,
     getCurrentGatewaySuffix: () => currentGatewaySuffix, getCurrentModel: () => currentModel,
     getCurrentPermMode: () => currentPermMode, getCwdDefaultModel: () => cwdDefaultModel,
@@ -4117,6 +4086,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     inputEl.style.height = Math.min(inputEl.scrollHeight, 144) + 'px';
     updateSendButtonState();
   }
+  // 程序写输入框：input 事件的监听器会调 autosize（内含发送钮刷新），调用方不用再补。
+  function setComposerText(text) {
+    inputEl.value = text;
+    inputEl.dispatchEvent(new Event('input'));
+  }
   inputEl.addEventListener('focus', syncComposerDiscoverHint);
   inputEl.addEventListener('blur', () => {
     // 延后一帧：点 slash 提示等时 activeElement 可能已迁走，避免闪一下
@@ -4126,14 +4100,13 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
 
   // instanceId 默认取当前查看实例——system(p) 结算 handler 本就只在事件属于当前查看实例时才会被派发到，
   // 故其调用不传 instanceId 天然正确；requestInterrupt 的超时回调则显式传入发起时的 instanceId（届时
-  // 用户可能已切走）。非当前查看实例时只清挂起态本身，不动 btnStop/liveLine 这些视图态。
+  // 用户可能已切走）。非当前查看实例时只清挂起态本身，不动 liveLine 这些视图态。
   function clearInterruptPending(instanceId = viewingInstanceId, { keepLiveOverride = false } = {}) {
     const entry = interruptPendingByInstance.get(instanceId);
     if (entry?.timer) clearTimeout(entry.timer);
     if (!entry) return;
     interruptPendingByInstance.delete(instanceId);
     if (instanceId !== viewingInstanceId) return;
-    if (btnStop) btnStop.disabled = false;
     // 超时/失败清位：去掉「正在停止…」覆盖，恢复 spinner 或空态；result/interrupted 路径会 setBusy(false) 整清
     if (!keepLiveOverride && liveLine?.override) {
       liveLine.override = '';
@@ -4147,7 +4120,6 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     if (interruptPendingByInstance.has(instanceId)) return;
     const entry = {};
     interruptPendingByInstance.set(instanceId, entry);
-    if (btnStop) btnStop.disabled = true;
     if (liveLine) { liveLine.override = formatLiveActivityText('stopping'); renderLiveLine(); }
     else setStreamLiveStatusText(formatLiveActivityText('stopping'));
     updateSendButtonState();
@@ -4167,8 +4139,6 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // 停止 = 不想接着跑：这个会话排着的离线条目不再自动发，退回手动「重发」（O66）
     outboxAfterTurn.cancelTarget({ instanceId, sessionId: instancesList.find(x => x.instanceId === instanceId)?.sessionId ?? null });
   }
-
-  if (btnStop) btnStop.onclick = requestInterrupt;
 
   // ---- 工作目录切换（台阶1：多目录单并发）----
   // basename：路径太长，目录切换器/顶部胶囊只显末段，title 挂全路径兜底重名
@@ -4330,21 +4300,15 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 深链尤其需要落地页：从推送点进来时用户对"当前在哪个会话"毫无预期，一条落在别处的红字
       // 会被读成"我点开的这个会话出错了"；ack 迟迟不来同样不能让用户干等——同其它 4 处
       // session:switch 入口一样补 4s 兜底（不把反馈压在 ack 上）。
-      let acked = false;
-      const blocked = message => showSessionBlockedSurface({
-        sessionId: r.sessionId, cwd: r.cwd,
-        // 签名是具名参数（sessionsCache + instances 两条来源），位置参数会静默返回空标题
-        title: lookupNotifySessionTitle({ sessionId: r.sessionId, cwd: r.cwd, sessionsCache, instances: instancesList }),
-        message,
+      switchSessionWithFallback(r, {
+        ackFailureText: t('深链目标会话已不可用'),
+        onFailure: message => showSessionBlockedSurface({
+          sessionId: r.sessionId, cwd: r.cwd,
+          // 签名是具名参数（sessionsCache + instances 两条来源），位置参数会静默返回空标题
+          title: lookupNotifySessionTitle({ sessionId: r.sessionId, cwd: r.cwd, sessionsCache, instances: instancesList }),
+          message,
+        }),
       });
-      socket.emit('session:switch', { sessionId: r.sessionId, cwd: r.cwd }, res => {
-        acked = true;
-        if (!res?.ok) blocked(res?.error || t('深链目标会话已不可用'));
-        // ack 迟于 4s 兜底时落地页已经弹出来了，但这次切换其实成功了——撤掉它，
-        // 否则用户人在目标会话里、屏幕上却盖着一张「切换无响应」。
-        else dismissBlockedSurfaceIfTarget(r.sessionId, r.cwd);
-      });
-      setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     } else {
       openLeftSidebar(); // 定位不到（缺 sessionId / 无 instanceId）→ 打开会话列表让用户手选
     }
@@ -4451,7 +4415,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     const composeRelocatedFrom = !viewingInstanceId && !newViewing && cwdChanged && currentCwd && _composeReady
       && !connectedRoots.some(root => isPathWithin(currentCwd, root)) && !projectsState.isNoFolder(currentCwd)
       ? currentCwd : null;
-    currentCwd = newCwd;
+    setCurrentCwd(newCwd);
     composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;
     const viewingChanged = viewingInstanceId !== newViewing;
     viewingInstanceId = newViewing;
@@ -4510,7 +4474,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // 重新 bindView → 输入条会永远停在隐藏（真机 c1ccd055：内容回来了但发不了消息，换个浏览器新开
     // 页面却正常，因为那是完整 bindView）。syncComposerVisibility 自身读 instancesList 取最新 sid，幂等。
     syncComposerVisibility();
-    // 保持纯手动展开折叠，不自动展开任何工作区目录
+    // 展开折叠这里不动：切文件夹时的自动展开在 setCurrentCwd 里，其余听用户的
 
     // 切视图：viewingInstanceId 变了重载；空首页内换工作区（newViewing 恒 null、cwd 变了）也重渲——
     // 否则 dashboard 工作区名 + 模型 chip 残留上个工作区（本次修复的 bug 正出于此：两个 null 空首页被判为「视图没变」）
@@ -4628,7 +4592,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     updateServiceNotice(p?.service ?? null); // 服务健康与实例结构无关，无条件每次广播都刷新（不进下方判定分支）
     // P3 性能优化（两层判定，故意不合并——关注点不同）：
     // ① 结构性变化（目录集合本身变化 / viewingInstanceId 变化 / 当前查看 cwd 变化——三者共同决定
-    //   dirRow 高亮与自动展开）仍走全量重建：低频、全量更简单可靠，不做精细化 diff。
+    //   有哪些小节与 dirRow 高亮）仍走全量重建：低频、全量更简单可靠，不做精细化 diff。
     // ② 其余情况按目录分键 diff（见 logic.js buildDirInstanceSignatures/diffDirSignatures：id/sessionId/
     //   title 前20字），只重建签名真变化的目录子树，未涉及目录的 DOM 原样不动（不撤离滚动位置/侧滑态/
     //   "显示更多"展开态）——避免重连等场景下无关工作区被连坐重建（P3 抽屉局部重建）。
@@ -4645,28 +4609,17 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     _lastDirSignatures = _nextDirSignatures;
     const isDesktop = window.innerWidth >= 1024;
     const isPanelOpen = leftSidebar && !leftSidebar.classList.contains('-translate-x-full');
-    if (isDesktop || isPanelOpen) {
-      if (_structuralChanged) {
-        openSessionPanel(); // 内含 needsYou/service 区 + 工作区树全量重建，此路径不必再单独 refresh*
-      } else if (_orderChanged) {
-        reorderDirSections(availableDirs); // 纯换序：只挪 DOM 位置，不碰 expandedDirs/不强制展开
-        refreshDirBadges();
-        refreshSessionStatusChips();
-        refreshNeedsYou();
-      } else if (_changedDirs.length) {
-        rebuildDirSections(_changedDirs); // 只重建真正变化的目录子树，其余目录 DOM 保持原样
-        refreshDirBadges();
-        refreshSessionStatusChips(); // 会话文字状态实时刷新
-        refreshNeedsYou(); // "等我"聚合独立于签名（新增/清除审批不改变实例集结构），须单独刷新
-      } else {
-        refreshDirBadges();
-        refreshSessionStatusChips();
-        refreshNeedsYou();
-      }
+    const panelVisible = isDesktop || isPanelOpen;
+    if (panelVisible && _structuralChanged) {
+      openSessionPanel(); // 内含 needsYou/service 区 + 工作区树全量重建，此路径不必再单独 refresh*
     } else {
+      if (panelVisible) {
+        if (_orderChanged) reorderDirSections(availableDirs); // 纯换序：只挪 DOM 位置，不重建内容
+        else if (_changedDirs.length) rebuildDirSections(_changedDirs); // 只重建真正变化的目录子树，其余目录 DOM 保持原样
+      }
       refreshDirBadges();
-      refreshSessionStatusChips();
-      refreshNeedsYou();
+      refreshSessionStatusChips(); // 会话文字状态实时刷新
+      refreshNeedsYou(); // "等我"聚合独立于签名（新增/清除审批不改变实例集结构），须单独刷新
     }
     updateAttentionSignal(); // 顶栏会话按钮角标：断开 / 需要你（服务健康留在抽屉，不混进这条）
     // 默认磁贴标签依赖 currentModel(空/非空) + cwdDefaultModel，二者本次都可能变（adoptPanelState 改 currentModel、
@@ -5119,7 +5072,6 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 新一轮开跑 ⇒ 上一轮那条建议已经过时。挂在这里而不是发送路径上：发起新一轮的入口不止输入框
       // （审批/选项回答、另一台设备、CLI 侧驾驶都不经过它），而"轮次开始"是这些路径唯一的公共出口。
       hidePromptSuggestion();
-      if (!interruptPendingByInstance.has(viewingInstanceId) && btnStop) btnStop.disabled = false;
       // show === _busyState 去重保证每 turn 恰好在此选一次动词、起一次秒表
       const now = Date.now();
       liveLine = {
@@ -5139,7 +5091,6 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       clearInterruptPending(viewingInstanceId, { keepLiveOverride: true }); // setBusy(false) 终态：清 pending/timer；live 整清在下两行
       stopLiveTicker();
       liveLine = null;
-      if (btnStop) btnStop.disabled = false;
       hideStreamLiveStatus();
     }
     updateSendButtonState(); // FE-004 / 停止 morph：busy 变化即时刷新主按钮；内含纠偏 placeholder
@@ -5211,10 +5162,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 回退的下一步多半是把这句话改一改重说。守卫同发送失败时的草稿恢复：**只在输入框空且
       // 无附件时**回填，绝不覆盖用户已经打的字。
       if (res.prefill && inputEl && !inputEl.value.trim() && attachments.items().length === 0) {
-        inputEl.value = res.prefill;
-        inputEl.dispatchEvent(new Event('input'));
-        autosize();
-        updateSendButtonState();
+        setComposerText(res.prefill);
       }
     },
   });
@@ -5231,21 +5179,15 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     takeDraft: () => {
       const draft = { text: inputEl.value, attachments: attachments.items() };
       if (!draft.text.trim() && draft.attachments.length === 0) return null;
-      inputEl.value = '';
-      inputEl.dispatchEvent(new Event('input'));
+      setComposerText('');
       dropDraftForCurrentSurface();
       attachments.clear();
-      autosize();
-      updateSendButtonState();
       return draft;
     },
     putDraft: (sessionId, draft) => {
       if (displayedSessionId === sessionId && !inputEl.value.trim() && attachments.items().length === 0) {
-        inputEl.value = draft.text;
-        inputEl.dispatchEvent(new Event('input'));
+        setComposerText(draft.text);
         attachments.setItems(draft.attachments);
-        autosize();
-        updateSendButtonState();
         return;
       }
       sessionDraftCache.set(draftKeyFor({ sessionId }), { text: draft.text, attachments: draft.attachments });
@@ -5286,6 +5228,15 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // #399：把手下拉走面板自己的 close（含未保存编辑丢弃确认），不要直接 closeSheet
   setGestureDismiss(workspaceModal, () => { void workspacePanel.close(); });
   const openWorkspacePanel = workspacePanel.open;
+  // 流式期间正文反复重写 innerHTML，所以挂在 document 上；审批 sheet 里的计划正文走同一份渲染，一并覆盖
+  document.addEventListener('click', event => {
+    const link = event.target.closest('a[data-file-path]');
+    if (!link) return;
+    workspacePanel.openFile(panelCwd(), worktreeGoneNotice(), {
+      path: link.dataset.filePath,
+      line: Number(link.dataset.fileLine) || null,
+    });
+  });
   // 「选文件夹」面板：新会话在哪开（已连接的文件夹 / 子文件夹 / 无文件夹 / 添加文件夹）
   const folderPicker = createFolderPicker({
     $, el, socket, openSheet, closeSheet, haptic,
@@ -5601,13 +5552,14 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   const sessionSidebar = createSessionSidebar(appContext, {
     appConfirm, applyDeepLink, applySessionDraftSwap, attachments, attentionChipEl, baseName,
     closeLeftSidebar, composePage, connBanner, connDot, connDotWrap,
-    dismissBlockedSurfaceIfTarget: (...args) => dismissBlockedSurfaceIfTarget(...args), drawer, el,
+    drawer, el,
     ensureEmptySurface: (...args) => ensureEmptySurface(...args),
     enterComposeReady: (...args) => enterComposeReady(...args), envConfigPanel, folderPicker, haptic,
     inputEl, leftSidebar, newSessionWorktree, noticeDismissals, openDeleteSession, perfTrace, prefetchHistory, projectsState,
     renderHooksBridgeSection, renderStatuslineBridgeSection, SESSION_PANEL_REVALIDATE_MS, sessionPanel,
     sessionRename, sessionRowMenu, sessionsCache, sessionsDot, sessionSearchQueryByDir, sessionWorkspaceState,
     setStatusIcon, showSessionBlockedSurface: (...args) => showSessionBlockedSurface(...args), socket,
+    switchSessionWithFallback: (...args) => switchSessionWithFallback(...args),
     syncDashNoFolders: (...args) => syncDashNoFolders(...args), unread,
     getAvailableDirs: () => availableDirs, getCurrentCwd: () => currentCwd,
     getDirSectionNodes: () => dirSectionNodes, getDisplayedSessionId: () => displayedSessionId,
@@ -5617,7 +5569,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     getMirrorStaleFlag: () => mirrorStaleFlag, getMirrorWaitingFlag: () => mirrorWaitingFlag,
     getNeedsYouList: () => needsYouList, getViewingInstanceId: () => viewingInstanceId,
     getWorkdirStates: () => workdirStates, setComposeCwd: v => { composeCwd = v; },
-    setCurrentCwd: v => { currentCwd = v; }, setDirSectionNodes: v => { dirSectionNodes = v; },
+    setCurrentCwd, setDirSectionNodes: v => { dirSectionNodes = v; },
     setDisplayedSessionId: v => { displayedSessionId = v; },
     setExplicitCloseInstanceId: v => { explicitCloseInstanceId = v; },
     setFreshInterruptedInstanceId: v => { freshInterruptedInstanceId = v; },
@@ -5644,22 +5596,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       <div class="empty-session-guide flex flex-col items-center justify-center py-10 px-4 text-center select-none" data-testid="empty-session-guide">
         <div class="text-base font-medium text-ink mb-1">${t('新会话已就绪')}</div>
         <div class="text-xs text-ink-soft mb-4">${t('文件夹')} <span class="font-semibold text-ink">${esc(baseName(currentCwd) || '…')}</span>${currentModel ? ` · ${t('模型')} <span class="font-semibold">${esc(currentModel)}</span>` : ''}</div>
-        <div class="flex flex-col gap-2 w-full max-w-sm">
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('总结当前仓库结构并指出入口文件')}">${t('💡 总结当前仓库结构')}</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('帮我写一个最小改动的修复计划')}">${t('🛠 写一个最小修复计划')}</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('运行相关测试并解读失败')}">${t('🧪 运行测试并解读')}</button>
-        </div>
+        ${starterPromptsHtml()}
       </div>`);
-    guide.querySelectorAll('.esg-prompt').forEach(btn => {
-      btn.onclick = () => {
-        haptic('tap');
-        if (inputEl) {
-          inputEl.value = btn.getAttribute('data-p') || '';
-          inputEl.focus();
-          inputEl.dispatchEvent(new Event('input'));
-        }
-      };
-    });
+    wireStarterPrompts(guide, { haptic, inputEl });
     messagesEl.appendChild(guide);
   }
 
@@ -5754,9 +5693,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     setComposeReady: v => { _composeReady = v; },
   });
   const {
-    dismissBlockedSurfaceIfTarget, ensureEmptySurface, enterComposeReady, leaveComposeReady,
+    ensureEmptySurface, enterComposeReady, leaveComposeReady,
     refreshComposeDefaultsSummary, renderWorktreeChips, showComposeSurface, showDashboard,
-    showInstanceDestroyedSurface, showSessionBlockedSurface, syncComposerVisibility, syncDashNoFolders,
+    showInstanceDestroyedSurface, showSessionBlockedSurface, switchSessionWithFallback, syncComposerVisibility, syncDashNoFolders,
     syncTopContextLabel, syncTopContextPillAriaLabel, syncTopContextPillVisibility,
   } = emptySurfaces;
   /**
@@ -6241,6 +6180,13 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         appendNode(bar, msg);
         return;
       }
+      // 磁盘只记得「被打断了」：看门狗写的也可能是这一行，所以这里不说是谁按的
+      if (msg?.kind === 'interrupted') {
+        const bar = el('<div class="msg-frame text-center text-xs text-ink-faint" data-testid="interrupted-marker"></div>');
+        bar.textContent = t('已中断');
+        appendNode(bar, msg);
+        return;
+      }
       if (msg?.kind === 'thinking') {
         const wrap = el(`
           <details class="msg-frame thinking text-xs text-ink-faint">
@@ -6605,31 +6551,16 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   }
 
   function refreshMirrorComposerCopy() {
-    if (!inputEl) return;
-    if (!mirrorReadonlySid) {
-      // 非镜像：走 turnRunning placeholder（勿在此写死 idle，否则 setBusy 后被镜像刷新冲掉）
-      inputEl.placeholder = resolveComposerPlaceholder({
-        busy: _busyState,
-        turnRunning: _turnRunning,
-        mirrorReadonly: false,
-        idleText: t('给 Claude 发消息...'),
-      });
-      return;
-    }
     const armed = armedTakeoverSid === mirrorReadonlySid;
     inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, waiting: mirrorWaitingFlag, isWebInitiated: !mirrorCliSeenFlag });
     maybeHintHooksBridge();
-    // 兼容：隐藏节点若仍在 DOM，同步文案（不展示）
-    if (mirrorBannerText) mirrorBannerText.textContent = inputEl.placeholder;
-    if (mirrorBannerIcon) mirrorBannerIcon.textContent = armed ? '⏳' : (mirrorStaleFlag ? '⚠️' : '⏱');
   }
 
   // 【曾经这里有 reconcileBanners 与 #activityBanner】那条横幅在 spawn 时点亮、显示子代理的
   // description，唯一的生产者是主链 spawn 工具。合卡之后聚合卡在同一时刻就建好了，且带着类型、
   // 用量与最近工具——横幅成了纯复读，2026-09-10 真机同屏看见两处说同一件事。
-  // 横幅一撤，仲裁函数的剩余职责只有「隐藏 #mirrorBanner」，而那个节点本就 class="hidden"
-  // 且另有一处显式隐它，于是整个仲裁退化成空操作，一并删掉。优先级表（bannerPriority）
-  // 随之失去唯一消费者，也从 logic 里退役。
+  // 横幅一撤，整个仲裁退化成空操作，一并删掉。优先级表（bannerPriority）随之失去唯一消费者，
+  // 也从 logic 里退役。
   // 驾驶中点输入区：解释能/不能/硬要怎么做（disabled 吞原生 focus，需主动反馈）。
   function showMirrorComposerHint() {
     if (!mirrorReadonlySid) return;
@@ -6693,12 +6624,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 把实例档位误清回 auto——对齐 adoptPanelState（同文件 4728/4736 附近）已有写法。
       rebuildEffortOptions(currentModel || cwdDefaultModel, { silentClear: true });
     }
-    if (mirrorBanner) mirrorBanner.classList.add('hidden'); // 状态改走 placeholder，横幅恒隐
     document.body.classList.toggle('mirror-readonly', effective); // UX-009
     // UX-010：镜像时强制隐藏忙碌条
     if (effective) setBusy(false);
     if (inputEl) inputEl.disabled = effective;
-    refreshMirrorComposerCopy();
+    syncComposerPlaceholder();
     // 附件入口随只读锁：禁点 + 防「选了图却发不出」
     if (btnAttach) {
       btnAttach.disabled = effective;
@@ -6833,13 +6763,27 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     addBar(t('已续接 CLI 会话：若终端仍在跑同一会话，并发发送有分叉风险'), 'text-warning');
     inputEl?.focus();
   }
-  // 兼容：旧隐藏按钮若仍被外部点到，转发到同一路径
-  btnMirrorOverride?.addEventListener('click', () => { requestMirrorResume(); });
-  btnMirrorSync?.addEventListener('click', () => {
-    haptic('tap');
-    socket.emit('mirror:syncNow');
-    addBar(t('已请求刷新：拉取终端最新消息'), 'text-ink-faint');
-  });
+
+  // 复制按钮的内容。尺寸由调用方写字面量类名（Tailwind 靠扫源码产出 utility）：代码块 w-3、消息操作栏 w-3.5。
+  function copyBtnInnerHtml(sizeClasses) {
+    return `
+      <svg class="${sizeClasses}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+      </svg>
+      <span>${t('复制')}</span>
+    `;
+  }
+
+  function wireCopyFeedback(btn, getText, { stopPropagation = false } = {}) {
+    btn.onclick = async (e) => {
+      if (stopPropagation) e.stopPropagation();
+      haptic('tap');
+      const ok = await copyText(getText());
+      const span = btn.querySelector('span');
+      if (span) span.textContent = ok ? t('已复制') : t('失败');
+      setTimeout(() => { if (span) span.textContent = t('复制'); }, 1500);
+    };
+  }
 
   // E18: 为代码块注入复制按钮（per-block，hover 时浮现）
   function injectCodeCopyButtons(container) {
@@ -6849,24 +6793,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       wrap.className = 'code-block-wrap';
       pre.parentNode.insertBefore(wrap, pre);
       wrap.appendChild(pre);
-      const btn = el(`
-        <button class="code-copy-btn" title="${t('复制代码')}">
-          <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-          </svg>
-          <span>${t('复制')}</span>
-        </button>
-      `);
-      btn.onclick = async (e) => {
-        e.stopPropagation();
-        haptic('tap');
+      const btn = el(`<button class="code-copy-btn" title="${t('复制代码')}">${copyBtnInnerHtml('w-3 h-3')}</button>`);
+      wireCopyFeedback(btn, () => {
         const code = pre.querySelector('code');
-        const text = code ? code.textContent : pre.textContent;
-        const ok = await copyText(text);
-        const span = btn.querySelector('span');
-        if (span) span.textContent = ok ? t('已复制') : t('失败');
-        setTimeout(() => { if (span) span.textContent = t('复制'); }, 1500);
-      };
+        return code ? code.textContent : pre.textContent;
+      }, { stopPropagation: true });
       wrap.appendChild(btn);
     });
   }
@@ -6900,6 +6831,19 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
 
 
 
+  function speakIdleHtml() {
+    return `
+      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+      </svg>
+      <span>${t('朗读')}</span>
+    `;
+  }
+
+  function resetSpeakBtn(btn) {
+    btn.innerHTML = speakIdleHtml();
+  }
+
   // E18: Redesigned premium utility row under each message block with copy, speak (TTS), and edit capabilities
   // anchorUuid：这条气泡自己的权威 uuid。缺了就不挂需要锚点的入口（见下方 align==='left' 分支）。
   function appendCopyAction(container, getText, align, anchorUuid) {
@@ -6908,21 +6852,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // For User messages (aligned to the right), render a single clean copy icon button aligned to the right
     if (align === 'right') {
       const row = el(`<div class="mt-1 text-right msg-action-bar justify-end"></div>`);
-      const btn = el(`
-        <button class="msg-action-btn hit-44" title="${t('复制消息')}">
-          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-          </svg>
-          <span>${t('复制')}</span>
-        </button>
-      `);
-      btn.onclick = async () => {
-        haptic('tap');
-        const ok = await copyText(getText());
-        const span = btn.querySelector('span');
-        if (span) span.textContent = ok ? t('已复制') : t('失败');
-        setTimeout(() => { if (span) span.textContent = t('复制'); }, 1500);
-      };
+      const btn = el(`<button class="msg-action-btn hit-44" title="${t('复制消息')}">${copyBtnInnerHtml('w-3.5 h-3.5')}</button>`);
+      wireCopyFeedback(btn, getText);
       row.appendChild(btn);
       // UX-012 / #362：填入输入框放在用户气泡；只回填原文，不 rewind / 不改历史
       const rewrite = el(`
@@ -6952,32 +6883,12 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     const bar = el(`<div class="msg-action-bar justify-start"></div>`);
     
     // 1. Copy Button
-    const copyBtn = el(`
-      <button class="msg-action-btn" title="${t('复制消息')}">
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-        </svg>
-        <span>${t('复制')}</span>
-      </button>
-    `);
-    copyBtn.onclick = async () => {
-      haptic('tap');
-      const ok = await copyText(getText());
-      const span = copyBtn.querySelector('span');
-      if (span) span.textContent = ok ? t('已复制') : t('失败');
-      setTimeout(() => { if (span) span.textContent = t('复制'); }, 1500);
-    };
+    const copyBtn = el(`<button class="msg-action-btn" title="${t('复制消息')}">${copyBtnInnerHtml('w-3.5 h-3.5')}</button>`);
+    wireCopyFeedback(copyBtn, getText);
     bar.appendChild(copyBtn);
 
     // 2. Speak (TTS) Button using browser-native Web Speech API
-    const speakBtn = el(`
-      <button class="msg-action-btn" title="${t('语音朗读')}">
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-        </svg>
-        <span>${t('朗读')}</span>
-      </button>
-    `);
+    const speakBtn = el(`<button class="msg-action-btn" title="${t('语音朗读')}">${speakIdleHtml()}</button>`);
     speakBtn.onclick = () => {
       // 特性检测：部分移动端浏览器/内嵌 WebView 不支持 Web Speech API，speechSynthesis 为 undefined
       // 时直接访问 .speaking 会抛未捕获 TypeError（同 copyText 的 navigator.clipboard && 检测风格）。
@@ -6987,26 +6898,14 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       }
       if (window.speechSynthesis.speaking && activeSpeechBtn === speakBtn) {
         window.speechSynthesis.cancel();
-        speakBtn.innerHTML = `
-          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-          </svg>
-          <span>${t('朗读')}</span>
-        `;
+        resetSpeakBtn(speakBtn);
         activeSpeechBtn = null;
         return;
       }
       
       if (window.speechSynthesis.speaking) {
         window.speechSynthesis.cancel();
-        if (activeSpeechBtn) {
-          activeSpeechBtn.innerHTML = `
-            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-            </svg>
-            <span>${t('朗读')}</span>
-          `;
-        }
+        if (activeSpeechBtn) resetSpeakBtn(activeSpeechBtn);
       }
 
       haptic('tap');
@@ -7017,12 +6916,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       
       const utterance = new SpeechSynthesisUtterance(cleanText);
       utterance.onend = () => {
-        speakBtn.innerHTML = `
-          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-          </svg>
-          <span>${t('朗读')}</span>
-        `;
+        resetSpeakBtn(speakBtn);
         if (activeSpeechBtn === speakBtn) activeSpeechBtn = null;
       };
       

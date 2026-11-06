@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // tests/gates/check-diagram-claims.js —— 架构图集的漂移闸
 //
-// 【它守什么】gh-pages 上那 13 张架构图（https://ike-li.github.io/claude-chat-mobile/diagrams/）
+// 【它守什么】gh-pages 上那 13 张架构图（https://ccm.osolee.cc.cd/diagrams/）
 // 里承重的事实：常量取值、被引用的源码路径、以及图声称的基线提交。代码改了而图没改，这里变红。
 //
 // 【为什么需要】图本身没有任何机械保证：archify 的 source 证据只验「该文件在 pin 的 commit 存在」，

@@ -59,6 +59,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 看门狗或 CLI 停下的任务其实没干完：显示成「已中止」，用户会以为是自己点的，不回去看。
+  // 磁盘上的中断行曾被整条丢弃，刷新或换设备后这一轮停在半截却看不出原因。
+  test('P0-04i 非手动中断说清来源；历史里的中断行是标记不是气泡', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await sendChatMessage(page, 'test:interrupt-sources');
+
+    const messages = page.locator('#messages');
+    const marker = messages.locator('[data-testid="interrupted-marker"]');
+    await expect(marker).toHaveCount(1, { timeout: 20_000 });
+    await expect(marker).toHaveText('已中断');
+    await expect(messages.getByText('超时中断 · 1.0s')).toHaveCount(1);
+    await expect(messages.getByText('已中断（非手动） · 1.0s')).toHaveCount(1);
+    await expect(messages.getByText(/^已中止/)).toHaveCount(0);
+    await expect(messages.locator('.t-out code').filter({ hasText: '超时中断' })).toHaveCount(1);
+
+    const texts = await messages.locator('> *').allInnerTexts();
+    const iBefore = texts.findIndex(x => x.includes('中断前的问题'));
+    const iMarker = texts.lastIndexOf('已中断'); // 更早那条是 live 的 system 条
+    const iAfter = texts.findIndex(x => x.includes('中断后的问题'));
+    expect(iBefore).toBeGreaterThan(-1);
+    expect(iMarker).toBeGreaterThan(iBefore);
+    expect(iAfter).toBeGreaterThan(iMarker);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-04b 停止后旧长流不再继续追加到旧消息', async ({ page }) => {
     await gotoMock(page);
 

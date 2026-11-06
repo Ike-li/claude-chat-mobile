@@ -227,7 +227,7 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 
 `getContextUsage` 在 CLI 侧是 `/context` 拆账（按类别 `count_tokens`），不是读内存。statusline 的 10s tick 只刷新 git；占用结果缓存在 `agent.ctxWindowCache`，只在无窗口 / 模型变 / `compact_boundary` 失效时重拉。流式 `onUsage` 用 lastUsage 单调上调占用，不重打 RPC。
 
-**锚点**：`app/src/ops/statusline.js` `getContextUsageSafe` / `shouldFetchContextUsage` / `readCachedCtxWindow` / `cacheCtxWindow` / `invalidateCtxOccupancy` · `tests/unit/display-contracts.test.mjs`（「ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）」） · `tests/invariants/statusline.test.mjs`（tick 不重打）
+**锚点**：`app/src/ops/statusline.js` `fetchAndAdoptContextUsage` / `shouldFetchContextUsage` / `readCachedCtxWindow` / `cacheCtxWindow` / `invalidateCtxOccupancy` · `tests/unit/display-contracts.test.mjs`（「ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）」） · `tests/invariants/statusline.test.mjs`（tick 不重打）
 
 ---
 
@@ -268,7 +268,7 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 | Effort 不猜 low | `effortUiState` | `logic-session` |
 | Statusline 双源不混拼 | `buildWeb*` `buildCli*` `selectStatusSource` | `statusline.test` · smoke statusline |
 | 折叠摘要 | `formatStatuslineCollapsedSummary` | `logic-statusline-summary` |
-| ctx 窗口只认真值 | `getContextUsageSafe` `shouldFetchContextUsage` `readCachedCtxWindow` `cacheCtxWindow` | `statusline.test` |
+| ctx 窗口只认真值 | `fetchAndAdoptContextUsage` `shouldFetchContextUsage` `readCachedCtxWindow` `cacheCtxWindow` | `statusline.test` |
 
 ## §6 外部迁移恢复（#473）
 

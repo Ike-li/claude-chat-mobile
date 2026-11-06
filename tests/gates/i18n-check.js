@@ -10,7 +10,7 @@
 //     直接写死在代码里、不经 t() 就上屏的中文（2026-09-24 人工审计修过两处：设备列表的「N 天前批准」、
 //     后台任务行的「N条」）。
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -19,14 +19,10 @@ const SKIP_DIRECTORIES = new Set(['.git', 'node_modules', '.worktrees', 'vendor'
 function walkFiles(rootDir, dir, pattern) {
   const abs = join(rootDir, dir);
   if (!existsSync(abs)) return [];
-  const files = [];
-  for (const entry of readdirSync(abs, { withFileTypes: true })) {
-    if (entry.isDirectory() && SKIP_DIRECTORIES.has(entry.name)) continue;
-    const relPath = join(dir, entry.name);
-    if (entry.isDirectory()) files.push(...walkFiles(rootDir, relPath, pattern));
-    else if (pattern.test(entry.name)) files.push(relPath);
-  }
-  return files.sort();
+  return readdirSync(abs, { recursive: true })
+    .filter(rel => pattern.test(rel) && !rel.split(sep).some(part => SKIP_DIRECTORIES.has(part)))
+    .map(rel => join(dir, rel))
+    .sort();
 }
 
 // EN_DICT 字面量里的单引号字符串 key（与 app/public/js/i18n.js 的写法约定一致：'中文 key': '译文'）。

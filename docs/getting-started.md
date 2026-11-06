@@ -51,7 +51,7 @@ claude auth status
   - **启动 shell 的 `export`**：先在**将要启动 server 的 shell** 里导出 `ANTHROPIC_*`，再 `npm start`。只有这条路才要求 headless 终端入口——macOS 桌面控制台拉起的常驻服务是干净的 GUI 血统环境，里面没有你终端里 export 的变量。两条路同时存在时，网关键以 settings 文件为准（本项目 2026-07-30 实测）。
 - 不要把 `ANTHROPIC_*` 写进本项目的配置文件（`ccm.config.json` / `.env`）：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。剥除不是静默的——启动日志会逐个打印 `[config] 已忽略配置文件里的 ANTHROPIC_…`，`doctor` 的「ANTHROPIC_* 环境」一项也会提示。
 - worktree 会话注意：CLI 在 worktree 里读的是**主 checkout** 根目录那份 `settings.local.json`（官方文档明写），本项目会把主 checkout 独有的网关键中和掉、不让它误伤 worktree。worktree 要走网关，在 worktree 自己的 `.claude/settings.local.json` 里配，或干脆配在 `~/.claude/settings.json`。
-- `doctor` 的 MODEL_SETTINGS 一项会逐工作区读这些文件，核对 `model` 与 `ANTHROPIC_DEFAULT_*_MODEL` 档位映射是否打架。
+- 手机端「⚙️ 设置与状态」→「🩺 排查」→「🔍 安全体检」里的 MODEL_SETTINGS 一项会逐工作区读这些文件，核对 `model` 与 `ANTHROPIC_DEFAULT_*_MODEL` 档位映射是否打架（命令行的 `doctor` 没有这一项）。它只读配置、不发请求：✓ 说明配置自洽，不说明网关提供这些模型。
 - 顺带说明：官方的 Remote Control 遥控在网关 / API key / 关遥测配置下整条不可用（要求 claude.ai 订阅并直连官方 API）；本项目对模型通路零假设，上述配置下全功能可用——这正是它存在的主要理由之一，见 [README「为什么需要它」](../README.md#和官方-remote-control-差在哪)。
 
 ## 2. 获取代码与安装依赖
@@ -352,10 +352,10 @@ node scripts/device.js deny <ID>
 1. 首页显示预期工作区。
 2. **硬门（模型通路没配好也能验）**：新建会话并发送一条消息。**只要手机上出现的是 CLI 透传上来的真实结果——正常回答，或一条具体的错误——本步就算通过**：它证明 CCM 到 CLI 这条链路是通的，而不是假流式成功。
    - 官方订阅未登录 → 「Not logged in · Please run /login」：到主机终端打开 `claude` 执行 `/login`（或先跑通 `claude auth status`）。
-   - 第三方网关**不会**出现上面那条（它不走 Anthropic 登录）。配置没生效时看到的是网关自己的报错，例如 401、连不上、模型名不认 → 照上文 [官方订阅与第三方网关](#官方订阅与第三方网关) 检查 `ANTHROPIC_*` 写在哪一层，再看 `doctor` 的 MODEL_SETTINGS 一项。
+   - 第三方网关**不会**出现上面那条（它不走 Anthropic 登录）。配置没生效时看到的是网关自己的报错，例如 401、连不上、模型名不认 → 照上文 [官方订阅与第三方网关](#官方订阅与第三方网关) 检查 `ANTHROPIC_*` 写在哪一层，再看手机端安全体检的 MODEL_SETTINGS 一项（它只核对映射是否自洽；模型名网关认不认，以这条报错为准）。
    - 两种情况收敛到同一个动作：**先在主机终端、同一个工作区目录下把 `claude` 跑通一轮正常会话**，再从手机重试。
 3. **绿路径（终端已能正常会话）**：发送一个无副作用的问题，例如“只回复 OK”，能看到流式回答和回合结束状态。
-4. 打开设置，确认模型、权限档、思考强度和服务状态可见。
+4. 在会话里点输入框下方那枚「模型 · 权限 · 思考」胶囊（会话设置），确认模型、权限档、思考强度可见；服务状态在会话抽屉的「⚙️ 设置与状态」→「🖥 宿主机」→「📊 服务状态」。
 5. 如已启用 Web Push，使用“发一条测试推送”验证通道，不要等真实审批出现才发现配置有误。
 
 到这里，最小可用路径已经完成。下面几节都是可选增强，不影响 Web 自己发起会话。
@@ -625,13 +625,20 @@ npm run setup -- --help
 
 ### 方式 A：原地覆盖（归档装的）
 
-回到当初解压的**父目录**（也就是 `claude-chat-mobile-master/` 的上一级），重跑同一条命令：
+回到当初解压的**父目录**（也就是 `claude-chat-mobile-master/` 的上一级），先把归档下载成文件，下载成功再解压：
 
 ```bash
-curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+curl -fsSL -o ccm-master.tar.gz https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz \
+  && tar xzf ccm-master.tar.gz && rm ccm-master.tar.gz
 cd claude-chat-mobile-master
 npm ci --omit=dev
+node -p "require('./package.json').version"
 ```
+
+**最后一行打印的版本号要和[最新发布](https://github.com/Ike-li/claude-chat-mobile/releases/latest)对上**，没变就是没更新到。
+这里不用安装时那条 `curl … | tar xz`：下载失败时 macOS 自带的 tar 收到空输入照样返回成功，一个文件都没换，
+后面的 `npm ci` 也照跑，看上去像更新完了；下载断在半路，则可能只换掉了一部分文件。直连 GitHub 不稳时，
+给 curl 配上代理（`https_proxy=…`）再重来。
 
 **这样覆盖不会动你的配置和数据。** `ccm.config.json` 与 `data/` 都写在 `.gitignore` 里，而归档就是
 GitHub 现场 `git archive` 的产物——它只打包 git 追踪的文件，所以这两样根本不在归档中，`tar` 也就无从

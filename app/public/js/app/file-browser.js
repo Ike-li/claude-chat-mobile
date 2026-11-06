@@ -1,8 +1,18 @@
 /* global CodeMirror */
 import { t } from '../i18n.js';
+import { lineSpan } from '../logic/file-links.js';
 import { showPanelMessage } from './panel-message.js';
 
 const ICONS = { dir: '📁', file: '📄', symlink: '🔗' };
+const FILE_OPEN_TIMEOUT_MS = 10_000;
+// 目标行在 256KB 一页的第几页都有可能，但手机不能为一个行号把几十 MB 的日志拉完
+const MAX_AUTO_PAGES = 8;
+
+const MEDIA_HTML = {
+  image: '<img class="max-w-full max-h-full" data-testid="file-preview-media">',
+  video: '<video controls playsinline preload="metadata" class="max-w-full max-h-full" data-testid="file-preview-media"></video>',
+  audio: '<audio controls class="w-full" data-testid="file-preview-media"></audio>',
+};
 
 export function formatFileSize(bytes) {
   if (!Number.isFinite(bytes)) return '';
@@ -71,6 +81,8 @@ export function createFileBrowser(context, {
   let editOnDemand = false; // 行多的纯文本：查看留在 <pre>，点「编辑」才挂 CM（验收 O103，见 renderContent）
   let codeMirrorLoad = null; // CM 脚本的按需加载，见 loadCodeMirror
   let codeMirrorReady = false; // 整包（核心＋全部 mode）都执行完才算；核心先执行，全局在不等于 mode 到齐
+  let targetLine = null;   // 文件链接带的行号，定位到后清掉
+  let autoPages = 0;       // 为了够到 targetLine 已自动续读的页数
 
   function relativePath() { return segments.join('/') || '.'; }
 
@@ -216,7 +228,11 @@ export function createFileBrowser(context, {
         return;
       }
       if (response.binary) {
-        showMessage(`${t('二进制文件（')}${formatFileSize(response.totalSize)}${t('），不支持预览')}`);
+        requestFile(requestedPath, opened => {
+          if (stale()) return;
+          if (opened?.ok) renderBinary(opened);
+          else showMessage(`${t('无法打开：')}${opened?.error || t('未知错误')}`, 'text-danger');
+        });
         return;
       }
       const render = () => {
@@ -230,18 +246,68 @@ export function createFileBrowser(context, {
     });
   }
 
-  function loadContent(name) {
+  function loadContent(name, line = null) {
     mode = 'content';
     fileName = name;
     contentText = '';
     contentOffset = 0;
     usedPagination = false;
+    targetLine = line;
+    autoPages = 0;
     editMode = 'view';
     baseHash = null;
     hideSaveError();
+    syncEditButtons();
     renderHeader();
     showMessage(t('加载中…'));
     fetchContentPage(segments.concat(name).join('/'), 0, loadCodeMirror());
+  }
+
+  // 前端随 pull 即时上线、后端要重启，旧后端不认 file:open、也就不回 ack，所以要有超时。
+  function requestFile(path, onDone) {
+    context.socket.timeout(FILE_OPEN_TIMEOUT_MS).emit('file:open', { cwd, path }, (err, response) => {
+      onDone(err ? { ok: false, error: t('服务端没响应，刚更新过的话要重启后端') } : response);
+    });
+  }
+
+  function renderBinary({ media, url, size }) {
+    if (media) {
+      const element = createElement(MEDIA_HTML[media]);
+      // 文件不存在、编码放不了（比如 .mov 里的 HEVC）都走这里；元素已被换掉时不该再动正文
+      element.onerror = () => {
+        if (element.isConnected) showMessage(t('无法预览，可以下载后查看'), 'text-danger');
+      };
+      if (media === 'image') element.alt = fileName;
+      element.src = url;
+      const frame = createElement('<div class="h-full flex items-center justify-center p-2"></div>');
+      frame.appendChild(element);
+      dom.fileBrowseBody.innerHTML = '';
+      dom.fileBrowseBody.appendChild(frame);
+    } else {
+      showMessage(`${t('二进制文件（')}${formatFileSize(size)}${t('），不支持预览')}`);
+    }
+    syncEditButtons();
+  }
+
+  // 票据现取：看了半小时的文件，打开时那张已经过期了。不用 location.assign：出错时 PWA 会跳到错误页，没有返回键。
+  function download() {
+    const name = fileName;
+    haptic('tap');
+    hideSaveError();
+    requestFile(segments.concat(name).join('/'), opened => {
+      if (!opened?.ok) {
+        showSaveError(`${t('无法下载：')}${opened?.error || t('未知错误')}`);
+        return;
+      }
+      const anchor = documentRef.createElement('a');
+      anchor.href = `${opened.url}?download=1`;
+      anchor.download = name;
+      anchor.click();
+    });
+  }
+
+  function stopMedia() {
+    dom.fileBrowseBody?.querySelector('video, audio')?.pause();
   }
 
   function hideSaveError() {
@@ -261,6 +327,7 @@ export function createFileBrowser(context, {
     dom.fileBrowseEdit?.classList.toggle('hidden', !(editable && editMode === 'view'));
     dom.fileBrowseSave?.classList.toggle('hidden', editMode !== 'editing');
     dom.fileBrowseCancelEdit?.classList.toggle('hidden', editMode !== 'editing');
+    dom.fileBrowseDownload?.classList.toggle('hidden', mode !== 'content' || !fileName || editMode === 'editing');
   }
 
   function enterEditMode() {
@@ -324,6 +391,12 @@ export function createFileBrowser(context, {
     });
   }
 
+  // 目标行放到视口上方三分之一处，上文也看得到
+  function scrollBodyTo(windowY) {
+    const body = dom.fileBrowseBody;
+    body.scrollTop += windowY - body.getBoundingClientRect().top - body.clientHeight / 3;
+  }
+
   function renderContent(truncated, totalSize, contentHash) {
     if (!dom.fileBrowseBody) return;
     dom.fileBrowseBody.innerHTML = '';
@@ -342,6 +415,12 @@ export function createFileBrowser(context, {
     const mime = !usedPagination && !truncated ? (highlighted || (plainOk ? 'text/plain' : null)) : null;
     if (mime && typeof CodeMirror !== 'undefined') {
       mountCodeMirror(mime);
+      if (targetLine) {
+        const line = Math.min(targetLine, cmInstance.lineCount()) - 1;
+        cmInstance.addLineClass(line, 'background', 'file-target-line');
+        scrollBodyTo(cmInstance.charCoords({ line, ch: 0 }, 'window').top);
+        targetLine = null;
+      }
       syncEditButtons();
       return;
     }
@@ -349,17 +428,35 @@ export function createFileBrowser(context, {
     syncEditButtons();
     const pre = documentRef.createElement('pre');
     pre.className = 'p-4 text-[11px] leading-relaxed font-mono text-ink whitespace-pre-wrap break-words';
-    pre.textContent = contentText;
-    dom.fileBrowseBody.appendChild(pre);
+    const span = targetLine ? lineSpan(contentText, targetLine) : null;
+    if (span) {
+      const mark = documentRef.createElement('span');
+      mark.className = 'file-target-line';
+      mark.textContent = contentText.slice(span.start, span.end);
+      pre.append(contentText.slice(0, span.start), mark, contentText.slice(span.end));
+      dom.fileBrowseBody.appendChild(pre);
+      scrollBodyTo(mark.getBoundingClientRect().top);
+      targetLine = null;
+    } else {
+      pre.textContent = contentText;
+      dom.fileBrowseBody.appendChild(pre);
+    }
     if (truncated) {
       const more = createElement('<button class="w-full p-3 text-center text-[11px] text-accent hover:bg-sunk/30 active:opacity-70 border-t border-line-soft"></button>');
       more.textContent = `${t('加载更多（已显示')} ${formatFileSize(contentOffset)}/${formatFileSize(totalSize)}）`;
-      more.onclick = () => {
-        haptic('tap');
+      const loadMore = () => {
         usedPagination = true; // 哪怕这一页恰好读完全文（truncated 转 false），后续也不再切 CM
         fetchContentPage(segments.concat(fileName).join('/'), contentOffset);
       };
+      more.onclick = () => {
+        haptic('tap');
+        loadMore();
+      };
       dom.fileBrowseBody.appendChild(more);
+      if (targetLine && autoPages < MAX_AUTO_PAGES) {
+        autoPages += 1;
+        loadMore();
+      }
     }
   }
 
@@ -388,7 +485,8 @@ export function createFileBrowser(context, {
       mode = 'list';
       resetEditState();
       renderHeader();
-      renderList();
+      if (listEntries.length) renderList();
+      else loadList(); // 从文件链接直接进来的，这一层的列表还没拉过
     } else if (segments.length > 0) {
       segments.pop();
       loadList();
@@ -407,12 +505,48 @@ export function createFileBrowser(context, {
     loadList();
   }
 
+  // 打开消息里的文件链接。mode 先按内容页算：定位失败时「返回」也能回到根目录列表。
+  function openTarget(nextCwd, { path, line }) {
+    const gen = ++contentReadGen;
+    cwd = nextCwd;
+    segments = [];
+    listEntries = [];
+    fileName = null;
+    mode = 'content';
+    resetEditState();
+    renderHeader();
+    showMessage(t('加载中…'));
+    requestFile(path, opened => {
+      if (gen !== contentReadGen || mode !== 'content') return;
+      if (!opened?.ok) {
+        showMessage(`${t('无法打开：')}${opened?.error || t('未知错误')}`, 'text-danger');
+        return;
+      }
+      cwd = opened.root;
+      const parts = opened.relPath.split('/').filter(Boolean);
+      if (opened.kind === 'dir') {
+        segments = parts;
+        loadList();
+        return;
+      }
+      segments = parts.slice(0, -1);
+      fileName = parts.at(-1);
+      if (opened.media) {
+        renderHeader();
+        renderBinary(opened);
+      } else {
+        loadContent(fileName, line);
+      }
+    });
+  }
+
   if (dom.fileBrowseBack) dom.fileBrowseBack.onclick = back;
+  if (dom.fileBrowseDownload) dom.fileBrowseDownload.onclick = download;
   if (dom.fileBrowseEdit) dom.fileBrowseEdit.onclick = enterEditMode;
   if (dom.fileBrowseSave) dom.fileBrowseSave.onclick = saveEdit;
   if (dom.fileBrowseCancelEdit) dom.fileBrowseCancelEdit.onclick = exitEditMode;
 
   // confirmLeaveIfEditing 外露：关闭面板与**切到「改动」tab**都要先过这道未保存确认，
   // 否则切个 tab 就把用户没保存的编辑静默丢了。
-  return { back, open, confirmLeaveIfEditing };
+  return { back, open, openTarget, confirmLeaveIfEditing, stopMedia };
 }

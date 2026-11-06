@@ -7,31 +7,31 @@
 
 <p align="center">
   <a href="README.en.md">English</a> ·
-  <a href="https://ike-li.github.io/claude-chat-mobile/zh/">网站</a> ·
-  <a href="https://ike-li.github.io/claude-chat-mobile/demo/">在线演示</a> ·
-  <a href="https://ike-li.github.io/claude-chat-mobile/diagrams/">架构图集</a><br>
+  <a href="https://ccm.osolee.cc.cd/zh/">网站</a> ·
+  <a href="https://ccm.osolee.cc.cd/demo/">在线演示</a> ·
+  <a href="https://ccm.osolee.cc.cd/diagrams/">架构图集</a><br>
   <a href="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml"><img src="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
   <a href="https://deepwiki.com/Ike-li/claude-chat-mobile"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
-![登录与设备准入](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
+![登录与设备准入](https://ccm.osolee.cc.cd/screenshots/01-login.webp)
 
-![主页、工作区列表与会话侧栏](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
+![主页、工作区列表与会话侧栏](https://ccm.osolee.cc.cd/screenshots/02-home.webp)
 
 <p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="在手机上接着写代码">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="用量与后台任务">
+  <img src="https://ccm.osolee.cc.cd/screenshots/03-coding.webp" width="49%" alt="在手机上接着写代码">
+  <img src="https://ccm.osolee.cc.cd/screenshots/04-usage.webp" width="49%" alt="用量与后台任务">
 </p>
 
-![会话设置里切到第三方网关的模型](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
+![会话设置里切到第三方网关的模型](https://ccm.osolee.cc.cd/screenshots/05-gateways.webp)
 
-![工作区文件浏览与斜杠命令](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
+![工作区文件浏览与斜杠命令](https://ccm.osolee.cc.cd/screenshots/06-files.webp)
 
-![设置与状态、设备管理、通知与锁屏推送](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
+![设置与状态、设备管理、通知与锁屏推送](https://ccm.osolee.cc.cd/screenshots/07-settings.webp)
 
-![服务状态、安全事件与手机端安全体检](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
+![服务状态、安全事件与手机端安全体检](https://ccm.osolee.cc.cd/screenshots/08-ops.webp)
 
 ## 为什么用它
 
@@ -102,7 +102,7 @@ npm ci --omit=dev && npm run setup && npm start
 
 ## 界面长什么样
 
-**不想先装也能摸一遍：[在线演示](https://ike-li.github.io/claude-chat-mobile/demo/)。** 跑的是本仓库的真实前端（`app/public/` 原样），只把后端换成了一层浏览器内脚本——工作区切换、流式回复、工具调用、审批卡、文件浏览、后台任务、设置与状态都点得动，但**回复是固定脚本，不会真的调用模型**。
+**不想先装也能摸一遍：[在线演示](https://ccm.osolee.cc.cd/demo/)。** 跑的是本仓库的真实前端（`app/public/` 原样），只把后端换成了一层浏览器内脚本——工作区切换、流式回复、工具调用、审批卡、文件浏览、后台任务、设置与状态都点得动，但**回复是固定脚本，不会真的调用模型**。
 
 ## 它是怎么工作的
 
@@ -154,7 +154,7 @@ npm ci --omit=dev && npm run setup && npm start
 
 **参与开发**
 
-* **[架构说明](docs/architecture.md)** · [Architecture (EN)](docs/architecture.en.md) · [架构图集](https://ike-li.github.io/claude-chat-mobile/diagrams/)
+* **[架构说明](docs/architecture.md)** · [Architecture (EN)](docs/architecture.en.md) · [架构图集](https://ccm.osolee.cc.cd/diagrams/)
 * [硬性规则与技术债](docs/hard-rules.md) · [展示契约](docs/display-contracts.md)
 
 配置项和命令都不维护静态列表：`node scripts/config.js schema` 打印当前配置定义，每条 CLI 不带子命令就打印自己的用法。

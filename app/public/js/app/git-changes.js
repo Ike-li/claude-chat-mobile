@@ -249,10 +249,17 @@ export function createWorkspacePanel(context, {
     if (!files) dom.fileBrowseSaveError?.classList.add('hidden');
   }
 
+  // 离开文件 tab：音视频也要停，sheet 只是藏起来，不停会在后台继续响。
+  async function leaveFiles() {
+    if (!(await fileBrowser?.confirmLeaveIfEditing?.())) return false;
+    fileBrowser?.stopMedia?.();
+    return true;
+  }
+
   // 切 tab 前必须放行编辑态确认——切个 tab 就丢掉未保存的编辑是本次合并最容易踩的坑。
   async function selectTab(tab) {
     if (tab === activeTab) return;
-    if (activeTab === 'files' && !(await fileBrowser?.confirmLeaveIfEditing?.())) return;
+    if (activeTab === 'files' && !(await leaveFiles())) return;
     paintTab(tab);
     if (tab === 'files') fileBrowser?.open?.(cwd);
     else gitChanges?.open?.(cwd);
@@ -268,18 +275,28 @@ export function createWorkspacePanel(context, {
     el.classList.remove('hidden');
   }
 
-  function open(nextCwd, tab = 'files', worktreeGoneNotice = null) {
+  function show(nextCwd, tab, worktreeGoneNotice) {
     cwd = nextCwd;
     activeTab = null;               // 强制重载：同一 tab 再次点开也要拉最新数据
     openSheet(dom.workspaceModal);
     paintWorktreeGone(worktreeGoneNotice);
     paintTab(tab);
+  }
+
+  function open(nextCwd, tab = 'files', worktreeGoneNotice = null) {
+    show(nextCwd, tab, worktreeGoneNotice);
     if (tab === 'files') fileBrowser?.open?.(cwd);
     else gitChanges?.open?.(cwd);
   }
 
+  // 从消息里的文件链接进来：直接落到那个文件或目录，target 为 { path, line }
+  function openFile(nextCwd, worktreeGoneNotice, target) {
+    show(nextCwd, 'files', worktreeGoneNotice);
+    fileBrowser?.openTarget?.(cwd, target);
+  }
+
   async function close() {
-    if (activeTab === 'files' && !(await fileBrowser?.confirmLeaveIfEditing?.())) return;
+    if (activeTab === 'files' && !(await leaveFiles())) return;
     closeSheet(dom.workspaceModal);
   }
 
@@ -296,5 +313,5 @@ export function createWorkspacePanel(context, {
     };
   }
 
-  return { open, close, selectTab };
+  return { open, openFile, close, selectTab };
 }

@@ -81,6 +81,5 @@ export function createForegroundTasks(context, {
   if (composerBtn) composerBtn.addEventListener('click', () => send(null, composerBtn));
 
   const controller = { onEvent, render };
-  context.state.foregroundTasks = controller;
   return controller;
 }

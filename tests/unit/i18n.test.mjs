@@ -3,7 +3,9 @@
 // 未收录 key 静默回落中文（渐进式覆盖，不是"未翻译就报错"）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, confirmAndWriteLangPref, LANG_STORAGE_KEY, EN_DICT, translateTextNodeValue, I18N_ATTRS } from '../../app/public/js/i18n.js';
+import { extractHtmlCopyKeys } from '../../tests/gates/i18n-check.js';
 
 test.afterEach(() => setLang('zh')); // 每个用例后复位，测试间不串扰全局 currentLang
 
@@ -70,6 +72,17 @@ test.describe('translateTextNodeValue：文本节点整树扫描的翻译单元'
     assert.equal(translateTextNodeValue(''), '');
     assert.equal(translateTextNodeValue(null), null);
     assert.equal(translateTextNodeValue(undefined), undefined);
+  });
+  // 2026-11-03：改首台设备弹窗文案时把 '。' 当成没人用的 key 删了，可设备审批帮助段 `…</code>。` 那个只剩一个句号的
+  // 文本节点还在用它，英文界面上就留下一个中文句号。i18n 门禁只查 t() 文案，静态外壳的译文完整性由这条兜。
+  test('en：index.html 静态外壳里每段中文文案都有译文（有意不译的三条除外）', () => {
+    const INTENTIONALLY_UNTRANSLATED = new Set(['中文', '语言 / Language', '主题 / Theme']);
+    const html = readFileSync(new URL('../../app/public/index.html', import.meta.url), 'utf8');
+    const keys = [...new Set(extractHtmlCopyKeys(html))];
+    assert.ok(keys.length > 100, `仪器先证明自己看得见：index.html 的中文文案有两百多段，这里只抽到 ${keys.length} 段`);
+    setLang('en');
+    const leftover = keys.filter(k => !INTENTIONALLY_UNTRANSLATED.has(k) && translateTextNodeValue(k) === k);
+    assert.deepEqual(leftover, [], '这些文案在英文界面上会原样显示中文');
   });
 });
 

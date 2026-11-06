@@ -58,6 +58,14 @@ test('modelSettingsConflictDiagnostic: 全局 model 是档位别名且该档位�
   assert.equal(r.status, 'ok');
 });
 
+// 2026-11-03 mini 装机核对：各档都映射到网关不提供的模型名，这一项照样 ✓，发消息才 402/404。
+// 它只读配置、不发请求，✓ 只能说明配置自洽——detail 要把这条边界说出来，别让人读成「模型可用」。
+test('modelSettingsConflictDiagnostic: 映射全命中 → ok，detail 说明不代表网关提供这些模型', () => {
+  const r = modelSettingsConflictDiagnostic({ userModel: 'sonnet', dirs: [dirOf('/w/gh-pages', GW)] });
+  assert.equal(r.status, 'ok');
+  assert.match(r.detail, /不代表网关/, '读成「模型可用」的人会跳过真正该查的网关');
+});
+
 test('modelSettingsConflictDiagnostic: 别名带 [1m] 后缀仍按档位解析 → ok', () => {
   const r = modelSettingsConflictDiagnostic({
     userModel: 'opus[1m]',
@@ -428,6 +436,22 @@ test.describe('computeReadiness：公网暴露就绪度', () => {
   });
   test('全净 → ready', () => {
     assert.equal(computeReadiness([chk('AUTH_TOKEN', 'ok'), chk('WHITELIST', 'ok', { dangerous: [] })]).level, 'ready');
+  });
+  // 2026-11-03 mini 装机核对：唯一的 ⚠ 是推送未配置，标题却说「有需留意的偏宽项」。推送没配是功能缺席，
+  // 不是哪里放得太宽；「偏宽」只留给确实放宽了的危险白名单，其余 warn 只报条数。
+  test('只有非偏宽类 warn（推送未配置）→ caution，标题不说「偏宽」，报条数', () => {
+    const r = computeReadiness([chk('AUTH_TOKEN', 'ok'), chk('WHITELIST', 'ok', { dangerous: [] }), chk('PUSH_VAPID', 'warn')]);
+    assert.equal(r.level, 'caution');
+    assert.doesNotMatch(r.summary, /偏宽/, '推送没配被说成偏宽，用户会去找根本不存在的放宽项');
+    assert.match(r.summary, /1 项/);
+  });
+  test('危险白名单 → 标题仍点名偏宽项', () => {
+    const r = computeReadiness([
+      chk('AUTH_TOKEN', 'ok'), chk('CF_ACCESS', 'ok', { enabled: true }),
+      chk('WHITELIST', 'warn', { dangerous: [{ rule: 'Bash(*)' }] }),
+    ]);
+    assert.equal(r.level, 'caution');
+    assert.match(r.summary, /偏宽/);
   });
 });
 
@@ -1489,6 +1513,21 @@ test.describe('tailscaleDiagnostic（TAILSCALE / D23：检测 + 指路，不管�
       assert.equal(o.status, 'ok');
       assert.match(o.detail, new RegExp(backendState));
     }
+  });
+
+  // 2026-11-03 mini 装机核对：PATH 里残留一个跑不起来的 tailscale，体检报 ✓「状态是 unknown；先 tailscale up 登录」——
+  // up 一样跑不起来，指错了路。探测失败就说跑不起来，带上它自己报的原因。
+  test('探测失败（找得到命令、status 跑不起来）→ 说跑不起来并带原因，不报 unknown、不劝 tailscale up', () => {
+    const broken = { found: true, backendState: '', dnsName: '', error: 'dyld: Library not loaded' };
+    const o = tailscaleDiagnostic({ ...broken, accessProfile: '' });
+    assert.equal(o.status, 'ok', '没声明 vpn 时 Tailscale 与 CCM 无关，不算问题');
+    assert.match(o.detail, /dyld: Library not loaded/);
+    assert.doesNotMatch(o.detail, /unknown|tailscale up/, 'tailscale up 同样跑不起来，这条指路是错的');
+    const w = tailscaleDiagnostic({ ...broken, accessProfile: 'vpn' });
+    assert.equal(w.status, 'warn', '声明了 vpn 而 tailscale 跑不起来，手机连不上');
+    assert.match(w.detail, /dyld: Library not loaded/);
+    assert.doesNotMatch(w.detail, /unknown|tailscale up/);
+    assert.doesNotMatch(tailscaleDiagnostic({ ...broken, accessProfile: '', lang: 'en' }).detail, /[一-鿿]/);
   });
 
   test('★ 脱敏：safe 只出 found / backendState / hasDnsName，MagicDNS 名与端口都不进 safe', () => {

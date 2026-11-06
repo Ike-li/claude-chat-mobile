@@ -95,17 +95,14 @@ export function listDir(cwd, relPath, scopeDirs, opts = {}) {
   return { entries, truncated: offset + maxEntries < names.length, totalCount: names.length };
 }
 
-export function readFile(cwd, relPath, scopeDirs, opts = {}) {
+// 范围门 → 特殊文件闸 → O_NOFOLLOW 打开 → 开后复核：readFile 与 /f/ 文件路由共用这一串，两边的判据不能分叉。
+// 成功回 { fd, size }，fd 归调用方关；其余返回值就是 readFile 的拒绝形状。
+export function openInScope(cwd, relPath, scopeDirs) {
   const real = resolveInScope(cwd, relPath, scopeDirs);
   if (real === null) return missingInScope(cwd, relPath, scopeDirs) ? { notFound: true } : null;
   // FIFO/设备/socket：open 会永久阻塞，必须在 open 前挡。范围内的合法东西、只是读不了，交回可判别值
   // （同下面的 blockedSymlink），不与越界同形（验收 O39）
   if (!isOpenableTarget(real)) return { notOpenable: true };
-  const offset = Math.max(0, opts.offset || 0);
-  const maxBytes = Math.min(opts.maxBytes > 0 ? opts.maxBytes : MAX_BROWSE_BYTES, MAX_BROWSE_BYTES);
-  // E18 附件预览：base64 模式——按字节精确分页返回该片 base64（二进制不拒绝、不做 UTF-8 尾裁剪，
-  // 拼装方是前端 Uint8Array，切在哪都无损）。范围门/硬顶与文本模式完全同权，模式只改编码不改安全。
-  const wantBase64 = opts.encoding === 'base64';
   // TOCTOU 缓解（登记为残余风险、非绝对防护）：O_NOFOLLOW 挡开时刻叶节点被替换为
   // symlink（ELOOP 直接拒绝）；读后再用 isInScope 复核一次真实落点，缓解 scope 校验与 open 之间的窗口替换。
   const NOFOLLOW = constants.O_NOFOLLOW || 0;
@@ -118,11 +115,25 @@ export function readFile(cwd, relPath, scopeDirs, opts = {}) {
     // 不把它当成 scope_violation 记审计噪音，也不报「不在授权范围内」这种文不对题的错误。
     return err?.code === 'ELOOP' ? { blockedSymlink: true } : null;
   }
+  const stat = isInScope(real, scopeDirs) ? fstatSync(fd) : null; // 读后复核
+  // 目录走 listDir，不是有效目标
+  if (!stat || stat.isDirectory()) {
+    closeSync(fd);
+    return null;
+  }
+  return { fd, size: stat.size };
+}
+
+export function readFile(cwd, relPath, scopeDirs, opts = {}) {
+  const opened = openInScope(cwd, relPath, scopeDirs);
+  if (opened?.fd === undefined) return opened;
+  const { fd, size: totalSize } = opened;
+  const offset = Math.max(0, opts.offset || 0);
+  const maxBytes = Math.min(opts.maxBytes > 0 ? opts.maxBytes : MAX_BROWSE_BYTES, MAX_BROWSE_BYTES);
+  // E18 附件预览：base64 模式——按字节精确分页返回该片 base64（二进制不拒绝、不做 UTF-8 尾裁剪，
+  // 拼装方是前端 Uint8Array，切在哪都无损）。范围门/硬顶与文本模式完全同权，模式只改编码不改安全。
+  const wantBase64 = opts.encoding === 'base64';
   try {
-    if (!isInScope(real, scopeDirs)) return null; // 读后复核
-    const stat = fstatSync(fd);
-    if (stat.isDirectory()) return null; // 目录走 listDir，不是 readFile 的有效目标
-    const totalSize = stat.size;
     const len = Math.max(0, Math.min(maxBytes, totalSize - offset));
     const buf = Buffer.alloc(len);
     const n = len > 0 ? readSync(fd, buf, 0, len, offset) : 0;

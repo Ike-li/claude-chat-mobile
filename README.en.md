@@ -7,9 +7,9 @@
 
 <p align="center">
   <a href="README.md">中文</a> ·
-  <a href="https://ike-li.github.io/claude-chat-mobile/">Website</a> ·
-  <a href="https://ike-li.github.io/claude-chat-mobile/demo/">Live demo</a> ·
-  <a href="https://ike-li.github.io/claude-chat-mobile/diagrams/">Architecture diagrams</a><br>
+  <a href="https://ccm.osolee.cc.cd/">Website</a> ·
+  <a href="https://ccm.osolee.cc.cd/demo/">Live demo</a> ·
+  <a href="https://ccm.osolee.cc.cd/diagrams/">Architecture diagrams</a><br>
   <a href="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml"><img src="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
@@ -18,22 +18,22 @@
 
 > The screenshots below show the Chinese UI. The app ships with an English locale too — switch it in Settings.
 
-![Sign-in and new-device approval](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
+![Sign-in and new-device approval](https://ccm.osolee.cc.cd/screenshots/01-login.webp)
 
-![Home screen, workspace list and the session drawer](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
+![Home screen, workspace list and the session drawer](https://ccm.osolee.cc.cd/screenshots/02-home.webp)
 
 <p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="Carrying on with coding from the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="Quota usage and background tasks">
+  <img src="https://ccm.osolee.cc.cd/screenshots/03-coding.webp" width="49%" alt="Carrying on with coding from the phone">
+  <img src="https://ccm.osolee.cc.cd/screenshots/04-usage.webp" width="49%" alt="Quota usage and background tasks">
 </p>
 
-![Switching to a third-party gateway model in session settings](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
+![Switching to a third-party gateway model in session settings](https://ccm.osolee.cc.cd/screenshots/05-gateways.webp)
 
-![Workspace file browser and slash commands](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
+![Workspace file browser and slash commands](https://ccm.osolee.cc.cd/screenshots/06-files.webp)
 
-![Settings and status, device management, notifications and lock-screen push](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
+![Settings and status, device management, notifications and lock-screen push](https://ccm.osolee.cc.cd/screenshots/07-settings.webp)
 
-![Service status, security events and the on-phone security check](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
+![Service status, security events and the on-phone security check](https://ccm.osolee.cc.cd/screenshots/08-ops.webp)
 
 ## Why use it
 
@@ -104,7 +104,7 @@ To change code or run tests, `git clone` the full repository instead. Configurat
 
 ## What it looks like
 
-**Try it before installing anything: [live demo](https://ike-li.github.io/claude-chat-mobile/demo/).** It runs this repo's real frontend (`app/public/` verbatim) with only the backend swapped for an in-browser script — workspace switching, streaming replies, tool calls, approval cards, file browsing, background tasks and the settings pages are all clickable, but **replies are canned and no model is ever called**.
+**Try it before installing anything: [live demo](https://ccm.osolee.cc.cd/demo/).** It runs this repo's real frontend (`app/public/` verbatim) with only the backend swapped for an in-browser script — workspace switching, streaming replies, tool calls, approval cards, file browsing, background tasks and the settings pages are all clickable, but **replies are canned and no model is ever called**.
 
 ## How it works
 
@@ -156,7 +156,7 @@ Read [deployment and operations](docs/deployment.md) (Chinese) before exposing i
 
 **Contributing**
 
-* **[Architecture guide](docs/architecture.en.md)** · [Architecture diagrams](https://ike-li.github.io/claude-chat-mobile/diagrams/)
+* **[Architecture guide](docs/architecture.en.md)** · [Architecture diagrams](https://ccm.osolee.cc.cd/diagrams/)
 * [Hard rules and tech debt](docs/hard-rules.md) (Chinese) · [Display contracts](docs/display-contracts.md) (Chinese)
 
 Config keys and commands are not maintained as static lists: `node scripts/config.js schema` prints the current definitions, and every CLI prints its own usage when run without a subcommand.

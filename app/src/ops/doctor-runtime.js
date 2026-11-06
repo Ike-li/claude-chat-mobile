@@ -142,7 +142,9 @@ export function probeTailscale({ platform: plat = platform(), execFile = execFil
     };
   };
   try {
-    return parse(execFile(bin, ['status', '--json'], { encoding: 'utf8', timeout: 3000 }));
+    // stdio 必须显式给：不给时 execFileSync 会把子进程 stderr 转写到本进程 stderr，坏掉的 tailscale 的报错
+    // 就夹进了 CLI doctor 的报告（2026-11-03 mini）。给了之后 stderr 只留在 err.stderr 里。
+    return parse(execFile(bin, ['status', '--json'], { encoding: 'utf8', timeout: 3000, stdio: 'pipe' }));
   } catch (err) {
     try {
       return parse(err?.stdout);
@@ -153,7 +155,9 @@ export function probeTailscale({ platform: plat = platform(), execFile = execFil
       if (/failed to connect to local tailscale/i.test(String(err?.stderr || ''))) {
         return { found: true, backendState: 'DaemonNotRunning', dnsName: '' };
       }
-      return { found: true, backendState: '', dnsName: '', error: String(err?.message || err) };
+      // 诊断要把原因原样念给用户：取 stderr 第一行，没有才退回 message 第一行（「Command failed: <路径>」读不出原因）。
+      const firstLine = (s) => String(s || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
+      return { found: true, backendState: '', dnsName: '', error: (firstLine(err?.stderr) || firstLine(err?.message || err)).slice(0, 200) };
     }
   }
 }

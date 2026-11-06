@@ -6,6 +6,28 @@
 import { dashboardDirs, displaySessionTitle, esc, folderReasonText, formatComposeDefaultsSummary, formatSessionRowTime, formatTopContextPillAriaLabel, isBlockedSurfaceTarget, recentsSnapshot, recentWorkspaceChips, resolveEmptySurface, resolveModelPillText, shouldShowComposer, shouldShowTopContextPill, summarizeRecentsLoad } from '../logic.js';
 import { t } from '../i18n.js';
 
+// 新会话页和空会话引导共用的三个起手提示。文案现取 t()：跟着当前语言走，不能提成模块常量。
+export function starterPromptsHtml() {
+  return `<div class="flex flex-col gap-2 w-full max-w-sm">
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('总结当前仓库结构并指出入口文件')}">${t('💡 总结当前仓库结构')}</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('帮我写一个最小改动的修复计划')}">${t('🛠 写一个最小修复计划')}</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('运行相关测试并解读失败')}">${t('🧪 运行测试并解读')}</button>
+        </div>`;
+}
+
+export function wireStarterPrompts(root, { haptic, inputEl }) {
+  root.querySelectorAll('.esg-prompt').forEach(btn => {
+    btn.onclick = () => {
+      haptic('tap');
+      if (inputEl) {
+        inputEl.value = btn.getAttribute('data-p') || '';
+        inputEl.focus();
+        inputEl.dispatchEvent(new Event('input'));
+      }
+    };
+  });
+}
+
 export function createEmptySurfaces(context, {
   $, approvals, baseName, btnHome, btnNew, btnSessions, dashUnreadMark, el, elicitationSheet, folderPicker, haptic,
   hideStatuslineWrap, inputEl, messagesEl, modelInput, newSessionWorktree, openLeftSidebar, panelCwd,
@@ -290,11 +312,7 @@ export function createEmptySurfaces(context, {
             </button>
           </div>
         </div>
-        <div class="flex flex-col gap-2 w-full max-w-sm">
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('总结当前仓库结构并指出入口文件')}">${t('💡 总结当前仓库结构')}</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('帮我写一个最小改动的修复计划')}">${t('🛠 写一个最小修复计划')}</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('运行相关测试并解读失败')}">${t('🧪 运行测试并解读')}</button>
-        </div>
+        ${starterPromptsHtml()}
       </div>`);
 
     // 照官方新会话页：胶囊就是「在哪开」的选择器（已连接的文件夹 / 子文件夹 / 无文件夹 / 添加文件夹）
@@ -303,16 +321,7 @@ export function createEmptySurfaces(context, {
       haptic('tap');
       folderPicker.open();
     };
-    container.querySelectorAll('.esg-prompt').forEach(btn => {
-      btn.onclick = () => {
-        haptic('tap');
-        if (inputEl) {
-          inputEl.value = btn.getAttribute('data-p') || '';
-          inputEl.focus();
-          inputEl.dispatchEvent(new Event('input'));
-        }
-      };
-    });
+    wireStarterPrompts(container, { haptic, inputEl });
 
     wireConfigRefreshButton(container.querySelector('.compose-defaults-refresh'));
 
@@ -353,27 +362,32 @@ export function createEmptySurfaces(context, {
   function dismissBlockedSurfaceIfTarget(sessionId, cwd) {
     if (isBlockedSurfaceTarget(blockedSurfaceTarget, { sessionId, cwd })) hideSessionBlockedSurface();
   }
+  // session:switch 的回执约定，所有入口共用。成功不必自己导航：服务端广播新 viewingInstanceId，
+  // setInstances→bindView 自然接管，这里只撤属于本次请求的落地页。ack 报错或 4s 没回执都走 onFailure，
+  // 不把反馈压在 ack 上。onAck 只在回执到达时调，先于上面两步；超时不调。
+  function switchSessionWithFallback({ sessionId, cwd }, { onFailure, ackFailureText = t('切换失败'), onAck }) {
+    let acked = false;
+    socket.emit('session:switch', { sessionId, cwd }, res => {
+      acked = true;
+      onAck?.(res);
+      if (res?.ok) dismissBlockedSurfaceIfTarget(sessionId, cwd);
+      else onFailure(res?.error || ackFailureText);
+    });
+    setTimeout(() => { if (!acked) onFailure(t('切换无响应，请刷新页面后重试')); }, 4000);
+  }
   function retryBlockedSession() {
     const target = blockedSurfaceTarget;
     if (!target?.sessionId) return;
     const btn = $('sessionBlockedRetry');
-    // 乐观禁用 + 4s 兜底恢复：与四个入口原本各自的 ack/超时约定同形，不新造一套。
+    // 乐观禁用，ack 或 4s 兜底时恢复。
     if (btn) btn.disabled = true;
-    let acked = false;
-    socket.emit('session:switch', { sessionId: target.sessionId, cwd: target.cwd }, res => {
-      acked = true;
-      if (btn) btn.disabled = false;
-      // 成功后不必自己导航：服务端广播新 viewingInstanceId，setInstances→bindView 自然接管。
-      // 按目标撤而不是无条件 hide：这次重试的 ack 可能迟到，期间用户已经点开别的会话并撞上
-      // 真实失败，此刻挂着的是那一张——无条件 hide 会把那条真实错误一起抹掉。
-      if (res?.ok) dismissBlockedSurfaceIfTarget(target.sessionId, target.cwd);
-      else setBlockedReason(res?.error || t('切换失败'));
+    const enableBtn = () => { if (btn) btn.disabled = false; };
+    // 按目标撤而不是无条件 hide：这次重试的 ack 可能迟到，期间用户已经点开别的会话并撞上
+    // 真实失败，此刻挂着的是那一张——无条件 hide 会把那条真实错误一起抹掉。
+    switchSessionWithFallback(target, {
+      onAck: enableBtn,
+      onFailure: message => { enableBtn(); setBlockedReason(message); },
     });
-    setTimeout(() => {
-      if (acked) return;
-      if (btn) btn.disabled = false;
-      setBlockedReason(t('切换无响应，请刷新页面后重试'));
-    }, 4000);
   }
   function showSessionBlockedSurface({ sessionId = null, cwd = null, title = '', message = '' } = {}) {
     const surface = $('sessionBlockedSurface');
@@ -450,20 +464,14 @@ export function createEmptySurfaces(context, {
       resumeBtn.onclick = (e) => {
         e.stopPropagation();
         haptic('tap');
-        // 乐观禁用 + ack/超时兜底恢复：对齐 dashboard 最近列表 switchToSession 的既有约定。
-        // 成功路径不必手动导航——服务端广播新 viewingInstanceId，setInstances→bindView 自然接管。
+        // 乐观禁用，失败时恢复。
         resumeBtn.disabled = true;
-        let acked = false;
-        const blocked = message => {
-          resumeBtn.disabled = false;
-          showSessionBlockedSurface({ sessionId: resume.sessionId, cwd: resume.cwd, message });
-        };
-        socket.emit('session:switch', { sessionId: resume.sessionId, cwd: resume.cwd }, res => {
-          acked = true;
-          if (!res?.ok) blocked(res?.error || t('切换失败'));
-          else dismissBlockedSurfaceIfTarget(resume.sessionId, resume.cwd); // 同上：迟到的成功 ack 要撤页
+        switchSessionWithFallback(resume, {
+          onFailure: message => {
+            resumeBtn.disabled = false;
+            showSessionBlockedSurface({ sessionId: resume.sessionId, cwd: resume.cwd, message });
+          },
         });
-        setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
       };
     }
     container.querySelector('.instance-destroyed-home').onclick = (e) => {
@@ -566,19 +574,12 @@ export function createEmptySurfaces(context, {
     const gen = ++_dashRecentsGen;
 
     const switchToSession = (s) => {
-      let acked = false;
-      const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: s.cwd, title: s.title, message });
       const perfOpen = perfTrace.openBegin(s.id, 'tap');
-      socket.emit('session:switch', { sessionId: s.id, cwd: s.cwd }, res => {
-        acked = true;
-        if (!res?.ok) { perfTrace.openEnd(perfOpen, 'error'); blocked(res?.error || t('切换失败')); }
-        else {
-          perfTrace.openStep(perfOpen, 'switch', { server: res.timing });
-          dismissBlockedSurfaceIfTarget(s.id, s.cwd); // 同上：迟到的成功 ack 要撤页
-        }
+      switchSessionWithFallback({ sessionId: s.id, cwd: s.cwd }, {
+        onAck: res => (res?.ok ? perfTrace.openStep(perfOpen, 'switch', { server: res.timing }) : perfTrace.openEnd(perfOpen, 'error')),
+        onFailure: message => showSessionBlockedSurface({ sessionId: s.id, cwd: s.cwd, title: s.title, message }),
       });
       prefetchHistory(perfOpen, s.id, s.cwd); // 同侧栏：历史不等切换回执，同时拉
-      setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     };
 
     const renderDashRecents = (recent) => {
@@ -727,5 +728,5 @@ export function createEmptySurfaces(context, {
     why.classList.toggle('hidden', !readonly);
   }
 
-  return { dismissBlockedSurfaceIfTarget, ensureEmptySurface, enterComposeReady, leaveComposeReady, refreshComposeDefaultsSummary, renderWorktreeChips, showComposeSurface, showDashboard, showInstanceDestroyedSurface, showSessionBlockedSurface, syncComposerVisibility, syncDashNoFolders, syncTopContextLabel, syncTopContextPillAriaLabel, syncTopContextPillVisibility };
+  return { ensureEmptySurface, enterComposeReady, leaveComposeReady, refreshComposeDefaultsSummary, renderWorktreeChips, showComposeSurface, showDashboard, showInstanceDestroyedSurface, showSessionBlockedSurface, switchSessionWithFallback, syncComposerVisibility, syncDashNoFolders, syncTopContextLabel, syncTopContextPillAriaLabel, syncTopContextPillVisibility };
 }

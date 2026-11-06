@@ -183,8 +183,7 @@ test('shouldRerenderSessionList: 旧服务端不发 pinned（两侧 undefined）
   }), false);
 });
 
-// 拖动排序只换目录顺序、不改集合：结构性指纹必须不变，否则调用方会把它当结构性变化去全量重建，
-// 顺带把 UX-007「当前工作区强制展开」误套在跟这次换序无关的目录上（回归：2026-10-26）。
+// 拖动排序只换目录顺序、不改集合：结构性指纹必须不变，否则调用方会把它当结构性变化去全量重建（回归：2026-10-26）。
 test('dirPanelStructuralKey: 纯换序（集合不变）指纹不变', () => {
   const a = dirPanelStructuralKey({ dirs: ['/root/a', '/root/b'], viewingInstanceId: 'i1', currentCwd: '/root/a' });
   const b = dirPanelStructuralKey({ dirs: ['/root/b', '/root/a'], viewingInstanceId: 'i1', currentCwd: '/root/a' });

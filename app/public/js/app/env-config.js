@@ -93,7 +93,9 @@ export function createEnvConfigPanel({
     });
     field.read = () => (box.checked ? item.values.on : item.values.off);
     field.el = box;
-    wrap.append(box, el('span', 'text-xs text-ink', text(item.label)));
+    // 键名与其它行一样标在右侧：文档、doctor、启动日志说的都是键名（2026-11-03 mini）。
+    wrap.append(box, el('span', 'text-xs text-ink flex-1 min-w-0', text(item.label)),
+      el('code', 'text-[10px] text-ink-faint shrink-0', item.key));
     return wrap;
   }
 

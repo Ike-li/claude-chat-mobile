@@ -107,6 +107,13 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
         if (p.approvalExpired && !p.interrupted) {
           return { ...withData({ ...identity('⏰ 审批已过期'), body: `等太久没批，操作没有执行 · 用时 ${secs}s` }), ntfyType: 'result_error' };
         }
+        // 不是用户按的停止：这一轮其实没干完，标题和标签都走 ⚠️，别让人当成自己点的（缺字段是旧事件，按手动算）
+        if (p.interrupted && p.interruptedBy === 'system:idle-watchdog') {
+          return { ...withData({ ...identity('⚠️ 任务超时中断'), body: `长时间无响应，已自动中断 · 用时 ${secs}s` }), ntfyType: 'result_error' };
+        }
+        if (p.interrupted && p.interruptedBy === 'cli') {
+          return { ...withData({ ...identity('⚠️ 任务被中断'), body: `不是手动停止 · 用时 ${secs}s` }), ntfyType: 'result_error' };
+        }
         const title = p.interrupted ? '⏹ 任务已中止' : (p.isError ? '⚠️ 任务出错' : '✅ 任务完成');
         return { ...withData({ ...identity(title), body: `用时 ${secs}s` }), ntfyType };
       }
