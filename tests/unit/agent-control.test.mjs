@@ -1137,6 +1137,68 @@ test.describe('中断路径也不得被 force 槽吃掉', () => {
   });
 });
 
+// 手动发送撞上 CLI 自己起的轮（2026-11-06，真 CLI 2.1.318 + 真 server + 假 API 实测）。
+// 后台任务完成或 Monitor 事件都会让 CLI 自己起一轮汇报，这一轮没有用户消息：它的 result 不带
+// user_message_uuid，也没有 lifecycle 帧。汇报轮等首字节期间账面还是 0，发送闸放行；Monitor 那一轮
+// 根本不记账，整轮都放行。人发的这条排在 CLI 队列里，线上次序是：
+//   command_lifecycle:queued(M2) → result(无 uuid，汇报轮) → command_lifecycle:started(M2) → … → result(uuid=M2)
+// 修之前 FIFO 把 M2 的槽结算给汇报轮：M2 还在跑，turnRunning 已是 false，停止钮消失、发送闸放行下一条。
+test.describe('CLI 自己起的轮不得结算还排在队列里的消息', () => {
+  const lifecycle = (state, commandUuid) => ({
+    type: 'command_lifecycle', command_uuid: commandUuid, state, uuid: 'frame-uuid', session_id: 's1',
+  });
+  const autoReportResult = {
+    type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {}, terminal_reason: 'completed',
+  };
+  // 手动发一条并送进 CLI 队列，返回它的 uuid
+  const sendIntoCliQueue = async (s, text) => {
+    assert.equal(await s.send(text), true, '前提：发送闸放行');
+    const { uuid } = s.queue.at(-1);
+    s.queue = [];                        // 已泵进 CLI
+    s.map(lifecycle('queued', uuid));
+    return uuid;
+  };
+
+  test('汇报轮的 result 不结算排队中的消息，它开跑后才由自己的 result 结算', async () => {
+    const { s } = makeSession();
+    s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
+    const uuid = await sendIntoCliQueue(s, '手动发的');
+
+    s.map(autoReportResult);
+    assert.equal(s.pendingTurns, 1, '这条还没跑，账面不能归零：否则 turnRunning=false，停止钮消失');
+    assert.equal(await s.send('第三条'), false, '在途轮期间发送闸不得放行');
+
+    s.map(lifecycle('started', uuid));
+    assert.equal(s.pendingTurns, 1);
+    s.map({ ...autoReportResult, user_message_uuid: uuid });
+    assert.equal(s.pendingTurns, 0, '它自己的 result 结算它自己');
+    assert.equal(s.isBusy(), false);
+    s.dispose();
+  });
+
+  // 实测：interrupt 回 {still_queued:[M2]}，只有汇报轮被腰斩，M2 紧接着开跑。修之前这一路最糟：
+  // interrupt() 清掉了 pendingAutoTurn，没有东西能把账合成回来，M2 整轮都没有停止钮。
+  test('点停止只腰斩汇报轮：排队的消息随后开跑，还能再停一次', async () => {
+    const { s } = makeSession();
+    s.q = { interrupt() { return Promise.resolve({ still_queued: [] }); }, setModel() { return Promise.resolve(); } };
+    const abortedResult = {
+      type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, modelUsage: {},
+      terminal_reason: 'aborted_streaming',
+    };
+    const uuid = await sendIntoCliQueue(s, '手动发的');
+
+    await s.interrupt();
+    s.map(abortedResult);
+    assert.equal(s.pendingTurns, 1, '被腰斩的是汇报轮，排队的这条还要跑');
+
+    s.map(lifecycle('started', uuid));
+    await s.interrupt();
+    s.map(abortedResult);
+    assert.equal(s.pendingTurns, 0, '这条已开跑，无 uuid 的中断 result 结算的就是它');
+    s.dispose();
+  });
+});
+
 // interrupted 只说「这一轮被腰斩了」，用户要知道的是「是不是我按的」：离线推送一度对看门狗和
 // 手动停止写同一句「任务已中止」，人回来会以为是自己点的。interruptedBy 是这个问题的答案。
 test.describe('中断来源 interruptedBy', () => {

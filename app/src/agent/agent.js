@@ -1157,12 +1157,23 @@ export class AgentSession {
   // 在途轮 settle 槽：与 pendingTurns 配平。forceSettled 槽吸收「已 force 清账后迟到的 result」。
   // msgUuid：本轮消息透传给 CLI 的 uuid（send 路径有；合成轮/后台任务这类无对应用户消息的槽为 null）。
   // result 上的 user_message_uuid 就是它，据此精确出槽，见 _settleOneResultTurn。
+  // cliQueued：CLI 报过 queued、还没报 started，见 _noteCommandLifecycle。
   _openTurnSlot(msgUuid = null) {
     this._interruptedBy = null; // 配对 result 可能永不到（见 _armInterruptSettleWatchdog），不能带进新一轮
     this._deniedNoticed.clear();
     const id = ++this._turnIdSeq;
-    this._openTurns.push({ id, forceSettled: false, msgUuid });
+    this._openTurns.push({ id, forceSettled: false, msgUuid, cliQueued: false });
     return id;
+  }
+
+  // CLI 对每条用户消息报 queued → started → completed（2.1.318 实测，本地命令也一样），command_uuid
+  // 就是 send 自打的 uuid。这里只认一件事：这条消息是不是还排在 CLI 队列里。排着的消息不可能产出 result，
+  // 而 CLI 自己起的轮（后台任务汇报、Monitor 事件）的 result 不带 uuid，靠这一位才分得开，见 _settleOneResultTurn。
+  // 不记 started/completed 的时序：completed 可能早于 result（消息在工具边界并进当前轮时实测如此），
+  // 结算只认 result。没有这些帧的 CLI 永远不置位，行为退回 FIFO。
+  _noteCommandLifecycle(msg) {
+    const slot = this._openTurns.find(s => s.msgUuid === msg.command_uuid);
+    if (slot) slot.cliQueued = msg.state === 'queued';
   }
 
   _forceSettleOpenTurns() {
@@ -1191,7 +1202,11 @@ export class AgentSession {
   //     2.1.225）在**正常完成**时逐字节等于本仓 send 自打并透传的 uuid；**被 interrupt 时是 undefined**。
   //  ② 判定为中断、但没有 uuid → 跳过 force 槽，消第一个真槽。依据：中断只可能中断「正在跑的那一轮」，
   //     不可能对应一个已被 force 清账、正等着迟到 result 的槽。这条专治 ① 覆盖不到的中断路径。
-  //  ③ 都不适用（合成轮、后台任务、旧 CLI 不发这些字段）→ 回落原来的 FIFO shift，语义不变。
+  //  ③ 都不适用（合成轮、后台任务、旧 CLI 不发这些字段）→ 回落 FIFO，语义不变。
+  //
+  // ② ③ 都跳过 cliQueued 的槽：还排在 CLI 队列里的消息不可能产出 result。没有 uuid 的 result 可能属于
+  // CLI 自己起的轮（后台任务汇报、Monitor 事件），汇报轮等首字节期间账面是 0，发送闸放行，人发的这条
+  // 就排在它后面。全部槽都在排队时这条 result 不结算任何槽（applied:false）。
   //
   // terminalReason 只用于判 ②，取值同 wasInterrupted：本仓的 _awaitingInterruptResult 只说明
   // 「我发过 interrupt」，CLI 的 aborted_* 才是「它确实被腰斩了」，两源取或。
@@ -1222,16 +1237,18 @@ export class AgentSession {
         return { applied: true, forceSettled: false };
       }
     }
-    // ② 中断且无 uuid：跳过 force 槽消第一个真槽（中断不可能对应已放弃的槽）
+    // ② 中断且无 uuid：跳过 force 槽消第一个真槽（中断不可能对应已放弃的槽，也不可能对应还没开跑的）
     if (this._awaitingInterruptResult || (terminalReason?.startsWith('aborted_') ?? false)) {
-      const idx = this._openTurns.findIndex(s => !s.forceSettled);
+      const idx = this._openTurns.findIndex(s => !s.forceSettled && !s.cliQueued);
       if (idx >= 0) {
         this._openTurns.splice(idx, 1);
         this.pendingTurns = Math.max(0, this.pendingTurns - 1);
         return { applied: true, forceSettled: false };
       }
     }
-    const t = this._openTurns.shift();
+    const idx = this._openTurns.findIndex(s => !s.cliQueued);
+    if (idx < 0 && this._openTurns.length) return { applied: false, forceSettled: false }; // 全在排队：这是 CLI 自己起的轮
+    const [t] = idx < 0 ? [] : this._openTurns.splice(idx, 1);
     if (!t) {
       // 无槽（旧单测只改 pendingTurns / SDK 多吐 result）：回落旧语义，防负值
       this.pendingTurns = Math.max(0, this.pendingTurns - 1);
@@ -3843,6 +3860,10 @@ export class AgentSession {
         this.sawTextDelta = false;
         break;
       }
+
+      case 'command_lifecycle':
+        this._noteCommandLifecycle(msg);
+        break;
 
       case 'rate_limit_event': {
         // 只有 rejected 才上屏——额度真耗尽、下一条消息发不出去，用户必须知道。
