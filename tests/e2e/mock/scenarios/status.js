@@ -61,6 +61,29 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      // 平级 / 托管 worktree 的会话：git.worktree 由真 server 的 gitStatus 判定（见 display-contracts）
+      command: 'test:statusline-worktree',
+      run: run(async ({ io, socket, activeEpoch, viewingInstanceId }) => {
+        const now = Date.now();
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: now,
+          instanceId: viewingInstanceId, // 与真 server refreshStatusLine 同形；缺了会落到 cwd 兜底被丢
+          type: 'status_line', payload: {
+            ts: now,
+            instanceId: viewingInstanceId,
+            model: 'claude-3-5-sonnet',
+            project: 'ccm-env-rows',
+            cwd: '/Users/you/code/claude-chat-mobile/.claude/worktrees/ccm-env-rows',
+            git: { branch: 'feat/env-rows', changed: 0, staged: 0, modified: 0, untracked: 0, ahead: 0, behind: 0, repo: 'Ike-li/claude-chat-mobile', worktree: true },
+          },
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'worktree statusline ready' },
+        });
+      }),
+    },
+    {
       // SDK 路径的额度陈值（对应 statusline.js applyRateFreshness / RATE_STALE_AFTER_MS）：本轮 RPC
       // 是"成功"的、不是快照回落，但数据采样于阈值之前。前端必须标"(非实时)"并说出多旧，而不是
       // 冒用只属于快照回落的"账号级旧值"文案——两者来源不同，混用会把判断依据说错。

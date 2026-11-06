@@ -199,6 +199,8 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 | `cost` / `duration` | 会话累计 | snapshot.cost | est $ / 时长 |
 | `rate` 5h/7d | `fetchUsage` rate_limits | snapshot.rate | 颜色阈值；可标 snapshot |
 | `git` | 本机 `git status` 三分 | 同（cwd 事实） | `+staged !mod ?untracked ↑↓` |
+| `git.worktree` | 本机 git：`--git-dir` 与 `--git-common-dir` 不同即 linked worktree | 同（cwd 事实） | 展开态末行的 `worktree` 标记；不按路径长相猜，仓库外的平级 worktree 也要标出来 |
+| `cwd` | 会话工作目录 | 路由 cwd，缺省取 snapshot.cwd（CLI 的 `workspace.current_dir`） | 展开态末行：`本电脑 · [worktree ·] 完整路径`，长路径只在分隔符处折行。**不进**「复制」文本：那份是贴公开 issue 的，路径里有本机用户名 |
 | `lines` | usage.session 改行 | cost.total_lines_* | 会话工具 +/− |
 | `turn` | turnStartedAt / outTokens | — | 动态 ✻ 秒表行 |
 | `session.id` / `version` | sessionId / versions.cli | bridge | sid / v |

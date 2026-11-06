@@ -61,7 +61,7 @@ export function parseRepo(url) {
   return parts.length >= 2 ? parts.slice(-2).join('/') : null;
 }
 
-// 返回 { branch, changed, staged, modified, untracked, ahead, behind, repo } 或 null
+// 返回 { branch, changed, staged, modified, untracked, ahead, behind, repo, worktree } 或 null
 // （非 git 仓库 / git 不可用 = 优雅缺席）。changed=总变更条数（向后兼容旧渲染）；staged/modified/untracked=三分。
 // 不再含 insertions/deletions（那是 web 独有 git 工作区 diff 口径；CLI 用会话工具累计 lines +/−，另走 usage）。
 export async function gitStatus(cwd) {
@@ -80,7 +80,11 @@ export async function gitStatus(cwd) {
     const lr = await execGit(['rev-list', '--left-right', '--count', 'HEAD...@{u}'], cwd);
     if (lr) { const [a, b] = lr.split(/\s+/).map(n => parseInt(n, 10)); ahead = a || 0; behind = b || 0; }
     const repo = parseRepo(await execGit(['config', '--get', 'remote.origin.url'], cwd));
-    data = { branch, changed, staged, modified, untracked, ahead, behind, repo };
+    // linked worktree 的 git-dir 与 common-dir 不同。必须取绝对路径：主工作树子目录下
+    // --git-common-dir 默认是相对路径，直接比字符串会误判。不认这个参数的老 git 行数对不上，按否处理。
+    const dirs = (await execGit(['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], cwd))?.split('\n');
+    const worktree = dirs?.length === 2 && dirs[0] !== dirs[1];
+    data = { branch, changed, staged, modified, untracked, ahead, behind, repo, worktree };
   }
   setLru(gitCache, cwd, { at: Date.now(), data }, GIT_CACHE_MAX);
   return data;

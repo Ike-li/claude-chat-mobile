@@ -245,7 +245,7 @@ export function createStatuslineView({
       p.lines && (p.lines.added || p.lines.removed) && { text: `lines +${p.lines.added || 0}/-${p.lines.removed || 0}`, cls: 'text-success' }
     ]));
     // 行D（会话身份/元数据，弱化为 faint）：repo │ sid
-    // 不含时钟（web 独有已删）；不含 pid/transcript/PR/wt（CLI 独有、SDK 路径不产出或不接）。
+    // 不含时钟（web 独有已删）；不含 pid/transcript/PR（CLI 独有、SDK 路径不产出或不接）。worktree 走行E。
     linesArr.push(row([
       p.git?.repo && { text: p.git.repo, cls: 'text-ink-faint' },
       p.session?.id && { text: `sid ${p.session.id.slice(0, 8)}`, cls: 'text-ink-faint' },
@@ -253,6 +253,18 @@ export function createStatuslineView({
       p.source?.kind === 'cli' && { text: t('来源：终端（CLI）'), cls: 'text-info' },
       p.source?.kind === 'sdk' && { text: t('来源：网页（SDK）'), cls: 'text-ink-faint' }
     ]));
+
+    // 行E（在哪干活）：本电脑 · [worktree ·] 完整路径。不进 row()：路径是这一行存在的理由，要能折行看全。
+    // 每段后放 <wbr>，只在分隔符处折行；break-all 会把目录名从中间断开。
+    if (p.cwd) {
+      const envLine = document.createElement('div');
+      envLine.className = 'text-ink-faint break-words';
+      envLine.dataset.testid = 'statusline-env';
+      envLine.append(span(t('本电脑'), 'text-ink-soft font-medium'), ' · ');
+      if (p.git?.worktree) envLine.append(span('worktree', 'text-accent font-medium'), ' · ');
+      for (const part of p.cwd.split(/(?<=[/\\])/)) envLine.append(part, document.createElement('wbr'));
+      linesArr.push(envLine);
+    }
 
     // 一次性替换：清空旧节点 + append 非空行（row 对空行返回 null）
     cliStatusEl.textContent = '';

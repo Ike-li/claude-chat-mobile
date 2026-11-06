@@ -38,6 +38,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-10h 展开态末行说清在哪干活：本电脑、完整路径，worktree 会话多一个标记', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:statusline');
+    await waitForIdle(page);
+    await page.locator('#cliStatusWrap summary').click();
+    const envLine = page.getByTestId('statusline-env');
+    await expect(envLine).toHaveText('本电脑 · /Users/you/code/claude-chat-mobile');
+
+    await sendChatMessage(page, 'test:statusline-worktree');
+    await waitForIdle(page);
+    await expect(envLine).toHaveText('本电脑 · worktree · /Users/you/code/claude-chat-mobile/.claude/worktrees/ccm-env-rows');
+    // 看完整路径是这一行存在的理由：窄屏上要折行，不能被面板的 overflow-hidden 裁掉
+    const clipped = await envLine.evaluate(el => el.scrollWidth > el.clientWidth);
+    expect(clipped, '长路径在 375px 下不得溢出被裁').toBe(false);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-10c 陈旧跨工作区状态线不会覆盖当前状态线', async ({ page }) => {
     await gotoMock(page);
 
