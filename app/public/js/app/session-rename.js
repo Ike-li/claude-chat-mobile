@@ -74,6 +74,5 @@ export function createSessionRenameController(context, {
   }
 
   const controller = { open };
-  context.state.sessionRename = controller;
   return controller;
 }

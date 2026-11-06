@@ -14,7 +14,6 @@ import {
   writeOwnerOnlyFile,
   isOwnerOnly,
   fixPermissions,
-  checkPermissions,
   resolveExecutableViaPath,
 } from '../../app/src/files/file-security.js';
 
@@ -107,7 +106,7 @@ test.describe('FILE-03: writeOwnerOnlyFile 原子写与 0600 权限', () => {
   });
 });
 
-test.describe('isOwnerOnly / fixPermissions / checkPermissions 权限审计与修复', () => {
+test.describe('isOwnerOnly / fixPermissions 权限审计与修复', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-inv-perms-'));
   test.after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -149,18 +148,6 @@ test.describe('isOwnerOnly / fixPermissions / checkPermissions 权限审计与�
 
     assert.equal(fixPermissions(d, true), true);
     assert.equal(isOwnerOnly(d, true), true);
-  });
-
-  test('checkPermissions 汇总不合规路径', { skip: process.platform === 'win32' }, () => {
-    const p1 = join(dir, 'ok.txt');
-    const p2 = join(dir, 'bad.txt');
-    writeFileSync(p1, 'ok');
-    chmodSync(p1, 0o600);
-    writeFileSync(p2, 'bad');
-    chmodSync(p2, 0o644);
-
-    const problems = checkPermissions([p1, p2, join(dir, 'missing.txt')], false);
-    assert.deepEqual(problems, [p2]);
   });
 });
 
@@ -267,31 +254,5 @@ test.describe('isDir 默认参数：不传时必须按【文件】判定，不�
     chmodSync(d, 0o755);
     fixPermissions(d, true);
     assert.equal(statSync(d).mode & 0o777, 0o700);
-  });
-});
-
-test.describe('checkPermissions 的 isDir 默认参数同样必须是 false', () => {
-  const base = mkdtempSync(join(tmpdir(), 'ccm-inv-checkperm-'));
-  test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
-
-  test('批量检查缺省按文件（0600）判定，不按目录（0700）', () => {
-    // doctor 用它批量体检控制面文件。默认值反了的话，所有 0600 的文件都会被报成
-    // 权限不合格，用户照着「修」反而修出带执行位的 0700。
-    const good = join(base, 'ok.json');
-    writeFileSync(good, '{}');
-    chmodSync(good, 0o600);
-    assert.deepEqual(checkPermissions([good]), [], '0600 文件在缺省参数下不应进问题列表');
-
-    const bad = join(base, 'loose.json');
-    writeFileSync(bad, '{}');
-    chmodSync(bad, 0o644);
-    assert.equal(checkPermissions([bad]).length, 1, '0644 才是问题');
-  });
-
-  test('显式 isDir=true 时按 0700 判定', () => {
-    const d = join(base, 'sub');
-    mkdirSync(d, { recursive: true });
-    chmodSync(d, 0o700);
-    assert.deepEqual(checkPermissions([d], true), []);
   });
 });

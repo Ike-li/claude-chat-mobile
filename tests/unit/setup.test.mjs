@@ -323,6 +323,32 @@ test('CLI：--config 写到别处时，仓库根已有 ccm.config.json 不挡', 
   }
 });
 
+// hooks 安装器的最后一行是给程序读的 JSON（server 一键安装、doctor、它自己的测试都靠它），向导原样透传的话，
+// 用户在中文报告后面看到一整行原始 JSON（2026-11-03 mini 全新安装核对）。HOME 与回环验证目录全指向一次性目录，
+// 探活钉到无人监听的端口——同 hooks-bridge-setup.test.mjs 的 runSetup，绝不碰真实 ~/.claude。
+test('CLI：--hooks=on → 安装器的报告照常给用户看，给程序读的 JSON 行不漏进向导输出', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-setup-hooks-'));
+  const home = join(dir, 'home');
+  try {
+    const res = spawnSync(process.execPath, [SETUP, '--yes', '--hooks=on', `--config=${join(dir, 'ccm.config.json')}`], {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env, LANG: 'C', HOME: home, USERPROFILE: home,
+        CLI_HOOKS_DIR: join(home, 'events'), CLI_HOOKS_ACKS_DIR: join(home, 'acks'), PORT: '9',
+      },
+      cwd: fileURLToPath(new URL('../..', import.meta.url)),
+    });
+    assert.equal(res.status, 0, res.stderr || res.stdout);
+    assert.ok(existsSync(join(home, '.claude', 'settings.json')), `前提：桥真装进了一次性 HOME：\n${res.stdout}`);
+    assert.match(res.stdout, /回环验证/, '安装器的人话报告要照常转给用户');
+    const jsonLines = res.stdout.split('\n').filter(l => l.trim().startsWith('{'));
+    assert.deepEqual(jsonLines, [], '给程序读的 JSON 行不该出现在向导输出里');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── 覆盖提示：说的必须是「将写入哪个文件」，不是「搜到了哪个文件」───────────
 //
 // runInteractive 此前自己又搜了一遍 [outPath, ccm.config.json, .env]，与 main() 已经算好的

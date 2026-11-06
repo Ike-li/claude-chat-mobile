@@ -174,14 +174,14 @@ export function createDeviceGate({
           const selfWrites = takeSelfWrites();
           const deniedPendingTokens = []; // CLI 拒绝的待审设备，本轮结束后断连（同 Web 侧 user:denyDevice）
           for (const token of nowTrustedSet) {
-            if (selfWrites.trustedAdded.has(token)) continue; // Web 侧批准：app.js 已记 via:'web'
+            if (selfWrites.trustedAdded.has(token)) continue; // Web / 终端侧批准：动作发生处已记 via:'web' / 'tty'
             if (!lastTrustedSet.has(token)) {
               console.log(`[devices] 检测到 ${trustedDevicesFile} 变更，设备 ${token} 新增信任（CLI）`);
               audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_approved', target: token, outcome: 'allowed', meta: { via: 'cli' } });
             }
           }
           for (const token of lastTrustedSet) {
-            if (selfWrites.trustedRemoved.has(token)) continue; // Web 侧吊销/拒绝：app.js 已记 via:'web'
+            if (selfWrites.trustedRemoved.has(token)) continue; // Web / 终端侧吊销、拒绝：动作发生处已记 via:'web' / 'tty'
             if (!nowTrustedSet.has(token)) {
               console.log(`[devices] 检测到 ${trustedDevicesFile} 变更，设备 ${token} 信任已被吊销（CLI）`);
               audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_revoked', target: token, outcome: 'denied', meta: { via: 'cli' } });
@@ -189,7 +189,7 @@ export function createDeviceGate({
           }
           for (const token of lastPendingSet) {
             // 本进程自己移出待审的两类，都不是「有人拒绝了它」，一律跳过：
-            //  · Web 侧的 denyDevice —— app.js 已记过一条 via:'web'；
+            //  · Web 侧与终端里的 deny —— 动作发生处已记过一条 via:'web' / 'tty'；
             //  · addPendingDevice 的容量淘汰（超过 MAX_PENDING_DEVICES 丢最旧）—— 那是容量策略，
             //    不记成拒绝。不跳过的话，第 51 台设备之后每来一台就伪造一条 device_denied，
             //    而审计是环形有上限的，伪造记录会把真实安全事件挤出去。

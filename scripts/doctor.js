@@ -27,7 +27,7 @@
 // 21. 监听地址自洽性（BIND_MODE/BIND_HOST 绑到哪、会不会让 server 拒绝启动，见 doctor-checks.bindDiagnostic）
 // 22. Tailscale 检测（不经 Cloudflare 的推荐公网路径；只探测 + 指路，不装不起不保活，见 doctor-checks.tailscaleDiagnostic）
 // 23. 设备审批管辖面（DEVICE_APPROVAL_SCOPE 写错的值运行时按较松的默认档跑，这里点名，见 doctor-checks.deviceApprovalScopeDiagnostic）
-import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, accessSync, constants, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
 import { join, dirname, basename } from 'node:path';
@@ -145,7 +145,7 @@ function checkClaudeBin() {
 // WORK_DIR 的退役一并删除。那个 `|| homedir()` 会让「没配工作区」的机器被 doctor 报成
 // 「WORK_DIR 可写 ✓」—— 检查的是家目录，而用户以为检查的是他的项目目录。
 function checkWorkDir() {
-  // 白名单各目录需可写。soft：问题用 warn（server 启动期对单个无效项告警跳过、不挡启动，
+  // 白名单各目录需可写。问题用 warn（server 启动期对单个无效项告警跳过、不挡启动，
   // doctor 与之一致——不因可选切换目录有问题就 fail 整个自检）。
   // 解析统一走 workdirs.js（与 server readWorkdirSource 单一事实源）：条目支持 string 或 {path, sessionLimit}。
   const { result, from, filePath, warnings: srcWarnings } = resolveWorkdirSource();
@@ -159,7 +159,7 @@ function checkWorkDir() {
     // WORK_DIRS：新用户配的是 ccm.config.json 的 WORKDIRS，报成 WORK_DIRS 会让他去找一个
     // 自己配置里根本不存在的键（2026-08-19 新装实测）。
     for (const w of result.warnings) warn(from, w);
-    for (const { path } of result.entries) checkOneDir(from, path, true);
+    for (const { path } of result.entries) checkOneDir(from, path);
     // 过宽根只报不拦（判据与写入侧同一个，见 workdirBreadthDiagnostic）。本机终端里逐条点名，路径可以出现。
     for (const dir of workdirBreadthDiagnostic({ dirs: result.entries.map(e => e.path), home: homedir(), lang: LANG }).broad) {
       warn(from, bi(
@@ -172,22 +172,16 @@ function checkWorkDir() {
   }
 }
 
-function checkOneDir(label, dir, soft = false) {
+function checkOneDir(label, dir) {
   if (!existsSync(dir)) {
-    if (soft) { warn(label, bi(`不存在: ${dir}（server 启动期会告警跳过此目录）`, `Missing: ${dir} (the server warns and skips it at startup)`)); return; }
-    try {
-      mkdirSync(dir, { recursive: true });
-      ok(label, bi(`不存在已创建: ${dir}`, `Did not exist; created: ${dir}`));
-    } catch (err) {
-      fail(label, bi(`不存在且无法创建: ${dir} — ${err.message}`, `Missing and could not be created: ${dir} — ${err.message}`));
-    }
+    warn(label, bi(`不存在: ${dir}（server 启动期会告警跳过此目录）`, `Missing: ${dir} (the server warns and skips it at startup)`));
     return;
   }
   try {
     accessSync(dir, constants.W_OK);
     ok(label, bi(`可写: ${dir}`, `Writable: ${dir}`));
   } catch {
-    (soft ? warn : fail)(label, bi(`存在但不可写: ${dir}`, `Exists but is not writable: ${dir}`));
+    warn(label, bi(`存在但不可写: ${dir}`, `Exists but is not writable: ${dir}`));
   }
 }
 
@@ -345,6 +339,21 @@ function checkStatuslineConfig() {
   (result.status === 'ok' ? ok : warn)(result.name, result.detail);
 }
 
+// 走子进程而不是 ops 的读函数：ops 版不查 ~/.claude 的符号链接，判定会和 npm run *:status 分叉。
+function readBridgeState(script) {
+  const raw = execFileSync(process.execPath, [join(HERE, 'scripts', script), 'status'], {
+    cwd: HERE,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 3000,
+  });
+  const parsed = JSON.parse(raw);
+  if (!['installed', 'not-installed', 'drifted'].includes(parsed?.state)) {
+    throw new Error('status 返回了未知状态');
+  }
+  return parsed.state;
+}
+
 // D6: CLI statusline bridge 安装态。status 子命令是只读探针：不创建 manifest、不改 settings。
 // 这里只消费 state，不回显 currentCommand，避免 doctor 输出用户自定义命令内容。
 function checkStatuslineBridge() {
@@ -352,17 +361,7 @@ function checkStatuslineBridge() {
   const bridgeOff = process.env.CLI_STATUSLINE_BRIDGE === 'off';
   let installState;
   try {
-    const raw = execFileSync(process.execPath, [join(HERE, 'scripts', 'statusline-bridge-setup.js'), 'status'], {
-      cwd: HERE,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 3000,
-    });
-    const parsed = JSON.parse(raw);
-    if (!['installed', 'not-installed', 'drifted'].includes(parsed?.state)) {
-      throw new Error('status 返回了未知状态');
-    }
-    installState = parsed.state;
+    installState = readBridgeState('statusline-bridge-setup.js');
   } catch (err) {
     if (webOff || bridgeOff) {
       const result = statuslineBridgeDiagnostic({ webOff, bridgeOff, installState: 'not-installed', lang: LANG });
@@ -382,17 +381,7 @@ function checkHooksBridge() {
   const bridgeOff = process.env.CLI_HOOKS_BRIDGE === 'off';
   let installState;
   try {
-    const raw = execFileSync(process.execPath, [join(HERE, 'scripts', 'hooks-bridge-setup.js'), 'status'], {
-      cwd: HERE,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 3000,
-    });
-    const parsed = JSON.parse(raw);
-    if (!['installed', 'not-installed', 'drifted'].includes(parsed?.state)) {
-      throw new Error('status 返回了未知状态');
-    }
-    installState = parsed.state;
+    installState = readBridgeState('hooks-bridge-setup.js');
   } catch (err) {
     if (bridgeOff) {
       const result = hooksBridgeDiagnostic({ bridgeOff, installState: 'not-installed', lang: LANG });
@@ -451,8 +440,8 @@ function checkAnthropicEnv() {
     return;
   }
   ok(NAME, bi(
-    `${targets.map(f => basename(f)).join(' / ')} 不含 ANTHROPIC_* 变量（正确；网关配置应从 shell export）`,
-    `${targets.map(f => basename(f)).join(' / ')} has no ANTHROPIC_* variables (correct: gateway config must come from the shell)`));
+    `${targets.map(f => basename(f)).join(' / ')} 不含 ANTHROPIC_* 变量（正确；网关配置写在 CLI 自己的 settings.json env 块或 shell export）`,
+    `${targets.map(f => basename(f)).join(' / ')} has no ANTHROPIC_* variables (correct: gateway config belongs in the CLI's own settings.json env block or a shell export)`));
 }
 
 
@@ -831,10 +820,16 @@ function fixConfigFiles() {
   const files = effectiveConfigFiles().map(f => f.path); // WS-011：--fix 修的是 effective 上下文的文件，与检查同源
 
   let fixed = 0;
+  let already = 0;
   let skipped = 0;
   for (const path of files) {
     if (!existsSync(path)) {
       skipped++;
+      continue;
+    }
+    // 本来就是 0600 的不算修复：此前一律 chmod 再计数，1 个过宽报成「修复完成: 6 个文件」（2026-11-03 mini）。
+    if (isOwnerOnly(path)) {
+      already++;
       continue;
     }
     if (fixPermissions(path)) {
@@ -845,5 +840,5 @@ function fixConfigFiles() {
     }
   }
 
-  console.log(`\n修复完成: ${fixed} 个文件，${skipped} 个跳过（不存在）\n`);
+  console.log(`\n修复完成: ${fixed} 个文件收紧到 0600，${already} 个本来就是 0600，${skipped} 个跳过（不存在）\n`);
 }

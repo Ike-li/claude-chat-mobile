@@ -395,19 +395,13 @@ const BUILTIN_SOCKET_EVENTS = new Set([
 
 // 目录递归收集 .js/.mjs（新增模块自动纳入扫描面，不靠手工登记文件清单）
 function listJsFiles(rootDir, dir) {
-  const files = [];
   let entries;
   try {
-    entries = readdirSync(join(rootDir, dir), { withFileTypes: true });
+    entries = readdirSync(join(rootDir, dir), { recursive: true });
   } catch {
-    return files; // 扫描根缺失（如测试夹具只建了一侧）→ 空面
+    return []; // 扫描根缺失（如测试夹具只建了一侧）→ 空面
   }
-  for (const entry of entries) {
-    const rel = join(dir, entry.name);
-    if (entry.isDirectory()) files.push(...listJsFiles(rootDir, rel));
-    else if (/\.(?:js|mjs)$/.test(entry.name)) files.push(rel);
-  }
-  return files.sort();
+  return entries.filter(rel => /\.(?:js|mjs)$/.test(rel)).map(rel => join(dir, rel)).sort();
 }
 
 // kind 'socket-server'：registrar 形 on(socket, 'x', …) + 裸 socket.on('x', …) 都算注册面

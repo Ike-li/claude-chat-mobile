@@ -242,41 +242,6 @@ export function isFileMutationTool({ name, changeKind } = {}) {
   return n === 'Edit' || n === 'Write' || n === 'MultiEdit' || n === 'NotebookEdit';
 }
 
-// 文本行数（用于 +/- 估算；空串 0；末尾换行按 split 自然计数）。
-export function countContentLines(text) {
-  if (text == null) return 0;
-  const s = String(text);
-  if (!s) return 0;
-  return s.split('\n').length;
-}
-
-// 从工具完整 input 估 +/- 行（与终端「一块旧/新文本」观感对齐；非精确 diff 算法）。
-export function estimateMutationLineStats(name, input = {}) {
-  const n = name != null ? String(name) : '';
-  if (n === 'Edit') {
-    return {
-      added: countContentLines(input?.new_string),
-      removed: countContentLines(input?.old_string),
-    };
-  }
-  if (n === 'MultiEdit') {
-    const edits = Array.isArray(input?.edits) ? input.edits : [];
-    let added = 0, removed = 0;
-    for (const e of edits) {
-      added += countContentLines(e?.new_string);
-      removed += countContentLines(e?.old_string);
-    }
-    return { added, removed };
-  }
-  if (n === 'Write') {
-    return { added: countContentLines(input?.content), removed: 0 };
-  }
-  if (n === 'NotebookEdit') {
-    return { added: countContentLines(input?.new_source), removed: 0 };
-  }
-  return { added: 0, removed: 0 };
-}
-
 // 本轮文件变更账本：key=path。同文件多次 Edit 累加 +/-，保留最后 toolUseId（点审核预览用）。
 // map: Map<path, { path, changeKind, toolUseId, name, added, removed }>
 export function accumulateTurnFileChange(map, event = {}) {

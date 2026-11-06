@@ -4,6 +4,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { notificationForEvent, ntfyMetaFor, describeDeliveryError } from '../../app/src/ops/notifications.js';
 
+// 锁屏上要一眼分清「我按的停止」和「不是我按的」：后者任务其实没干完，得回去看。
+test('非手动中断的推送说清不是手动停止，标签与标题同为 ⚠️；手动与缺字段保持 ⏹', () => {
+  const notify = interruptedBy => notificationForEvent('result',
+    { interrupted: true, isError: true, durationMs: 1000, ...(interruptedBy ? { interruptedBy } : {}) }, { hasClients: false });
+  const tagsOf = interruptedBy => ntfyMetaFor(notify(interruptedBy).ntfyType, {}, '').tags;
+
+  assert.match(notify('system:idle-watchdog').title, /⚠️ 任务超时中断/);
+  assert.match(notify('system:idle-watchdog').body, /长时间无响应，已自动中断 · 用时 1\.0s/);
+  assert.deepEqual(tagsOf('system:idle-watchdog'), ['warning']);
+
+  assert.match(notify('cli').title, /⚠️ 任务被中断/);
+  assert.match(notify('cli').body, /不是手动停止 · 用时 1\.0s/);
+  assert.deepEqual(tagsOf('cli'), ['warning']);
+
+  for (const by of ['user', undefined]) { // 回放的旧事件没有这个字段
+    assert.match(notify(by).title, /⏹ 任务已中止/);
+    assert.equal(notify(by).body, '用时 1.0s');
+    assert.deepEqual(tagsOf(by), ['stop_button']);
+  }
+});
+
 // 验收 O64：「⚠️ 任务出错」的 ntfy 推送 tags 仍是 white_check_mark，锁屏上显示成「✅ ⚠️ 任务出错」。
 // 标签要跟标题同一个判断：完成 ✅、出错 ⚠️、已中止 ⏹。
 test('result 的 ntfy 标签跟标题一致：出错不带 ✅，已中止也不带', () => {

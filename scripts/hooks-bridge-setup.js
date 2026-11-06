@@ -10,20 +10,9 @@
 
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  fsyncSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readConfigFileValues } from '../app/src/ops/config-file.js';
 import { resolveStableNodePath } from './node-path.js';
@@ -41,8 +30,12 @@ import {
   resolveHookDirs,
   scanHookEvents,
 } from '../app/src/ops/cli-hooks-bridge.js';
-import { claudeHome, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
-import { removeBridgeNamespace } from '../app/src/ops/bridge-namespace.js';
+import {
+  assertNoInstallerSymlinks,
+  atomicWriteInstallerJson,
+  removeBridgeNamespace,
+} from '../app/src/ops/bridge-namespace.js';
+import { shellQuote } from '../app/src/ops/log-terminal.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const RUNNER = join(ROOT, 'scripts', 'hooks-bridge.js');
@@ -58,61 +51,7 @@ const pathsForHome = hooksPathsForHome;
 const eventsDir = () => resolveHookDirs(process.env).eventsDir;
 const acksDir = () => resolveHookDirs(process.env).acksDir;
 
-function lstatIfPresent(path) {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
-function assertNoInstallerSymlinks(home, paths) {
-  const candidates = [
-    claudeHome(home),
-    ccmUnderClaudeHome(home),
-    ccmUnderClaudeHome(home, 'hooks-v1'),
-    paths.settings,
-    paths.manifest,
-  ];
-  for (const path of candidates) {
-    if (lstatIfPresent(path)?.isSymbolicLink()) {
-      throw new Error(`hooks bridge refused symbolic link path: ${path}`);
-    }
-  }
-}
-
-
-
-function atomicWriteJson(path, value, { privateParent = false } = {}) {
-  const parent = dirname(path);
-  mkdirSync(parent, { recursive: true, mode: privateParent ? 0o700 : 0o755 });
-  if (privateParent && process.platform !== 'win32') chmodSync(parent, 0o700);
-  const temporary = join(parent, `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
-  let fd;
-  let renamed = false;
-  try {
-    fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
-    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-    fsyncSync(fd);
-    closeSync(fd);
-    fd = undefined;
-    renameSync(temporary, path);
-    renamed = true;
-    if (process.platform !== 'win32') chmodSync(path, 0o600);
-  } finally {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* preserve original error */ }
-    }
-    if (!renamed) {
-      try { unlinkSync(temporary); } catch { /* absent or already cleaned */ }
-    }
-  }
-}
-
-function shellQuote(value) {
-  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
-}
+const assertNoSymlinks = (home, paths) => assertNoInstallerSymlinks(home, paths, 'hooks-v1', 'hooks bridge');
 
 // CCM_TEST_PLATFORM：仅测试用的平台覆盖开关，任何宿主 OS 上都能验证 win32 分支。
 function currentPlatform() {
@@ -145,7 +84,7 @@ function entriesOf(settings, event) {
 
 function status(home = homedir()) {
   const paths = pathsForHome(home);
-  assertNoInstallerSymlinks(home, paths);
+  assertNoSymlinks(home, paths);
   const settings = readClaudeSettings(paths.settings);
   const manifest = readHooksManifest(paths.manifest);
   return {
@@ -177,7 +116,7 @@ function applyInstall(settings, installedCommand, events) {
 
 function install(home = homedir()) {
   const paths = pathsForHome(home);
-  assertNoInstallerSymlinks(home, paths);
+  assertNoSymlinks(home, paths);
   const settings = readClaudeSettings(paths.settings);
   const existingManifest = readHooksManifest(paths.manifest);
 
@@ -188,8 +127,8 @@ function install(home = homedir()) {
     // manifest 在、settings 里却没有（或不完整）——中断的安装，按 manifest 补完。
     // 若用户是自己动过我们的条目（drifted），补完同样是把它恢复成 manifest 记录的形态。
     const containers = applyInstall(settings, existingManifest.installedCommand, existingManifest.events);
-    atomicWriteJson(paths.manifest, { ...existingManifest, ...containers }, { privateParent: true });
-    atomicWriteJson(paths.settings, settings);
+    atomicWriteInstallerJson(paths.manifest, { ...existingManifest, ...containers }, { privateParent: true });
+    atomicWriteInstallerJson(paths.settings, settings);
     return { state: 'installed', idempotent: false, recovered: true, installedCommand: existingManifest.installedCommand };
   }
 
@@ -205,14 +144,14 @@ function install(home = homedir()) {
   const containers = applyInstall(draft, installedCommand, HOOK_EVENT_LIST);
   // 写序：manifest 先落盘。中断在此 → 下次 install 走上面的 recovered 分支补完；
   // 反序（先改 settings）中断会留下一条无主 hook，卸载无从下手。
-  atomicWriteJson(paths.manifest, { installedCommand, events: HOOK_EVENT_LIST, ...containers }, { privateParent: true });
-  atomicWriteJson(paths.settings, draft);
+  atomicWriteInstallerJson(paths.manifest, { installedCommand, events: HOOK_EVENT_LIST, ...containers }, { privateParent: true });
+  atomicWriteInstallerJson(paths.settings, draft);
   return { state: 'installed', idempotent: false, installedCommand };
 }
 
 function uninstall(home = homedir()) {
   const paths = pathsForHome(home);
-  assertNoInstallerSymlinks(home, paths);
+  assertNoSymlinks(home, paths);
   const manifest = readHooksManifest(paths.manifest);
   if (!manifest) throw new Error('uninstall refused: hooks bridge manifest is missing');
   const settings = readClaudeSettings(paths.settings);
@@ -230,7 +169,7 @@ function uninstall(home = homedir()) {
   if (manifest.createdHooksObject && settings.hooks && !Object.keys(settings.hooks).length) {
     delete settings.hooks;
   }
-  atomicWriteJson(paths.settings, settings);
+  atomicWriteInstallerJson(paths.settings, settings);
   unlinkSync(paths.manifest);
   // 自己的命名空间（默认 events / acks 与 verify 回执）一并清掉；此前要等整体 npm run uninstall（验收 O35）
   removeBridgeNamespace(home, 'hooks-v1');

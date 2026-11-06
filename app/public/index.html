@@ -57,7 +57,7 @@
         class="w-full bg-sunk border border-line rounded-lg px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:ring-1 focus:ring-accent mb-2">
       <div id="authError" class="hidden text-xs text-danger mb-2"></div>
       <button id="authSubmit" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">进入</button>
-      <div class="text-xs text-ink-faint mt-4 leading-relaxed">令牌仅存于本机浏览器（localStorage），不上传。也可用 <code class="bg-sunk px-1 rounded">#token=值</code> 直接进入。令牌在服务器 <code class="bg-sunk px-1 rounded">ccm.config.json</code> 的 <code class="bg-sunk px-1 rounded">AUTH_TOKEN</code> 或启动日志里。<button id="authHelpLink" type="button" class="text-accent underline">不知道令牌？查看帮助</button></div>
+      <div class="text-xs text-ink-faint mt-4 leading-relaxed">令牌仅存于本机浏览器（localStorage），不上传。也可用 <code class="bg-sunk px-1 rounded">#token=值</code> 直接进入。令牌在服务器 <code class="bg-sunk px-1 rounded">ccm.config.json</code> 的 <code class="bg-sunk px-1 rounded">AUTH_TOKEN</code> 里（启动日志只显示掩码）。<button id="authHelpLink" type="button" class="text-accent underline">不知道令牌？查看帮助</button></div>
     </div>
   </div>
 
@@ -544,6 +544,7 @@
         <div id="fileBrowsePath" class="flex-1 min-w-0 text-xs font-mono text-ink-soft truncate"></div>
         <!-- CodeMirror 编辑+写回（files:write，见 file-browse.js writeFileInScope）：只在整份小文件在手
              （browse:read 带 contentHash）时出现；三态互斥，同一时刻只显其一。 -->
+        <button id="fileBrowseDownload" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-accent hover:bg-sunk active:scale-95" data-testid="file-download-btn">下载</button>
         <button id="fileBrowseEdit" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-accent hover:bg-sunk active:scale-95" data-testid="file-edit-btn">编辑</button>
         <button id="fileBrowseSave" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium bg-cta text-white active:brightness-95 disabled:opacity-50" data-testid="file-save-btn">保存</button>
         <button id="fileBrowseCancelEdit" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-ink-soft hover:bg-sunk active:scale-95" data-testid="file-cancel-edit-btn">取消</button>
@@ -699,15 +700,6 @@
         <button type="button" id="autoContinueAction" class="hit-44 shrink-0 px-2 py-1 rounded-lg border border-accent text-accent font-semibold active:scale-95" data-testid="auto-continue-action"></button>
       </div>
 
-      <!-- 只读镜像：状态写进 #input placeholder（替换「给 Claude 发消息...」），主操作在发送钮「续接 CLI 会话」。
-           #mirrorBanner 及旧按钮 id 仅兼容保留，恒 hidden。 -->
-      <div id="mirrorBanner" class="hidden" aria-hidden="true">
-        <span id="mirrorBannerIcon"></span>
-        <span id="mirrorBannerText"></span>
-      </div>
-      <button id="btnMirrorSync" type="button" class="hidden" tabindex="-1" aria-hidden="true">刷新消息</button>
-      <button id="btnMirrorOverride" type="button" class="hidden" tabindex="-1" aria-hidden="true">续接 CLI 会话</button>
-
       <!-- 下一步建议：每轮收尾后由模型预测的下一句（CCM_PROMPT_SUGGESTION 开关）。点一下【填进输入框、
            不自动发送】——手机上照着灰字手打这句话的成本比它省下的思考更高，只读提示在这里等于没有。
            放在 pill 之上而非 chips 区：建议是整句话，塞进那条横向滚动的 chip 行会被截得读不出来。
@@ -785,9 +777,6 @@
             <!-- 转后台（#459，终端 Ctrl+B）：有前台命令 / 子代理挡着本轮时才出现，见 app/foreground-tasks.js -->
             <button id="btnBackgroundTasks" type="button" class="hidden shrink-0 h-8 px-2.5 rounded-full border border-line text-xs font-medium text-ink-soft bg-surface active:bg-sunk disabled:opacity-50" title="把正在跑的前台命令 / 子代理转到后台，本轮继续（终端 Ctrl+B）" data-testid="btn-background-tasks">转后台</button>
 
-            <!-- 兼容性保留：隐藏的原 btnStop -->
-            <button id="btnStop" class="hidden pointer-events-none w-0 h-0" style="display: none !important;"></button>
-
             <!-- 空闲无内容时 JS 加 .hidden（C）；busy 停止 / 有内容发送 / 续接 均显示；无语音 -->
             <button id="btnSend" class="hidden flex items-center justify-center w-10 h-10 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0" title="发送" disabled>
               <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6">
@@ -810,14 +799,15 @@
       </div>
       <h2 class="text-xl font-semibold text-ink mb-2">🔒 等待授权</h2>
       <p class="text-sm text-ink-soft mb-4 leading-relaxed">
-        这是一台新设备。在你<strong class="text-accent">另一台已登录的设备</strong>上会弹出「新设备请求接入」，点一下「准入」即可——<strong class="text-accent">无需上电脑终端</strong>。
+        这是一台新设备，需要批准一次。手边有已登录的设备时，那台上会弹出「新设备请求接入」，点「准入」即可；<strong class="text-accent">这是第一台设备</strong>的话，只能在电脑上批准，见下方。
       </p>
       <div class="bg-sunk rounded-xl p-3 text-left border border-line-soft mb-4">
         <div class="text-xs text-ink-faint uppercase font-bold tracking-wider mb-1">本设备 ID</div>
         <code id="deviceModalId" class="font-mono text-xs break-all text-ink selection:bg-accent/20">generating...</code>
       </div>
-      <details class="text-xs text-ink-faint leading-relaxed text-left">
-        <summary class="cursor-pointer select-none">没有其它已登录的设备？用命令授权 ▾</summary>
+      <!-- 默认展开：第一台设备只有这一条路（2026-11-03 mini 全新安装核对） -->
+      <details open class="text-xs text-ink-faint leading-relaxed text-left">
+        <summary class="cursor-pointer select-none">第一台设备，或手边没有已登录的设备？在电脑上批准 ▾</summary>
         <div class="mt-1.5">在跑着 server 的那个终端窗口里按 <strong class="text-accent">回车键</strong> 一键同意最新设备，或在该项目目录下执行：
         <code class="block font-mono bg-sunk px-2 py-1 rounded text-ink mt-1.5 select-all border border-line-soft">node scripts/device.js approve "<span id="deviceModalCmdId">...</span>"</code></div>
       </details>
@@ -865,7 +855,7 @@
         </div>
         <div>
           <div class="font-semibold text-ink mb-1">🔑 访问令牌在哪</div>
-          <div class="text-ink-soft">在电脑上的 <code class="bg-sunk px-1 rounded text-xs">ccm.config.json</code> 里找 <code class="bg-sunk px-1 rounded text-xs">AUTH_TOKEN</code> 这一项（旧版装的是 <code class="bg-sunk px-1 rounded text-xs">.env</code>），或者跑 <code class="bg-sunk px-1 rounded text-xs break-all">node scripts/qr.js</code> 打一张二维码直接扫。启动日志只有第一次打印完整 URL，之后为防泄露只显示掩码，别照着它输。清除浏览器数据会一并清掉令牌，届时重输一次即可。</div>
+          <div class="text-ink-soft">在电脑上的 <code class="bg-sunk px-1 rounded text-xs">ccm.config.json</code> 里找 <code class="bg-sunk px-1 rounded text-xs">AUTH_TOKEN</code> 这一项（旧版装的是 <code class="bg-sunk px-1 rounded text-xs">.env</code>），或者跑 <code class="bg-sunk px-1 rounded text-xs break-all">node scripts/qr.js</code> 打一张二维码直接扫。启动日志里的令牌是掩码，别照着它输。清除浏览器数据会一并清掉令牌，届时重输一次即可。</div>
         </div>
         <div>
           <div class="font-semibold text-ink mb-1">🆕 新设备怎么获批</div>
@@ -1010,13 +1000,8 @@
 
       <!-- ═══ L1 目录 ═══ -->
       <div id="generalNavHome" data-testid="general-nav-home" class="space-y-2">
-        <!-- 「现在」区：只在有可行动的事时出现，无事整段消失（不留空占位）。由 app.js 渲染。 -->
-        <div id="generalNowSection" class="hidden space-y-1.5 p-2.5 rounded-xl border border-accent/30 bg-accent-wash/40" data-testid="general-now">
-          <div class="text-[11px] font-bold text-accent-deep tracking-wide">现在</div>
-          <div id="generalNowItems" class="space-y-1.5"></div>
-        </div>
         <!-- 六行目录由 app/general-nav.js 按 logic/general-nav.js 的判定渲染 -->
-        <div id="generalNavRows" class="space-y-2"></div>
+        <div id="generalNavRows" class="mt-2 space-y-2"></div>
         <!-- 底部两档（#302，app/local-reset.js）：「重新加载」不丢数据，「重置本机数据」清空这台设备上存的一切 -->
         <div class="pt-3 space-y-2" data-testid="local-reset">
           <button id="btnReloadApp" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">

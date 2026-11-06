@@ -39,13 +39,6 @@ export function themeHtmlAttribute(pref) {
   return pref === 'light' || pref === 'dark' ? pref : null;
 }
 
-/** L1 摘要 / 设置磁贴文案用的短标签（调用方再 t()）。 */
-export function themePrefLabelKey(pref) {
-  if (pref === 'light') return '浅色';
-  if (pref === 'dark') return '深色';
-  return '跟随系统';
-}
-
 /** PWA manifest href for a resolved palette (Web Manifest has no media queries). */
 export const MANIFEST_HREF = Object.freeze({
   light: '/manifest-light.webmanifest',

@@ -1,7 +1,7 @@
 // tests/unit/sanitizer.test.mjs —— sanitizer.js 纯函数单测（零 IO、零依赖）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitize, stripControlSequences, maskToken, sanitizePath } from '../../app/src/shared/sanitizer.js';
+import { sanitize, stripControlSequences, maskToken } from '../../app/src/shared/sanitizer.js';
 
 // ── stripControlSequences ──────────────────────────────────────────────────
 
@@ -164,24 +164,6 @@ test('maskToken: 空串 / null / undefined 返回 ***', () => {
   assert.equal(maskToken(undefined), '***');
 });
 
-// ── sanitizePath ───────────────────────────────────────────────────────────
-
-test('sanitizePath: macOS 用户目录被替换为 <home>', () => {
-  assert.equal(sanitizePath('/Users/you/code/project'), '<home>/code/project');
-});
-
-test('sanitizePath: Linux 用户目录被替换为 <home>', () => {
-  assert.equal(sanitizePath('/home/ubuntu/project'), '<home>/project');
-});
-
-test('sanitizePath: /tmp 路径被替换', () => {
-  assert.equal(sanitizePath('/tmp/myfile.txt'), '<tmp>/myfile.txt');
-});
-
-test('sanitizePath: /var 路径被替换', () => {
-  assert.equal(sanitizePath('/var/log/app.log'), '<var>/log/app.log');
-});
-
 // M1（2026-09-17 安全审查）：logs:server 把服务端自己的日志原样回给已鉴权会话，而启动横幅
 // 曾往日志里写完整的 `/#token=…`。链条是：经 Cloudflare Access 进来的会话默认**不需要**
 // AUTH_TOKEN（设备审批也 bypass），它读一次 logs:server 就能把 token 抠出来，之后可走 LAN、
@@ -225,15 +207,6 @@ test('sanitize: PEM 私钥跨行匹配——整段能脱，逐行必漏（调用
   assert.ok(lines.map(sanitize).join('\n').includes(body),
     '逐行脱敏漏私钥——这条断言是反面锚点：它一旦变红，说明模式改成单行可匹配了，'
     + '调用方那条「不得先 split」的约束可以放宽，注释要一起更新');
-});
-
-test('sanitizePath: 不匹配路径原样返回', () => {
-  assert.equal(sanitizePath('/etc/hosts'), '/etc/hosts');
-});
-
-test('sanitizePath: 非字符串返回空串', () => {
-  assert.equal(sanitizePath(null), '');
-  assert.equal(sanitizePath(undefined), '');
 });
 
 // ReDoS：#6/#7/#16/#17 的字段名部分是无锚点贪婪量词（[A-Za-z_]*），对纯字母串每个起始位都要 O(n)

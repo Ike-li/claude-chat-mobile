@@ -103,27 +103,3 @@ export function maskToken(token) {
   if (token.length < 12) return '***';  // 太短的 token 全部隐藏
   return `${token.slice(0, 4)}****${token.slice(-4)}`;
 }
-
-/**
- * 路径脱敏：隐藏用户主目录和工作目录（防止泄露文件系统结构）
- */
-export function sanitizePath(path) {
-  if (typeof path !== 'string') return '';
-
-  // 替换常见路径前缀
-  const replacements = [
-    [/\/Users\/[^/]+/g, '<home>'],         // macOS
-    [/\/home\/[^/]+/g, '<home>'],          // Linux
-    [/C:\\Users\\[^\\]+/gi, '<home>'],     // Windows
-    [/\/tmp\//g, '<tmp>/'],
-    [/\/var\//g, '<var>/'],
-    [/C:\\Windows\\/gi, '<windows>\\'],
-    [/C:\\Program Files/gi, '<program-files>'],
-  ];
-
-  for (const [pattern, replacement] of replacements) {
-    path = path.replace(pattern, replacement);
-  }
-
-  return path;
-}

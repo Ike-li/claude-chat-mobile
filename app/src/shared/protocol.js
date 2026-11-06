@@ -67,6 +67,7 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'elicitation:respond',
   'env:get',
   'env:set',
+  'file:open',
   'files:search',
   'files:write',
   'folders:add',

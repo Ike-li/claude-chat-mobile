@@ -147,6 +147,7 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
 .msg-body h1, .msg-body h2, .msg-body h3 { font-weight: 600; margin: .9rem 0 .4rem; line-height: 1.3; }
 .msg-body h1 { font-size: 1.3em; } .msg-body h2 { font-size: 1.18em; } .msg-body h3 { font-size: 1.05em; }
 .msg-body a { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
+a[data-file-path] { cursor: pointer; } /* 本机文件链接没有 href，浏览器不给手型 */
 .msg-body blockquote { border-left: 3px solid var(--line); padding-left: .8rem; margin: .5rem 0; color: var(--ink-soft); }
 /* 宽表格在自己内部横向滚动（同 GitHub markdown 的做法）：不然 375 宽下 12 列的表格把整个 #messages 撑出横向滚动、
    每格被压成一字一行（验收 O45） */
@@ -657,9 +658,6 @@ header {
   footer > .max-w-2xl {
     max-width: 640px !important;
   }
-  #statusPillsRow {
-    display: none !important; /* 已并入输入框底栏，保留选择器防旧缓存命中 */
-  }
   .status-pill-chip {
     min-height: 28px;
     padding: 0 0.5rem;
@@ -725,8 +723,7 @@ header {
     padding: 0.25rem 0.5rem !important;
     font-size: 16px !important;
   }
-  #btnSend,
-  #btnStop {
+  #btnSend {
     width: 40px !important;
     height: 40px !important;
   }
@@ -1063,7 +1060,7 @@ details.thinking.thinking-live > summary::before {
 }
 
 /* 驾驶态：底栏模型/权限/思考 chip 保持可见（只读冻结由 JS 拦截）；
-   驾驶提示仅靠上方 #mirrorBanner，不再隐藏设置 chip、不再注入「终端驾驶中」合并胶囊。 */
+   驾驶提示走 #input 的 placeholder，不再隐藏设置 chip、不再注入「终端驾驶中」合并胶囊。 */
 
 /* 工作区抽屉状态：文字是主语义，颜色仅辅助；会话行与目录行共用同一紧凑 chip。 */
 .drawer-status-chip {
@@ -1218,6 +1215,7 @@ details.thinking.thinking-live > summary::before {
 .cm-ccm-viewer .CodeMirror-linenumber { color: var(--ink-faint); }
 .cm-ccm-viewer .CodeMirror-cursor { border-left-color: var(--ink); }
 .cm-ccm-viewer .CodeMirror-selected { background: var(--accent-wash); }
+.file-target-line { background: var(--accent-wash); } /* 文件链接带的行号：CM 的行背景层和 <pre> 里拆出的 span 共用 */
 .cm-ccm-viewer .cm-comment { color: var(--ink-faint); }
 .cm-ccm-viewer .cm-string, .cm-ccm-viewer .cm-string-2 { color: var(--success); }
 .cm-ccm-viewer .cm-number, .cm-ccm-viewer .cm-atom { color: var(--accent-deep); }

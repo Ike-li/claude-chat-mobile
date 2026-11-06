@@ -1,7 +1,7 @@
 // tests/gates/check-playwright-forbidden-patterns.js —— Playwright 测试基建硬闸。
 // test.only/test.skip/test.fixme/networkidle/waitForTimeout 会隐藏回归或引入不确定等待；
 // 本脚本把禁止清单落成 npm run check / CI 都执行的确定性门禁。
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, extname, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -60,14 +60,10 @@ function findPromiseSleeps(text) {
   return hits;
 }
 
-function walk(dir, files = []) {
-  for (const entry of readdirSync(dir)) {
-    const p = join(dir, entry);
-    const st = statSync(p);
-    if (st.isDirectory()) walk(p, files);
-    else if (TARGET_EXTENSIONS.has(extname(p))) files.push(p);
-  }
-  return files;
+function walk(dir) {
+  return readdirSync(dir, { recursive: true })
+    .filter(rel => TARGET_EXTENSIONS.has(extname(rel)))
+    .map(rel => join(dir, rel));
 }
 
 // 根目录可注入（argv[2]），供自测在临时夹具上跑；缺省锚 ROOT。

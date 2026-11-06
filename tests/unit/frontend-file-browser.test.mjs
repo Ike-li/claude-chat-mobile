@@ -37,11 +37,17 @@ function harness() {
   const dom = {
     fileBrowseBody: fakeEl(), fileBrowseBack: fakeEl(), fileBrowsePath: fakeEl(),
     fileBrowseEdit: fakeEl(), fileBrowseSave: fakeEl(), fileBrowseCancelEdit: fakeEl(), fileBrowseSaveError: fakeEl(),
+    fileBrowseDownload: fakeEl(),
   };
   const head = fakeEl(); // 按需插入的 CodeMirror <script> 落在这里
   const context = createAppContext({ dom, dependencies: { document: { createElement: () => fakeEl(), head } } });
   const sent = []; // { event, payload, ack }：回执由用例决定何时、按什么顺序放行
-  context.setSocket({ emit: (event, payload, ack) => sent.push({ event, payload, ack }) });
+  const emit = (event, payload, ack) => sent.push({ event, payload, ack });
+  context.setSocket({
+    emit,
+    // socket.timeout(ms).emit 的回执多一个 err 位；超时这条路由 E2E 的真 socket.io 覆盖
+    timeout: () => ({ emit: (event, payload, ack) => emit(event, payload, response => ack(null, response)) }),
+  });
   const ctl = createFileBrowser(context, { createElement: () => fakeEl() });
   const pending = event => sent.filter(s => s.event === event);
   const rowNamed = name => dom.fileBrowseBody.children.find(row => row.children?.[1]?.textContent === name);
@@ -164,4 +170,47 @@ test('CodeMirror 核心已执行、语言 mode 还在路上时打开文件：等
   for (const script of head.children) if (script !== core) script.onload();
   await new Promise(setImmediate);
   assert.equal(editors.at(-1)?.getValue(), 'B\n', '整包到齐后 b.js 没挂上 CM');
+});
+
+const OPENED_FILE = { ok: true, root: '/w', relPath: 'link.txt', kind: 'file', name: 'link.txt', size: 1, media: null, url: '/f/ticket' };
+const LIST_WITH_OTHER = { ok: true, entries: [{ name: 'other.txt', kind: 'file', size: 1 }], truncated: false, totalCount: 1 };
+
+test('点了文件链接、回执没到就按返回：迟到的回执不得把列表换回那个文件', async () => {
+  const { ctl, pending, rowNamed } = harness();
+  ctl.openTarget('/w', { path: 'link.txt', line: null });
+  await ctl.back();
+  pending('browse:list')[0].ack(LIST_WITH_OTHER);
+
+  pending('file:open')[0].ack(OPENED_FILE);
+
+  assert.ok(rowNamed('other.txt'));
+  assert.equal(pending('browse:read').length, 0);
+});
+
+test('点了文件链接、回执没到就返回并打开别的文件：迟到的回执不得换掉正在打开的文件', async () => {
+  const { ctl, pending, rowNamed } = harness();
+  ctl.openTarget('/w', { path: 'link.txt', line: null });
+  await ctl.back();
+  pending('browse:list')[0].ack(LIST_WITH_OTHER);
+  rowNamed('other.txt').onclick();
+
+  pending('file:open')[0].ack(OPENED_FILE);
+
+  assert.deepEqual(pending('browse:read').map(request => request.payload.relPath), ['other.txt']);
+});
+
+test('下载时取票据失败：错误显示在工具行下，不动正在看的内容', () => {
+  const { ctl, dom, pending } = harness();
+  ctl.openTarget('/w', { path: 'link.txt', line: null });
+  pending('file:open')[0].ack(OPENED_FILE);
+  pending('browse:read')[0].ack({ ok: true, content: '', totalSize: 1, bytesRead: 0, truncated: false, binary: true });
+  pending('file:open')[1].ack(OPENED_FILE);
+  const shown = dom.fileBrowseBody.children.slice();
+
+  dom.fileBrowseDownload.onclick();
+  pending('file:open')[2].ack({ ok: false, error: '文件不存在' });
+
+  assert.equal(dom.fileBrowseSaveError.textContent, '无法下载：文件不存在');
+  assert.equal(dom.fileBrowseSaveError.classList.contains('hidden'), false);
+  assert.deepEqual(dom.fileBrowseBody.children, shown);
 });

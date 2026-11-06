@@ -1,6 +1,7 @@
 import { locationError } from '../sessions/session-location.js';
 import { realpathSync, openSync, readSync, closeSync, fstatSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, relative } from 'node:path';
+import { inlineTypeOf } from '../files/file-tickets.js';
 import { assertSafeRelPath } from '../files/git-workspace.js';
 import { isBareStoredName } from '../files/uploads.js';
 
@@ -9,6 +10,15 @@ export const OUT_OF_SCOPE_ERROR = '这个目录不在已连接的文件夹里';
 // 范围内的文件已经不在了（面板开着时被删、被改名）：列表是旧的，叫人刷新
 const NOT_FOUND_ERROR = '文件不存在（可能已被删除或改名），请刷新列表';
 
+// 范围内合法、只是读不了或已经不在的东西（FIFO、symlink、编辑器开着时被删）：不是越界，
+// 文不对题的错误信息与 scope_violation 审计噪音都会把真正的越界记录淹没（验收 O39 / O80）。
+function unreadableError(result) {
+  if (result?.blockedSymlink) return '目标是符号链接，暂不支持直接读取';
+  if (result?.notOpenable) return '这个文件类型不能预览';
+  if (result?.notFound) return NOT_FOUND_ERROR;
+  return null;
+}
+
 export function registerFileSocketHandlers({
   socket,
   on,
@@ -16,6 +26,8 @@ export function registerFileSocketHandlers({
   getWorkDirs,
   listDir,
   browseReadFile,
+  openInScope,
+  fileTickets,
   locateStoredAttachment,
   listGitChanges,
   readGitDiff,
@@ -43,6 +55,12 @@ export function registerFileSocketHandlers({
   readTranscriptToolResult = null,
   logger = console,
 }) {
+  // 越界拒绝的留痕：日志 + 审计。各路 ack 形状不同，留在调用点。
+  const denyScope = (warning, target, via, meta) => {
+    logger.warn(`[scope] ${warning}`);
+    audit.recordAudit({ actor: actorFromSocket(socket), action: 'scope_violation', target, outcome: 'denied', meta: { via, ...meta } });
+  };
+
   on(socket, 'browse:list', (payload, ack) => {
     if (typeof ack !== 'function') return;
     const { cwd: requestedCwd, relPath, offset, maxEntries } = payload || {};
@@ -53,14 +71,7 @@ export function registerFileSocketHandlers({
     if (result?.notDirectory) return ack({ ok: false, error: '不是目录' });
     if (result?.notFound) return ack({ ok: false, error: NOT_FOUND_ERROR });
     if (result === null) {
-      logger.warn(`[scope] 文件浏览越界拒绝（list）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
-      audit.recordAudit({
-        actor: actorFromSocket(socket),
-        action: 'scope_violation',
-        target: cwd,
-        outcome: 'denied',
-        meta: { via: 'browse:list', relPath: typeof relPath === 'string' ? relPath : null },
-      });
+      denyScope(`文件浏览越界拒绝（list）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`, cwd, 'browse:list', { relPath: typeof relPath === 'string' ? relPath : null });
       return ack({ ok: false, error: '路径不在授权范围内，或不是目录' });
     }
     return ack({ ok: true, ...result });
@@ -73,23 +84,10 @@ export function registerFileSocketHandlers({
     if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     // encoding:'base64' → 附件/二进制按片 base64 回传（E18 附件预览）；其余值走默认文本模式
     const result = browseReadFile(cwd, relPath, scopeDirsFor(cwd, getWorkDirs()), { offset, maxBytes, encoding });
-    if (result?.blockedSymlink) {
-      // 范围内的合法 symlink，不是越界——文不对题的错误信息与 scope_violation 审计噪音都会
-      // 让这条真实存在的记录淹没那些真正的越界尝试。
-      return ack({ ok: false, error: '目标是符号链接，暂不支持直接读取' });
-    }
-    // 同上：FIFO / socket 这类读不了的、编辑器开着时被删的，都不是越界（验收 O39 / O80）
-    if (result?.notOpenable) return ack({ ok: false, error: '这个文件类型不能预览' });
-    if (result?.notFound) return ack({ ok: false, error: NOT_FOUND_ERROR });
+    const unreadable = unreadableError(result);
+    if (unreadable) return ack({ ok: false, error: unreadable });
     if (result === null) {
-      logger.warn(`[scope] 文件浏览越界拒绝（read）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
-      audit.recordAudit({
-        actor: actorFromSocket(socket),
-        action: 'scope_violation',
-        target: cwd,
-        outcome: 'denied',
-        meta: { via: 'browse:read', relPath: typeof relPath === 'string' ? relPath : null },
-      });
+      denyScope(`文件浏览越界拒绝（read）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`, cwd, 'browse:read', { relPath: typeof relPath === 'string' ? relPath : null });
       return ack({ ok: false, error: '路径不在授权范围内，或不是文件' });
     }
     // 写回不可用（FILE_EDIT=off，组装根不注入 writeFileInScope）时不下发编辑基线：前端拿 contentHash 当「能不能点编辑」
@@ -99,6 +97,44 @@ export function registerFileSocketHandlers({
       return ack({ ok: true, ...readOnly });
     }
     return ack({ ok: true, ...result });
+  });
+
+  // 点消息里的文件链接：把模型写的路径换成 sheet 能定位的坐标，是文件再发一张 /f/ 票据。
+  // 模型的链接指到范围外（scratchpad、站点路径）很常见，点一下不是越界尝试：记成 scope_violation 服务面板
+  // 就红、环形审计里的真记录被挤掉。所以词法上就在范围外的只回文案，词法在范围内、经 symlink 逃出去的才记。
+  // 词法在范围内但走不通的（a.txt/b、带 NUL）分不清落点，和 browse:* 一样 fail-closed 按越界记。
+  on(socket, 'file:open', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const { cwd: requestedCwd, path } = payload || {};
+    const cwd = routeCwd(requestedCwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+    if (typeof path !== 'string') return ack({ ok: false, error: '路径不合法' });
+    const scopeDirs = scopeDirsFor(cwd, getWorkDirs());
+    // cwd 排第一：文件夹嵌套时 sheet 的根留在当前项目，不跑到父文件夹
+    const attribution = attributePath(path, [cwd, ...scopeDirs], cwd);
+    if (!attribution) return ack({ ok: false, error: '这个文件不在已连接的文件夹里' });
+    const { workDir: root, resolved } = attribution;
+    const relPath = relative(root, resolved); // attribution.relPath 对根本身回 basename，拼回去是错的
+    const name = basename(resolved);
+    const deny = () => {
+      denyScope(`文件链接越界拒绝：cwd=${cwd} path=${JSON.stringify(path)}`, cwd, 'file:open', { relPath: path });
+      return ack({ ok: false, error: '路径不在授权范围内，或不是文件' });
+    };
+
+    const listed = listDir(root, relPath, scopeDirs, { maxEntries: 1 });
+    if (listed === null) return deny();
+    if (listed.notFound) return ack({ ok: false, error: NOT_FOUND_ERROR });
+    if (!listed.notDirectory) return ack({ ok: true, root, relPath, kind: 'dir', name });
+
+    const opened = openInScope(root, relPath, scopeDirs);
+    if (opened === null) return deny();
+    const unreadable = unreadableError(opened);
+    if (unreadable) return ack({ ok: false, error: unreadable });
+    closeSync(opened.fd);
+    // bypass 连接（真本机 / CF Access）不在信任表里，绑了设备这张票据就永远取不到文件
+    const deviceToken = socket.trustBasis === 'device-token' ? socket.handshake.auth?.deviceToken : null;
+    const ticket = fileTickets.issue({ cwd: root, relPath, name, deviceToken });
+    return ack({ ok: true, root, relPath, kind: 'file', name, size: opened.size, media: inlineTypeOf(name)?.media ?? null, url: `/f/${ticket}` });
   });
 
   // E18 附件预览专用通道（2026-09-06 附件搬家时新开）。搬进 dataDir 后 browse:read 读不到附件了：
@@ -119,14 +155,7 @@ export function registerFileSocketHandlers({
       // 两种失败合成同一句：storedName 不是裸名（可疑输入）与文件确实不在（已删/从未上传）。
       // 分开回等于告诉调用方「这名字合法但文件不存在」，白送一个存在性探测器。只有前者进审计。
       if (!isBareStoredName(storedName)) {
-        logger.warn(`[scope] 附件读取越界拒绝：cwd=${cwd} storedName=${JSON.stringify(storedName)}`);
-        audit.recordAudit({
-          actor: actorFromSocket(socket),
-          action: 'scope_violation',
-          target: cwd,
-          outcome: 'denied',
-          meta: { via: 'attachment:read', storedName: typeof storedName === 'string' ? storedName.slice(0, 120) : null },
-        });
+        denyScope(`附件读取越界拒绝：cwd=${cwd} storedName=${JSON.stringify(storedName)}`, cwd, 'attachment:read', { storedName: typeof storedName === 'string' ? storedName.slice(0, 120) : null });
       }
       return ack({ ok: false, error: '附件不存在或已被删除' });
     }
@@ -177,14 +206,7 @@ export function registerFileSocketHandlers({
     if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const workDirs = getWorkDirs();
     if (!cwdInWorkDirs(cwd, workDirs)) {
-      logger.warn(`[scope] git status 越界拒绝：cwd=${cwd}`);
-      audit.recordAudit({
-        actor: actorFromSocket(socket),
-        action: 'scope_violation',
-        target: cwd,
-        outcome: 'denied',
-        meta: { via: 'git:status' },
-      });
+      denyScope(`git status 越界拒绝：cwd=${cwd}`, cwd, 'git:status');
       return ack({ ok: false, code: 'scope', error: '路径不在授权范围内' });
     }
     const result = await listGitChanges(cwd);
@@ -217,14 +239,7 @@ export function registerFileSocketHandlers({
     if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const workDirs = getWorkDirs();
     if (!cwdInWorkDirs(cwd, workDirs)) {
-      logger.warn(`[scope] git branches 越界拒绝：cwd=${cwd}`);
-      audit.recordAudit({
-        actor: actorFromSocket(socket),
-        action: 'scope_violation',
-        target: cwd,
-        outcome: 'denied',
-        meta: { via: 'git:branches' },
-      });
+      denyScope(`git branches 越界拒绝：cwd=${cwd}`, cwd, 'git:branches');
       return ack({ ok: false, code: 'scope', error: '路径不在授权范围内' });
     }
     const r = await listGitBranches(cwd);
@@ -243,25 +258,11 @@ export function registerFileSocketHandlers({
     if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const workDirs = getWorkDirs();
     if (!cwdInWorkDirs(cwd, workDirs)) {
-      logger.warn(`[scope] git diff 越界拒绝：cwd=${cwd}`);
-      audit.recordAudit({
-        actor: actorFromSocket(socket),
-        action: 'scope_violation',
-        target: cwd,
-        outcome: 'denied',
-        meta: { via: 'git:diff', relPath: typeof relPath === 'string' ? relPath : null },
-      });
+      denyScope(`git diff 越界拒绝：cwd=${cwd}`, cwd, 'git:diff', { relPath: typeof relPath === 'string' ? relPath : null });
       return ack({ ok: false, code: 'scope', error: '路径不在授权范围内' });
     }
     if (!assertSafeRelPath(cwd, relPath)) {
-      logger.warn(`[scope] git diff 路径拒绝：cwd=${cwd} path=${JSON.stringify(relPath)}`);
-      audit.recordAudit({
-        actor: actorFromSocket(socket),
-        action: 'scope_violation',
-        target: cwd,
-        outcome: 'denied',
-        meta: { via: 'git:diff', relPath: typeof relPath === 'string' ? relPath : null },
-      });
+      denyScope(`git diff 路径拒绝：cwd=${cwd} path=${JSON.stringify(relPath)}`, cwd, 'git:diff', { relPath: typeof relPath === 'string' ? relPath : null });
       return ack({ ok: false, code: 'bad_path', error: '路径不合法或不在工作目录内' });
     }
     const result = await readGitDiff(cwd, relPath, side);
@@ -295,14 +296,7 @@ export function registerFileSocketHandlers({
     if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const workDirs = getWorkDirs();
     if (!cwdInWorkDirs(cwd, workDirs)) {
-      logger.warn(`[scope] files:search 越界拒绝：cwd=${cwd}`);
-      audit.recordAudit({
-        actor: actorFromSocket(socket),
-        action: 'scope_violation',
-        target: cwd,
-        outcome: 'denied',
-        meta: { via: 'files:search' },
-      });
+      denyScope(`files:search 越界拒绝：cwd=${cwd}`, cwd, 'files:search');
       return ack({ ok: false, code: 'scope', error: '路径不在授权范围内' });
     }
     const paths = await searchFiles(cwd, query, { limit });
@@ -324,8 +318,7 @@ export function registerFileSocketHandlers({
     const meta = { relPath: typeof relPath === 'string' ? relPath : null };
     const result = writeFileInScope(cwd, relPath, content, scopeDirsFor(cwd, getWorkDirs()), { baseHash });
     if (!result.ok && result.code === 'scope') {
-      logger.warn(`[scope] 文件写回越界拒绝：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
-      audit.recordAudit({ actor: actorFromSocket(socket), action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'files:write', ...meta } });
+      denyScope(`文件写回越界拒绝：cwd=${cwd} relPath=${JSON.stringify(relPath)}`, cwd, 'files:write', meta);
       return ack(result);
     }
     // R10：成功写入的 target 记真实落点所属 workdir（宽 scope 允许跨区 relPath）。

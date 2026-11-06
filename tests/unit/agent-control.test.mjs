@@ -694,7 +694,7 @@ test.describe('fetchUsage()（statusline 5h/7d 数据源：实验性 usage RPC +
     s.dispose();
   });
 
-  test('RPC 超时 → null（不阻塞，照 statusline getContextUsageSafe 1500ms 模式）', async () => {
+  test('RPC 超时 → null（不阻塞）', async () => {
     const { s } = makeSession();
     s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}) }; // 永不 resolve
     assert.equal(await s.fetchUsage(10, { minIntervalMs: 0 }), null); // 10ms 超时
@@ -1133,6 +1133,159 @@ test.describe('中断路径也不得被 force 槽吃掉', () => {
     assert.equal(s.pendingTurns, 0, '中断的是在途轮，不该被已放弃的 force 槽吸收');
     assert.equal(s.isBusy(), false, '否则 spinner 与停止按钮永不消失');
     assert.equal(await s.send('next'), true, '否则用户被卡到静默看门狗(生产 10min)才能再发消息');
+    s.dispose();
+  });
+});
+
+// interrupted 只说「这一轮被腰斩了」，用户要知道的是「是不是我按的」：离线推送一度对看门狗和
+// 手动停止写同一句「任务已中止」，人回来会以为是自己点的。interruptedBy 是这个问题的答案。
+test.describe('中断来源 interruptedBy', () => {
+  const abortedResult = { type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10,
+    modelUsage: {}, terminal_reason: 'aborted_streaming' };
+  const interruptedEvent = events => events.find(e => e.type === 'system' && e.payload?.kind === 'interrupted');
+  const lastResult = events => events.filter(e => e.type === 'result').at(-1);
+
+  test('用户点停止：system 与 result 都标 user', async () => {
+    const { s, events } = makeSession();
+    s.q = { interrupt() { return Promise.resolve(); } };
+    s.pendingTurns = 1;
+    await s.interrupt(); // 真实用户点停止走的正是这条无参调用
+    s.map(abortedResult);
+    assert.equal(interruptedEvent(events)?.payload.interruptedBy, 'user');
+    assert.equal(lastResult(events).payload.interruptedBy, 'user');
+    s.dispose();
+  });
+
+  test('静默看门狗：system 与 result 都标 system:idle-watchdog，不能冒充用户', async () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 1 });
+    s.q = { interrupt() { return Promise.resolve(); } };
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    s.checkIdle();
+    await new Promise(r => setImmediate(r));
+    s.map(abortedResult);
+    assert.equal(interruptedEvent(events)?.payload.interruptedBy, 'system:idle-watchdog');
+    assert.equal(lastResult(events).payload.interruptedBy, 'system:idle-watchdog');
+    s.dispose();
+  });
+
+  test('本仓没发过 interrupt 的 aborted_*：result 标 cli，不算在用户头上', () => {
+    const { s, events } = makeSession();
+    s.map(abortedResult);
+    assert.equal(lastResult(events).payload.interrupted, true);
+    assert.equal(lastResult(events).payload.interruptedBy, 'cli');
+    s.dispose();
+  });
+
+  test('来源只归这一次：配对 result 之后再来的 aborted_* 标 cli', async () => {
+    const { s, events } = makeSession();
+    s.q = { interrupt() { return Promise.resolve(); } };
+    s.pendingTurns = 1;
+    await s.interrupt();
+    s.map(abortedResult);
+    s.map(abortedResult);
+    assert.equal(lastResult(events).payload.interruptedBy, 'cli');
+    s.dispose();
+  });
+
+  test('放弃等配对 result 后迟到的 result 仍归原发起者，否则会对按了停止的人说「不是手动」', async () => {
+    const { s, events } = makeSession();
+    s.pendingTurns = 1;
+    s.interruptSettleGraceMs = 20;
+    s.q = { interrupt() { return Promise.resolve(); } };
+    await s.interrupt();
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(s.pendingTurns, 0, '前提：兜底已清账');
+    s.map(abortedResult);
+    assert.equal(lastResult(events).payload.interruptedBy, 'user');
+    s.dispose();
+  });
+
+  test('清账后新开的一轮被 CLI 自己中止：标 cli，不沿用上一轮的 user', async () => {
+    const { s, events } = makeSession();
+    s.pendingTurns = 1;
+    s.interruptSettleGraceMs = 20;
+    s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
+    await s.interrupt();
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(await s.send('下一轮'), true);
+    s.map(abortedResult);
+    assert.equal(lastResult(events).payload.interruptedBy, 'cli');
+    s.dispose();
+  });
+
+  test('SDK 拒中断走强制收口：abort 前已缓冲的 aborted_* 仍归用户', async () => {
+    const { s, events } = makeSession();
+    s.q = { interrupt() { return Promise.reject(new Error('no task')); } };
+    s.pendingTurns = 1;
+    await s.interrupt();
+    s.map(abortedResult);
+    assert.equal(interruptedEvent(events)?.payload.interruptedBy, 'user');
+    assert.equal(lastResult(events).payload.interruptedBy, 'user');
+    s.dispose();
+  });
+
+  // await q.interrupt() 是让出点，CLI 可以先吐 aborted_* 再回控制应答。来源要在让出之前记好，
+  // 否则用户自己按的停止会被说成「不是手动」，紧接着的 system 事件又写 user，两边还对不上。
+  for (const by of ['user', 'system:idle-watchdog']) {
+    test(`配对 result 抢在控制应答之前到：仍归 ${by}`, async () => {
+      const { s, events } = makeSession();
+      s.pendingTurns = 1;
+      let ack;
+      s.q = { interrupt: () => new Promise(resolve => { ack = resolve; }) };
+      const stopping = s.interrupt(by);
+      await new Promise(r => setImmediate(r));
+      s.map(abortedResult);
+      ack();
+      await stopping;
+      assert.equal(lastResult(events).payload.interruptedBy, by);
+      assert.equal(interruptedEvent(events)?.payload.interruptedBy, by);
+      s.dispose();
+    });
+  }
+
+  test('账面为 0 时点停止没有 result 可带走来源，不能留给下一轮', async () => {
+    const { s, events } = makeSession();
+    s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
+    await s.interrupt(); // 纯后台任务期空输入也有停止钮
+    assert.equal(await s.send('下一轮'), true);
+    s.map(abortedResult);
+    assert.equal(lastResult(events).payload.interruptedBy, 'cli');
+    s.dispose();
+  });
+
+  test('只丢了未送达的消息：没有轮被中断，不留来源', async () => {
+    const { s, events } = makeSession();
+    s.pendingTurns = 1;
+    s.queue = [{ clientMessageId: 'm1' }]; // send 完成到输入泵取走之间的窄窗
+    s.q = { interrupt() { return Promise.resolve(); } };
+    await s.interrupt();
+    assert.equal(s.pendingTurns, 0);
+    s.map(abortedResult);
+    assert.equal(lastResult(events).payload.interruptedBy, 'cli');
+    s.dispose();
+  });
+
+  test('等控制应答期间才开的轮：_awaitingInterruptResult 算到它头上，来源也归发起者', async () => {
+    const { s, events } = makeSession();
+    let ack;
+    s.q = { interrupt: () => new Promise(resolve => { ack = resolve; }), setModel() { return Promise.resolve(); } };
+    const stopping = s.interrupt();
+    await new Promise(r => setImmediate(r));
+    assert.equal(await s.send('点停止后又发一条'), true);
+    ack();
+    await stopping;
+    s.map(abortedResult);
+    assert.equal(lastResult(events).payload.interruptedBy, 'user');
+    s.dispose();
+  });
+
+  test('没被中断的收尾不带来源：正常完成与 API 报错都不能显示成中断', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {}, terminal_reason: 'completed' });
+    assert.equal('interruptedBy' in lastResult(events).payload, false);
+    s.map({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, modelUsage: {}, terminal_reason: 'api_error' });
+    assert.equal('interruptedBy' in lastResult(events).payload, false);
     s.dispose();
   });
 });

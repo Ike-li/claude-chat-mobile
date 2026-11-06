@@ -326,11 +326,3 @@ test.describe('失败回执落在用户此刻看得见的那一层', () => {
     assert.equal(h.noticeText(), null);
   });
 });
-
-test('控制器挂进 context.state.drawer（调用方通过 context 取用，不走全局）', () => {
-  const h = harness();
-  assert.equal(h.context.state.drawer, h.ctl);
-  assert.equal(typeof h.context.state.drawer.openLeftSidebar, 'function');
-  assert.equal(typeof h.context.state.drawer.closeLeftSidebar, 'function');
-  assert.equal(typeof h.context.state.drawer.showNotice, 'function');
-});

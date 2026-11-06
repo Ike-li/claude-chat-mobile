@@ -58,8 +58,9 @@
 | `N1-METRICS` | `/metrics` 计数 | 内存；重启清零；**JSON 快照**，非 Prometheus 文本（单用户无 scraper 的默认运维面） | `app/src/ops/metrics.js` |
 | `N1-USAGE-SNAPSHOT` | 额度 / rate 快照 | 单例、不分账号 | `app/src/ops/statusline.js`（`usage-snapshot.js` 自身是纯函数，状态由调用方持有） |
 | `N1-MSG-DEDUP` | 消息去重 | 内存即可 | `app/src/server/app.js` 的 `messageDedupState`（`message-dedup.js` 同为纯函数） |
+| `N1-FILE-TICKET` | `/f/` 文件票据 | 内存；30 分钟过期，上限 200 张，重启全部失效，重新点链接就有新的 | `app/src/server/app.js` 的 `fileTickets`（`app/src/files/file-tickets.js`） |
 
-**硬约束**：历史回显走鉴权 `session:history`；**不开无鉴权 HTTP 数据端点**。
+**硬约束**：历史回显走鉴权 `session:history`；**不开无鉴权 HTTP 数据端点**。`GET /f/:ticket` 的鉴权是票据：只能由已过设备审批的 socket 签发，取文件时公网身份、设备信任、范围每次重查。它有意接受一条残余风险：非 IdP 入口上 URL 泄露后，有效期内能取这一个文件，因为 `<video>`、`<img>`、下载都带不了自定义头。判据和否决方案见 [architecture](architecture.md#鉴权与范围边界)。
 
 ### 2.3 安全哲学
 
@@ -91,7 +92,7 @@
 |----|------|
 | 出向 | 唯一信封 `agent:event`（`type` + `seq` + `epoch` + …） |
 | type 白名单 | **`app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 33 种） |
-| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 75 个） |
+| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 76 个） |
 | 门禁 | `npm run check` → `tests/gates/contract-check.js` / `agent-event-contract.js` |
 | 改 type | 必须同时改 protocol + 真实 emit 路径 + mock + 前端 handler（否则 check 红） |
 

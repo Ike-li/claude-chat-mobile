@@ -7,9 +7,28 @@
 // 只认两座桥的字面量目录名：路径各段都不来自外部输入。用户把 CLI_HOOKS_DIR 指到命名空间外的自定义目录，
 // 那不是我们建的，绝不碰。~/.claude/ccm 只剩空目录（或 macOS 的 .DS_Store）时一并移除，有别的东西就留着。
 
-import { readdirSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
-import { ccmUnderClaudeHome } from '../shared/claude-home.js';
+//
+// 两座桥的运行期代码和安装器还共用下面几个文件操作，写法要求一致：symlink 一律拒绝，
+// 写入走 O_EXCL 建的点前缀临时文件再 rename。
+
+import { randomUUID } from 'node:crypto';
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  renameSync,
+  rmdirSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { claudeHome, ccmUnderClaudeHome } from '../shared/claude-home.js';
 
 const BRIDGE_NAMESPACES = new Set(['hooks-v1', 'statusline-v1']);
 
@@ -30,4 +49,72 @@ export function removeBridgeNamespace(home, name) {
     entries = [];
   }
   if (!entries.length) rmdirSync(ccmDir); // safe-path: 非递归 rmdir，只删空目录，路径各段为字面量 + 注入 home
+}
+
+export function lstatIfPresent(path) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+export function assertNoInstallerSymlinks(home, paths, namespace, label) {
+  const candidates = [
+    claudeHome(home),
+    ccmUnderClaudeHome(home),
+    ccmUnderClaudeHome(home, namespace),
+    paths.settings,
+    paths.manifest,
+  ];
+  for (const path of candidates) {
+    if (lstatIfPresent(path)?.isSymbolicLink()) {
+      throw new Error(`${label} refused symbolic link path: ${path}`);
+    }
+  }
+}
+
+export function ensurePrivateDirectory(dir, label) {
+  const resolved = resolve(dir);
+  mkdirSync(resolved, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(resolved);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`${label} directory must be a real directory`);
+  }
+  if (process.platform !== 'win32') chmodSync(resolved, 0o700);
+  return resolved;
+}
+
+// 不并进 file-security.js 的 writeOwnerOnlyFile：它在 Windows 降级成直接写，
+// hooks inbox 可能读到半截 JSON。
+export function atomicWriteFile(path, text) {
+  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  let fd;
+  let renamed = false;
+  try {
+    fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    writeFileSync(fd, text, 'utf8');
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(temporary, path);
+    renamed = true;
+    if (process.platform !== 'win32') chmodSync(path, 0o600);
+    return path;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* preserve the original write error */ }
+    }
+    if (!renamed) {
+      try { unlinkSync(temporary); } catch { /* absent / already cleaned */ }
+    }
+  }
+}
+
+export function atomicWriteInstallerJson(path, value, { privateParent = false } = {}) {
+  const parent = dirname(path);
+  mkdirSync(parent, { recursive: true, mode: privateParent ? 0o700 : 0o755 });
+  if (privateParent && process.platform !== 'win32') chmodSync(parent, 0o700);
+  atomicWriteFile(path, `${JSON.stringify(value, null, 2)}\n`);
 }
