@@ -667,6 +667,7 @@ function createMockFolderTree() {
 }
 let mockFolderTree = createMockFolderTree();
 let mockEnvironments = []; // 保存的环境：/__set-environments 预置，environments:save 增改
+let mockBranchesHeld = null; // 数组＝git:branches 的回执先扣着，/__release-branches 才放行：确定性地撑开「分支还在路上」的窗口
 let mockAddedFolders = []; // folders:add 加进来的（绝对路径），并进 mockDirs()
 let mockFoldersAddError = null; // test:folders-readonly：模拟工作区列表来自环境变量的安装（真 server 回 source_readonly）
 let mockAutoModeDisabled = false; // /__arm-auto-mode-disabled：本区 settings 写了 disableAutoMode（#461）
@@ -690,6 +691,7 @@ let mockScenarioErrors = [];
 function resetMockState() {
   taskOutputPolls = 0;
   mockEnvironments = [];
+  mockBranchesHeld = null;
   mockResetGeneration += 1;
   resetAuthCooldown();
   mockApproveLog = [];
@@ -1042,6 +1044,18 @@ app.post('/__release-device-denial', (_req, res) => {
   heldDeviceDenial = null;
   if (release) release();
   res.json({ released: !!release });
+});
+
+app.post('/__hold-branches', (_req, res) => {
+  mockBranchesHeld = [];
+  res.json({ ok: true });
+});
+
+app.post('/__release-branches', (_req, res) => {
+  const held = mockBranchesHeld ?? [];
+  mockBranchesHeld = null;
+  for (const reply of held) reply();
+  res.json({ released: held.length });
 });
 
 app.post('/__set-environments', (req, res) => {
@@ -3324,7 +3338,9 @@ io.on('connection', socket => {
   // 让 E2E 能验"点开能选、选中回填"而不依赖宿主机有没有 git 仓库。
   socket.on('git:branches', (_payload, ack) => {
     if (typeof ack !== 'function') return;
-    ack({ ok: true, branches: ['dev', 'main', 'feature/login'], current: 'dev' });
+    const reply = () => ack({ ok: true, branches: ['dev', 'main', 'feature/login'], current: 'dev' });
+    if (mockBranchesHeld) mockBranchesHeld.push(reply);
+    else reply();
   });
   // 保存的环境（同真 server 的 socket-environments）：存在内存里，文件夹断开由预置数据的 available 声明
   socket.on('environments:list', (_payload, ack) => {

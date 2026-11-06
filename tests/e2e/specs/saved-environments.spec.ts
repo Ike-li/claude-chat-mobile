@@ -67,6 +67,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-ENV-2b 环境里的模型不在当前候选列表：选中后真的发得出去，不是只有胶囊写着', async ({ page }) => {
+    await openCompose(page, [{ id: 'e1', name: '自定义模型', cwd: HOME_REPO, model: 'my-custom-model', effort: null, worktree: false }]);
+    await page.getByTestId('compose-environment-chip').click();
+    await page.getByTestId('environment-row').filter({ hasText: '自定义模型' }).getByTestId('environment-select').click();
+    await expect(page.locator('#pillModelText')).toContainText('my-custom-model');
+    await expect(page.locator('#modelInput')).toHaveValue('my-custom-model');
+    await expect(page.getByTestId('compose-environment-chip')).toContainText('自定义模型');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-ENV-2c 分支还在路上就发第一条：环境要的 worktree 不能落空，否则改动全落到主工作树', async ({ page }) => {
+    await openCompose(page, [{ id: 'e1', name: 'React 隔离', cwd: OTHER_REPO, model: null, effort: null, worktree: true }]);
+    await page.request.post('/__set-connected-folders', { params: { dirs: `${HOME_REPO},${OTHER_REPO}` } });
+    await expect(page.getByTestId('compose-surface')).toBeVisible();
+    await page.request.post('/__hold-branches'); // 换文件夹后的 git:branches 回执先扣着，发完才放行
+
+    await page.getByTestId('compose-environment-chip').click();
+    await page.getByTestId('environment-row').filter({ hasText: 'React 隔离' }).getByTestId('environment-select').click();
+    await page.locator('#input').fill('马上开工');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#messages')).toContainText('worktree requested');
+    const { released } = await (await page.request.post('/__release-branches')).json();
+    expect(released, '回执得一直扣到消息发出之后，否则这条验的不是这个窗口').toBeGreaterThan(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-ENV-3 选「本电脑」还原默认设置，文件夹不动', async ({ page }) => {
     await openCompose(page, [{ id: 'e1', name: '隔离', cwd: HOME_REPO, model: 'claude-3-5-sonnet', effort: 'high', worktree: true }]);
     const chip = page.getByTestId('compose-environment-chip');

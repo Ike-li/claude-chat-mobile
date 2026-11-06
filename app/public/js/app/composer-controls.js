@@ -85,11 +85,12 @@ export function createComposerControls(context, {
 
   // 用户选定一个模型：磁贴和「选环境」共用
   function pickModel(val) {
+    // option 要先于赋值：环境里的模型可能不在当前候选里，select 赋一个没有的值会落空，胶囊写着它、发出去却是默认模型
+    if (val !== 'default') ensureModelOption(val);
     // value 保持 SDK 条目 id；发送时 resolveSendModel 再 pin wire
     modelInput.value = val === 'default' ? '' : val;
     modelIntent.markPicked(); // 用户点的才算发送意图（见 resolveOutgoingModel）
     delete modelInput.dataset.fullModel;
-    if (val !== 'default') ensureModelOption(val);
     syncModelUI(val === 'default' ? '' : val);
     rebuildEffortOptions(val === 'default' ? (getCwdDefaultModel() || getCurrentModel()) : val);
   }

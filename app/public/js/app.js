@@ -5261,9 +5261,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       composerControls.pickModel(env.model || 'default');
       // 不走 effortSelect：候选按当前模型渲染，选项列表里没有的档会被静默丢掉。服务端在没有实例时记成待应用档
       socket.emit('user:setEffort', { level: env.effort });
+      // worktree 当场勾上，不等分支：sheet 已经关了，这时发出的第一条要是没带意图，改动就全落到主工作树。
+      // 万一这里不是 git 仓库，发送会明确报错，不会静默回落。
+      newSessionWorktree.setEnabled(env.worktree);
       await newSessionWorktree.ensureBranches(env.cwd);
-      if (env.cwd !== currentCwd) return; // 等分支的时候用户又换了文件夹：别把勾选落到那边
-      newSessionWorktree.setEnabled(env.worktree && newSessionWorktree.isAvailable()); // 非 git 目录没有 worktree
+      if (env.cwd === currentCwd && !newSessionWorktree.isAvailable()) newSessionWorktree.setEnabled(false); // 非 git 目录没有 worktree
     },
   });
   // ⑧ 推送内容预览：本地偏好读写 + 改动时（若已授权通知权限）立即重新订阅，把新 prefs.preview 带给服务端
