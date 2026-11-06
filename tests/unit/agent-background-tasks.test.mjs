@@ -884,7 +884,8 @@ test.describe('buildAgentQueryOptions — Claude in Chrome 跟随终端的「默
     const { s, cleanup } = withGlobalConfig(JSON.stringify({ claudeInChromeDefaultEnabled: true }));
     t.after(cleanup);
     const opts = buildAgentQueryOptions(s, { ...process.env });
-    assert.deepEqual(opts.extraArgs, { chrome: null }, '终端能用浏览器工具而手机上不能——--chrome 没下发');
+    assert.equal(Object.hasOwn(opts.extraArgs ?? {}, 'chrome'), true, '终端能用浏览器工具而手机上不能——--chrome 没下发');
+    assert.strictEqual(opts.extraArgs.chrome, null, 'extraArgs 里 null 才是布尔开关，其他值会拼成 --chrome=<值>');
   });
 
   test('没开（false / 缺字段）→ 不传 --chrome，与终端一致', (t) => {
@@ -892,7 +893,7 @@ test.describe('buildAgentQueryOptions — Claude in Chrome 跟随终端的「默
       const { s, cleanup } = withGlobalConfig(JSON.stringify(cfg));
       t.after(cleanup);
       const opts = buildAgentQueryOptions(s, { ...process.env });
-      assert.equal('extraArgs' in opts, false, `用户没开却加载了浏览器工具（白占上下文）：${JSON.stringify(cfg)}`);
+      assert.equal(Object.hasOwn(opts.extraArgs ?? {}, 'chrome'), false, `用户没开却加载了浏览器工具（白占上下文）：${JSON.stringify(cfg)}`);
     }
   });
 
@@ -903,8 +904,39 @@ test.describe('buildAgentQueryOptions — Claude in Chrome 跟随终端的「默
       const { s, cleanup } = withGlobalConfig(content);
       t.after(cleanup);
       const opts = buildAgentQueryOptions(s, { ...process.env });
-      assert.equal('extraArgs' in opts, false);
+      assert.equal(Object.hasOwn(opts.extraArgs ?? {}, 'chrome'), false);
     }
+  });
+});
+
+// thinking 摘要（2026-11-06，claude-opus-5-5 同题真实请求各一轮，CLI 2.1.318）：默认 display:"updates" 回 0 字；
+// 设置 showThinkingSummaries 只是去掉 display，同样 0 字；显式 summarized 回 883 字，比正文早约 8 秒。
+// 缺陷形态是「手机上只有计时器在转」：回合照常成功，用户看不到模型在想什么，没有任何报错。
+test.describe('buildAgentQueryOptions — thinking 摘要', () => {
+  const sessionWith = (t, config) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-thinking-'));
+    const path = join(dir, '.claude.json');
+    if (config) writeFileSync(path, JSON.stringify(config));
+    const { s } = makeSession({ claudeGlobalConfigPath: path });
+    s.abort = new AbortController();
+    t.after(() => { s.dispose(); rmSync(dir, { recursive: true, force: true }); });
+    return s;
+  };
+
+  test('会话向 CLI 请求 summarized，手机才看得到思考过程', (t) => {
+    const opts = buildAgentQueryOptions(sessionWith(t), { ...process.env });
+    assert.equal(opts.extraArgs?.['thinking-display'], 'summarized', '没下发 --thinking-display：多数 thinking 块会是空的');
+  });
+
+  // 只动显示方式：带上 Options.thinking 会多一个 --thinking=adaptive，等于替用户决定开 thinking。
+  test('不设 Options.thinking，是否思考仍由 CLI 按模型和用户配置决定', (t) => {
+    const opts = buildAgentQueryOptions(sessionWith(t), { ...process.env });
+    assert.equal('thinking' in opts, false, 'Options.thinking 会让 SDK 多传 --thinking=adaptive');
+  });
+
+  test('开了 Claude in Chrome 时两个参数同时下发，互不覆盖', (t) => {
+    const opts = buildAgentQueryOptions(sessionWith(t, { claudeInChromeDefaultEnabled: true }), { ...process.env });
+    assert.deepEqual(opts.extraArgs, { 'thinking-display': 'summarized', chrome: null });
   });
 });
 
