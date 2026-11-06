@@ -681,8 +681,8 @@ const routeCwd = (cwd, { tier = 'open' } = {}) => {
   if (isNoFolderKey(target)) return explicit ? null : target;
   if (!explicit) return null; // 缺省目标不在当前授权里：拒，但不记越界——那不是请求方给的值
   // 已连接的文件夹（或其下的 worktree）运行中被删掉：配置要到重启 / 热加载才剔掉它，在那之前抽屉每 12 秒
-  // 对它发一次 session:list。照样拒，但那是「已经不在了」不是越界尝试——记了就是每小时 300 条，
-  // 几小时把环形审计里真正的安全记录挤光（2026-10-17、10-29 生产实况）。
+  // 对它发一次 session:list。照样拒，但那是「已经不在了」不是越界尝试——记了就是每个文件夹每小时 300 条
+  // （2026-10-17 生产两个文件夹 6.4 小时 3696 条，盖住了面板），不到一天就能写满环形审计，开始轮转掉真正的安全记录。
   if (isMissingInScope(cwd, workDirs) || isUnderVanishedRoot(cwd, workDirs)) return null;
   console.warn(`[scope] 越界工作目录请求被拒：${cwd} 不在已连接的文件夹里`);
   // 最小审计记录：routeCwd 调用点分散、多数无 socket 上下文可传 actor，此处 actor 留空——
@@ -5175,7 +5175,8 @@ registerSocketConnection(io, socket => {
     // DEVICE-03：actor.deviceId 与设备类动作的 target 是全量 deviceToken，也就是准入凭据——只给 shortId，
     // 理由同 trusted_devices：一台日后被吊销的设备手里不能还攥着别台的。在出口截而不是写入时截：
     // 磁盘上已有的历史记录同样要截。
-    const records = audit.listRecent({ limit }).map(r => ({
+    // 折叠连续重复：面板只看最新 20 行，周期性刷屏不能把设备、鉴权记录挤出这一屏（audit.js 的 collapseRuns）。
+    const records = audit.listRecent({ limit, collapse: true }).map(r => ({
       ...r,
       actor: { ...r.actor, deviceId: r.actor?.deviceId ? shortDeviceId(r.actor.deviceId) : null },
       target: String(r.action).startsWith('device_') && r.target ? shortDeviceId(r.target) : r.target,
