@@ -95,6 +95,40 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  async function pickWorktreeEnvironmentWhileBranchesHeld(page: Page) {
+    await openCompose(page, [{ id: 'e1', name: 'React 隔离', cwd: OTHER_REPO, model: null, effort: null, worktree: true }]);
+    await page.request.post('/__set-connected-folders', { params: { dirs: `${HOME_REPO},${OTHER_REPO}` } });
+    await expect(page.getByTestId('compose-surface')).toBeVisible();
+    await page.request.post('/__hold-branches');
+    await page.getByTestId('compose-environment-chip').click();
+    await page.getByTestId('environment-row').filter({ hasText: 'React 隔离' }).getByTestId('environment-select').click();
+    await expect(page.getByTestId('environment-picker')).toBeHidden();
+  }
+
+  test('P0-ENV-2d 读分支临时失败：不算「不是 git 仓库」，worktree 意图留着，建不出来由服务端说', async ({ page }) => {
+    await pickWorktreeEnvironmentWhileBranchesHeld(page);
+    await page.request.post('/__release-branches', { params: { reply: 'git_failed' } });
+    await expect(page.getByTestId('compose-environment-chip')).toContainText('React 隔离');
+
+    await page.locator('#input').fill('读分支失败也别落到主工作树');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#messages')).toContainText('worktree requested');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-ENV-2e 确认不是 git 仓库：这里没有 worktree，取消意图，chip 如实退回本电脑', async ({ page }) => {
+    await pickWorktreeEnvironmentWhileBranchesHeld(page);
+    await page.request.post('/__release-branches', { params: { reply: 'not_git' } });
+    await expect(page.getByTestId('compose-environment-chip')).toContainText('本电脑');
+
+    await sendChatMessage(page, 'test:fresh-settings-echo'); // 这条场景会开实例并收尾，普通消息在 mock 的空首页上收不了尾
+    await waitForIdle(page);
+    await expect(page.locator('#messages')).not.toContainText('worktree requested');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-ENV-3 选「本电脑」还原默认设置，文件夹不动', async ({ page }) => {
     await openCompose(page, [{ id: 'e1', name: '隔离', cwd: HOME_REPO, model: 'claude-3-5-sonnet', effort: 'high', worktree: true }]);
     const chip = page.getByTestId('compose-environment-chip');

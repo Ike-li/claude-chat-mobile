@@ -5262,10 +5262,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 不走 effortSelect：候选按当前模型渲染，选项列表里没有的档会被静默丢掉。服务端在没有实例时记成待应用档
       socket.emit('user:setEffort', { level: env.effort });
       // worktree 当场勾上，不等分支：sheet 已经关了，这时发出的第一条要是没带意图，改动就全落到主工作树。
-      // 万一这里不是 git 仓库，发送会明确报错，不会静默回落。
       newSessionWorktree.setEnabled(env.worktree);
-      await newSessionWorktree.ensureBranches(env.cwd);
-      if (env.cwd === currentCwd && !newSessionWorktree.isAvailable()) newSessionWorktree.setEnabled(false); // 非 git 目录没有 worktree
+      const { loadError } = await newSessionWorktree.ensureBranches(env.cwd);
+      // 只有确认不是 git 仓库才取消。超时、读分支失败时 isAvailable 同样是假，但那不等于没有 worktree：
+      // 留着意图，建不出来服务端会整条失败并说清原因，取消的话改动就静默落到主工作树了。
+      if (env.cwd === currentCwd && !loadError && !newSessionWorktree.isAvailable()) newSessionWorktree.setEnabled(false);
     },
   });
   // ⑧ 推送内容预览：本地偏好读写 + 改动时（若已授权通知权限）立即重新订阅，把新 prefs.preview 带给服务端
