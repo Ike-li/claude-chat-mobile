@@ -355,6 +355,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 - `app/src/agent/agent.js`：`AgentSession`、SDK 映射、权限闸门与环形缓冲。
 - `app/src/server/mirror-engine.js`：catchUp 追平调度与镜像状态机（状态自持）。
 - `app/src/server/auto-continue.js` / `app/src/agent/quota-auto-continue.js`：额度墙到点自动继续的调度（状态自持）与判定纯函数。
+- `app/src/server/send-gate.js`：发送闸。`prepare` 只判能不能往实例写，`deliver` 只发；无人值守模式另查驾驶员、不置换。
 - `app/src/sessions/history.js`：transcript 读取、历史重建与镜像判定纯函数。
 - `app/src/sessions/resume-anchor.js`：预测 CLI 续接会接上哪条链，以及「续接会丢掉一段对话」的发送闸。
 - `app/src/ops/cli-hooks-bridge.js` / `app/src/ops/cli-statusline-bridge.js`：CLI 侧信号与快照消费。
