@@ -340,6 +340,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 两者都走 `metrics.label()` 这张非数值上下文表，不进 `/metrics` 的数值面。
 
 安全日志段读 `audit:get`，这是 `data/audit-records.json` 的唯一读取面：只读、过 deviceApproved 闸、不开 HTTP 端点。
+读取时连续发生的相同记录折成一行（×N），周期性刷屏占不满面板那 20 行；盘上的记录不动。
 
 ### 服务告警与「需要你」是不同轴，绝不混判
 

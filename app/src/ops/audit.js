@@ -66,9 +66,9 @@ export function flushSaveSync() {
 // 相同，_seq 递增仍保证 id 唯一）。生产调用点不传，行为不变。
 //
 // 合并（2026-11-01）：与窗口内某条完全相同（actor、action、target、outcome、meta 逐字段相等）时不另起一条，
-// 只在那条上记 repeat（总次数）与 lastTs。一个周期性触发的拒绝（抽屉每 12 秒轮询一个已删掉的文件夹）
-// 曾以每小时 300 条的速度把上限里真正稀有的记录轮转掉。窗口从首条算起而不是滑动：持续的刷屏每分钟仍落一条
-// 新记录，排在最新处，看得出它还在发生。
+// 只在那条上记 repeat（总次数）与 lastTs。一个周期性触发的拒绝（抽屉每 12 秒轮询一个已删掉的文件夹）每个目标
+// 每小时 300 条：2026-10-17 生产 6.4 小时写下 3696 条，占掉上限的七成多，再久一点就会把真正稀有的记录轮转掉
+// （那次没有轮转到）。窗口从首条算起而不是滑动：持续的刷屏每分钟仍落一条新记录，排在最新处，看得出它还在发生。
 const MERGE_WINDOW_MS = 60_000;
 const sameEvent = (r) => JSON.stringify([r.actor, r.action, r.target, r.outcome, r.meta]);
 
@@ -93,10 +93,35 @@ export function recordAudit({ actor, action, target, outcome, meta, ts = Date.no
   return record;
 }
 
-export function listRecent({ limit = 100, action, since } = {}) {
+// 读取时折叠（2026-11-06）：面板只看最新 20 行，合并之后持续的刷屏仍是每分钟每个目标一条，两个目标 10 分钟就占满，
+// 设备、鉴权记录还在盘上却看不到。连续发生的相同记录只占一行：次数求和，ts / lastTs 取最新那条的。
+// 距上一次超过这个间隔算另一件事——一周重启三次是三件事，不能折成 ×3。只影响读取，盘上的记录不动。
+const RUN_GAP_MS = 5 * 60_000;
+
+function collapseRuns(records, limit) {
+  const rows = [];
+  const runs = new Map(); // 事件 → 它最近一段连续发生的行，和这一段目前最早的 ts
+  for (let i = records.length - 1; i >= 0; i--) {
+    const rec = records[i];
+    const key = sameEvent(rec);
+    const run = runs.get(key);
+    if (run && run.firstTs - (rec.lastTs ?? rec.ts) <= RUN_GAP_MS) {
+      run.row.repeat = (run.row.repeat ?? 1) + (rec.repeat ?? 1);
+      run.firstTs = rec.ts;
+    } else if (rows.length < limit) {
+      const row = { ...rec };
+      rows.push(row);
+      runs.set(key, { row, firstTs: rec.ts });
+    }
+  }
+  return rows;
+}
+
+export function listRecent({ limit = 100, action, since, collapse = false } = {}) {
   let rows = state.records;
   if (action) rows = rows.filter(r => r.action === action);
   if (typeof since === 'number') rows = rows.filter(r => r.ts >= since);
+  if (collapse) return collapseRuns(rows, limit);
   return rows.slice(-limit).reverse(); // 最新在前
 }
 

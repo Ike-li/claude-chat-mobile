@@ -131,7 +131,8 @@ test('显式越界：列表、历史、文件浏览都拒绝，拿不到另一�
 
 // 已连接的文件夹在 server 运行中被删掉（连同父目录）：配置只在启动 / 热加载时剔掉不存在的目录，在那之前
 // 广播里一直有它，抽屉每 12 秒对它发一次 session:list。照样拒，但那是「已经不在了」，不是越界尝试——
-// 记成 scope_violation 就是每小时 300 条，几小时把环形审计里真正的安全记录挤光（2026-10-17 生产实况）。
+// 记成 scope_violation 就是每个文件夹每小时 300 条（2026-10-17 生产两个文件夹 6.4 小时 3696 条），
+// 不到一天就能写满环形审计，开始轮转掉真正的安全记录。
 test('已连接的文件夹被删掉：照样拒绝，但不记越界审计', async () => {
   assert.deepEqual((await emit('session:list', { cwd: gone })).error, undefined, '前提：删掉之前它是已连接的文件夹');
   rmSync(join(root, 'gone-parent'), { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录下的子目录

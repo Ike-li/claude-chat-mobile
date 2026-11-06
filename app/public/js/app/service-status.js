@@ -252,6 +252,7 @@ export function createServiceStatus(context, {
     const [status, auditRes] = await Promise.all([
       emitServiceAck('service:status', {}),
       // 20 条：手机上一屏能扫完的量。环形上限是 5000，全量回传是白发几百 KB。
+      // 连续重复的记录服务端已折成一行（×N），周期性刷屏占不满这 20 行，别靠加大 limit 解决。
       emitServiceAck('audit:get', { limit: 20 }),
     ]);
     if (!status || status.ok !== true) return; // 断线/未审批设备无 ack：面板留旧值，不挂 spinner
