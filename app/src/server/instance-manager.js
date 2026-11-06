@@ -1,4 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { setCapped } from '../shared/bounded-map.js';
+
+const WRITES_LOST_NOTICE_MAX = 32;
 
 export function createInstanceManager() {
   let counter = 0;
@@ -21,6 +24,8 @@ export function createInstanceManager() {
   // 它们退出前还会往 transcript 追加收尾元数据，彻底删除必须等（见 waitForSessionExits）。
   // 空闲回收中的实例不在这里：它们带着 terminating 留在 agents 里，直到 consume 走完才被 onExit 清表。
   const exiting = new Set();
+  // sessionId → 磁盘写丢提示的正文，等这个会话下次发消息时补发。挂在会话上：报告到达时实例已经在退了。
+  const writesLostNotices = new Map();
 
   const nextId = () => `inst_${bootTag}_${++counter}`;
   const permissionModeOf = id => permissionModes.get(id) ?? 'default';
@@ -160,6 +165,16 @@ export function createInstanceManager() {
     unreadCounts.delete(id);
   }
 
+  function noteWritesLost(sessionId, text) {
+    setCapped(writesLostNotices, sessionId, text, WRITES_LOST_NOTICE_MAX);
+  }
+
+  function takeWritesLost(sessionId) {
+    const text = writesLostNotices.get(sessionId) ?? null;
+    writesLostNotices.delete(sessionId);
+    return text;
+  }
+
   return {
     agents,
     permissionModes,
@@ -185,5 +200,7 @@ export function createInstanceManager() {
     remove,
     waitForSessionExits,
     sessionExitPromises,
+    noteWritesLost,
+    takeWritesLost,
   };
 }
