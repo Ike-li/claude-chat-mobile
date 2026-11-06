@@ -572,6 +572,7 @@ export const EN_DICT = Object.freeze({
   '已被 settings 禁用（disableAutoMode）': 'Disabled by settings (disableAutoMode)',
   '来源：终端（CLI）': 'source CLI',
   '来源：网页（SDK）': 'source Web SDK',
+  '本电脑': 'This computer',
   '刚有一次登录失败，{n} 秒后自动重试': 'A sign-in attempt just failed; retrying automatically in {n}s',
   '还没有已信任的设备：局域网 / 本机直连批准过的设备会列在这里。': 'No trusted devices yet. Devices approved over LAN or local direct connections will be listed here.',
   '全文过长，只显示了开头': 'Output too long — showing only the beginning',

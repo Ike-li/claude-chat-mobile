@@ -33,6 +33,7 @@ import {
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { toolResultCap, TOOL_SUMMARY_CAP, TOOL_SUMMARY_CAP_BASH } from '../../app/src/shared/tool-summary.js';
 import { getProjectDir, getSessionHistory } from '../../app/src/sessions/history.js';
 
@@ -299,6 +300,29 @@ test.describe('契约 §3 Statusline：结构化对齐；ctx 不误导；折叠�
     );
     assert.equal(formatStatuslineCollapsedSummary({ model: 'x' }), 'statusline');
     assert.equal(formatStatuslineCtxBrief({ tokens: 12_500 }), 'ctx 13k');
+  });
+
+  test('git 段标明是否在 linked worktree：看 git 自己的判定，不看路径长相', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ccm-dc-worktree-'));
+    try {
+      const main = join(root, 'main');
+      mkdirSync(join(main, 'sub'), { recursive: true });
+      const git = (...args) => execFileSync('git', ['-C', main, ...args], { stdio: 'pipe' });
+      git('init', '-b', 'main');
+      git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test', '-c', 'commit.gpgsign=false',
+        'commit', '--allow-empty', '-m', 'init');
+      // 仓库外的平级目录：路径里没有 .claude/worktrees，按路径猜的实现抓不到它
+      const sibling = join(root, 'sibling');
+      git('worktree', 'add', sibling, '-b', 'wt');
+      const gitOf = async cwd => (await buildCliStatusLine({ snapshot: {}, cwd })).git;
+
+      assert.equal((await gitOf(sibling)).worktree, true, '平级 worktree 必须标出来');
+      assert.equal((await gitOf(main)).worktree, false, '主工作树不是 worktree');
+      // 主工作树子目录下 --git-common-dir 是相对路径，直接比字符串会误判
+      assert.equal((await gitOf(join(main, 'sub'))).worktree, false, '主工作树的子目录不是 worktree');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test('ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）', async () => {
