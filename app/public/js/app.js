@@ -178,6 +178,7 @@ import { createOutboxDeadLetters } from './app/outbox-dead-letters.js';
 import { createSessionWorkspaceState } from './app/session-workspaces.js';
 import { createProjectsState } from './app/projects-state.js';
 import { createFolderPicker } from './app/folder-picker.js';
+import { createSavedEnvironments } from './app/saved-environments.js';
 import { createInteractionQueueState, createApprovalController } from './app/approval-questions.js';
 import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
@@ -5213,7 +5214,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // 新会话的 worktree 意图（勾选态 / 源分支 / 建好的路径）。onChange 只重绘空首页那一块——
   // 整页重绘会把用户已经敲进输入框的字冲掉。
   const newSessionWorktree = createNewSessionWorktree(appContext, {
-    onChange: () => { try { renderWorktreeChips(); } catch { /* 空首页未渲染时无事可做 */ } },
+    onChange: () => { try { renderWorktreeChips(); savedEnvironments.renderChips(); } catch { /* 空首页未渲染时无事可做 */ } },
   });
   // 「这一个新会话页」的标识：离线重放时同一页的几条并成一个会话、另开的一页各开各的（见 compose-page.js）
   const composePage = createComposePage();
@@ -5244,6 +5245,26 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     getScratchRoot: () => projectsState.scratchRoot(),
     getFoldersReadonly: () => projectsState.foldersReadonly(),
     onPick: cwd => startNewSessionIn(cwd),
+  });
+  // 新会话页的「环境」：一次带上文件夹、模型、effort、worktree
+  const savedEnvironments = createSavedEnvironments({
+    $, el, socket, openSheet, closeSheet, appConfirm, haptic, messagesEl,
+    getCurrent: () => ({
+      cwd: currentCwd,
+      model: modelInput.dataset.fullModel || modelInput.value,
+      effort: currentEffort,
+      worktree: newSessionWorktree.isEnabled(),
+    }),
+    canSave: cwd => Boolean(cwd) && !projectsState.isNoFolder(cwd),
+    applyToCompose: async env => {
+      if (env.cwd !== currentCwd) startNewSessionIn(env.cwd);
+      composerControls.pickModel(env.model || 'default');
+      // 不走 effortSelect：候选按当前模型渲染，选项列表里没有的档会被静默丢掉。服务端在没有实例时记成待应用档
+      socket.emit('user:setEffort', { level: env.effort });
+      await newSessionWorktree.ensureBranches(env.cwd);
+      if (env.cwd !== currentCwd) return; // 等分支的时候用户又换了文件夹：别把勾选落到那边
+      newSessionWorktree.setEnabled(env.worktree && newSessionWorktree.isAvailable()); // 非 git 目录没有 worktree
+    },
   });
   // ⑧ 推送内容预览：本地偏好读写 + 改动时（若已授权通知权限）立即重新订阅，把新 prefs.preview 带给服务端
   // ——不重新订阅的话，服务端那份旧订阅记录的 prefs 就跟本地开关脱节，下次推送还是按旧偏好选 body。
@@ -5679,6 +5700,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   }
 
   const emptySurfaces = createEmptySurfaces(appContext, {
+    savedEnvironments,
     $, approvals, baseName, btnHome, btnNew, btnSessions, dashUnreadMark, el, elicitationSheet, folderPicker, haptic,
     hideStatuslineWrap, inputEl, messagesEl, modelInput, newSessionWorktree, openLeftSidebar, panelCwd,
     perfTrace, pillEffortText, pillPermText, prefetchHistory, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,

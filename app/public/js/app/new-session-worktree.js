@@ -16,6 +16,7 @@ const BRANCH_ACK_TIMEOUT_MS = 4000;
 export function createNewSessionWorktree(context, { onChange = () => {}, ackTimeoutMs = BRANCH_ACK_TIMEOUT_MS } = {}) {
   let enabled = false;
   let sourceBranch = null;      // null = 跟随仓库当前分支
+  let loading = null;           // 在路上（或最近一次）的分支加载
   let branches = [];
   let currentBranch = null;
   let loadedFor = null;         // 分支列表是给哪个 cwd 拉的（切工作区即失效）
@@ -56,10 +57,17 @@ export function createNewSessionWorktree(context, { onChange = () => {}, ackTime
   }
 
   // 分支列表按 cwd 缓存。拉失败不抛：UI 退化成"只能用当前分支"，比整个新会话页报错强。
+  // 同一 cwd 在路上时后来者等同一次：提前返回的话 isAvailable 还是假，选环境带的 worktree 就被丢掉了。
   async function ensureBranches(cwd) {
-    if (!cwd || loadedFor === cwd) return snapshot();
+    if (!cwd) return snapshot();
+    if (loadedFor !== cwd) loading = loadBranches(cwd);
+    await loading;
+    return snapshot();
+  }
+
+  async function loadBranches(cwd) {
     const socket = context?.socket;
-    if (!socket) return snapshot();
+    if (!socket) return;
     loadedFor = cwd;
     loadError = null;
     // 换了工作区就先清掉上一处的分支与当前分支。留着的话 B 还在加载时屏幕上显示的是 A 的分支，
@@ -81,7 +89,7 @@ export function createNewSessionWorktree(context, { onChange = () => {}, ackTime
     // 【await 之后必须重新核对目标】用户可能已经切走：这次响应对应的是 cwd，而 loadedFor 现在
     // 指着别处。无条件写入等于「谁后到听谁的」——A 的迟到响应会盖掉 B 已经加载好的分支列表，
     // 而 B 的列表看起来完全正常，没有任何迹象说明它其实是 A 的。
-    if (loadedFor !== cwd) return snapshot();
+    if (loadedFor !== cwd) return;
     if (!res) {
       loadError = t('读取分支超时');
     } else if (!res.ok) {
@@ -95,7 +103,6 @@ export function createNewSessionWorktree(context, { onChange = () => {}, ackTime
       currentBranch = typeof res.current === 'string' ? res.current : null;
     }
     onChange(snapshot());
-    return snapshot();
   }
 
   // 该工作区支持 worktree 吗：不是 git 仓库就没有这个概念，UI 上整个不显示

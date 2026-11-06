@@ -30,7 +30,7 @@ export function wireStarterPrompts(root, { haptic, inputEl }) {
 
 export function createEmptySurfaces(context, {
   $, approvals, baseName, btnHome, btnNew, btnSessions, dashUnreadMark, el, elicitationSheet, folderPicker, haptic,
-  hideStatuslineWrap, inputEl, messagesEl, modelInput, newSessionWorktree, openLeftSidebar, panelCwd,
+  hideStatuslineWrap, inputEl, messagesEl, modelInput, newSessionWorktree, openLeftSidebar, panelCwd, savedEnvironments,
   perfTrace, pillEffortText, pillPermText, prefetchHistory, projectsState, scrollToBottom, showAccessHelp, socket, topContextChanges,
   topContextPill, topProjectText, topTitleText, unread, updateWorkspaceChangeBadge, wireConfigRefreshButton,
   getAvailableDirs, getComposeReady, getCurrentCwd, getCurrentGatewaySuffix, getCurrentModel,
@@ -152,6 +152,7 @@ export function createEmptySurfaces(context, {
     const elSum = messagesEl?.querySelector?.('[data-compose-defaults]');
     if (!elSum) return;
     elSum.textContent = formatComposeDefaultsSummary(currentComposeDefaultsLabels());
+    savedEnvironments.renderChips(); // 模型、effort 一变，当前设置可能就不再是那个环境了
   }
 
   // 空表面本地分流：viewing 已 null 时 instances 广播不进 bindView，＋/侧栏 ＋ 须直接重渲。
@@ -304,7 +305,8 @@ export function createEmptySurfaces(context, {
             <span class="text-xs text-ink-faint">⌄</span>
           </button>
           ${relocatedFrom ? `<div class="mt-2 text-xs text-warning" data-testid="compose-relocated">${t('文件夹「')}${esc(baseName(relocatedFrom))}${t('」已断开，新会话改在这里开')}</div>` : ''}
-          <div class="mt-2 flex flex-col items-center gap-1.5" data-worktree-chips></div>
+          <div class="mt-2 flex items-center justify-center gap-2" data-environment-chips></div>
+          <div class="mt-1.5 flex flex-col items-center gap-1.5" data-worktree-chips></div>
           <div class="mt-2 flex items-center justify-center gap-1">
             <span class="text-xs text-ink-soft" data-compose-defaults>${esc(defaultsText)}</span>
             <button type="button" class="compose-defaults-refresh shrink-0 w-5 h-5 flex items-center justify-center rounded-full text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 transition-all disabled:opacity-50" data-testid="compose-defaults-refresh" title="${t('重新读取 CLI 配置')}">
@@ -330,6 +332,7 @@ export function createEmptySurfaces(context, {
     // 为假、整块不显示），避免非 git 工作区闪一下空 chip 行。
     renderWorktreeChips();
     void newSessionWorktree.ensureBranches(getCurrentCwd());
+    void savedEnvironments.refresh();
     // defaults 可能仍在 L4→L3 途中；微任务再刷一次，兜住刚 setPerm/setEffort 的 pill 文案
     queueMicrotask(() => refreshComposeDefaultsSummary());
   }

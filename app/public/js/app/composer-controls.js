@@ -83,6 +83,17 @@ export function createComposerControls(context, {
     if (getComposeReady()) refreshComposeDefaultsSummary();
   }
 
+  // 用户选定一个模型：磁贴和「选环境」共用
+  function pickModel(val) {
+    // value 保持 SDK 条目 id；发送时 resolveSendModel 再 pin wire
+    modelInput.value = val === 'default' ? '' : val;
+    modelIntent.markPicked(); // 用户点的才算发送意图（见 resolveOutgoingModel）
+    delete modelInput.dataset.fullModel;
+    if (val !== 'default') ensureModelOption(val);
+    syncModelUI(val === 'default' ? '' : val);
+    rebuildEffortOptions(val === 'default' ? (getCwdDefaultModel() || getCurrentModel()) : val);
+  }
+
   function rebuildCustomModelGrid(models) {
     if (!customModelGrid) return;
     customModelGrid.innerHTML = '';
@@ -115,13 +126,7 @@ export function createComposerControls(context, {
       card.onclick = () => {
         if (getMirrorReadonlySid()) { addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
         haptic('tap');
-        // value 保持 SDK 条目 id；发送时 resolveSendModel 再 pin wire
-        modelInput.value = val === 'default' ? '' : val;
-        modelIntent.markPicked(); // 用户点的才算发送意图（见 resolveOutgoingModel）
-        delete modelInput.dataset.fullModel;
-        if (val !== 'default') ensureModelOption(val);
-        syncModelUI(val === 'default' ? '' : val);
-        rebuildEffortOptions(val === 'default' ? (getCwdDefaultModel() || getCurrentModel()) : val);
+        pickModel(val);
       };
       customModelGrid.appendChild(card);
     });
@@ -753,5 +758,5 @@ export function createComposerControls(context, {
     // effort_mode（由 setEffortMode 上屏），重路径先发 system/resuming，失败发红条。
   };
 
-  return { checkAtMention, clearCliUnknownPermissionOption, hints, rebuildCustomModelGrid, rebuildEffortOptions, rebuildPermissionModeUi, setEffortMode, setPermMode, syncDefaultsPillTitle, syncModelGridEmptyHint, syncModelUI, updateModelAndSuffix, updatePillSession };
+  return { checkAtMention, clearCliUnknownPermissionOption, hints, pickModel, rebuildCustomModelGrid, rebuildEffortOptions, rebuildPermissionModeUi, setEffortMode, setPermMode, syncDefaultsPillTitle, syncModelGridEmptyHint, syncModelUI, updateModelAndSuffix, updatePillSession };
 }
