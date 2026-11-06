@@ -45,6 +45,19 @@ export function isSyntheticTaskId(taskId) {
   return id.startsWith('__notask_') || id.startsWith('localcmd:');
 }
 
+// 运行中能看输出的任务：后台命令，以及同样是 local_bash 的 Monitor 工具（CLI 2.1.318 实测）。
+// 子代理、工作流、monitor_mcp / monitor_ws CLI 都拒绝，合成键在 SDK 侧不存在。服务端判据见 agent.readRunningTaskOutput。
+export function taskHasLiveOutput({ taskId, taskType } = {}) {
+  return taskType === 'local_bash' && typeof taskId === 'string' && taskId !== '' && !isSyntheticTaskId(taskId);
+}
+
+// task:output 回执 → 要显示的文本。完成条的「查看输出」和运行中任务共用。
+export function formatTaskOutput(res) {
+  if (!res?.ok) return res?.error || t('输出不可用');
+  const head = res.truncated ? `${t('…（仅显示末尾）')}\n` : '';
+  return head + (res.text || t('（空输出）'));
+}
+
 export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
   const id = typeof taskId === 'string' ? taskId.trim() : '';
   // 合成键（agent.js 在 SDK 未给 task_id 时用 `__notask_${taskType}` 占位）不是真实 taskId：

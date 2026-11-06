@@ -1,6 +1,7 @@
-import { bgTaskListCollapsed, bgTaskStatusView, bgTaskUsageText, formatBgTaskBannerCopy, formatProgressHistoryEntry, groupBgTasksForList, isSyntheticTaskId, taskDetailState, taskStopUiState } from '../logic/bg-tasks.js';
+import { bgTaskListCollapsed, bgTaskStatusView, bgTaskUsageText, formatBgTaskBannerCopy, formatProgressHistoryEntry, formatTaskOutput, groupBgTasksForList, isSyntheticTaskId, taskDetailState, taskHasLiveOutput, taskStopUiState } from '../logic/bg-tasks.js';
 import { formatBgTaskRowLabel } from '../logic/tool-cards.js';
 import { t } from '../i18n.js';
+import { createTaskLiveOutput } from './task-live-output.js';
 
 // bgTaskStatusView 的 tone → 语义色类。只用无 alpha token（同本文件下方任务卡的配色约束）。
 const BG_TASK_TONE_CLASS = Object.freeze({
@@ -8,6 +9,8 @@ const BG_TASK_TONE_CLASS = Object.freeze({
   danger: 'text-danger',
   muted: 'text-ink-faint',
 });
+
+const LIVE_OUTPUT_FOLLOW_SLACK_PX = 32; // 离底这么近算「贴着底」，输出变长时跟随
 
 export function createTaskStatusController(context, {
   addBar = () => {},
@@ -29,6 +32,9 @@ export function createTaskStatusController(context, {
   const progressHistory = new Map();
   const HISTORY_CAP = 20; // 每任务最多保留 20 条历史
   let activeDetailId = null;
+  // 展开着的那个后台命令的输出。节点每次重绘都换新，这里记着当前这个，回执到时原地改文本，不用整张列表重绘。
+  let liveOutputBody = null;
+  const liveOutput = createTaskLiveOutput(context, { onChange: paintLiveOutput });
   // 完成通知去重（O82）：同一来源、同一 taskId 是同一件事。键在 = 响过（重放不该再响）；值是画出来的那一行，以它还在
   // 不在 DOM 为准——清屏重载摘掉之后，重放来的同一条照常画回来。有界：长开着的标签页里不能只增不减，摘掉的行换成 null
   // 释放 DOM 子树，超过上限淘汰最早的。
@@ -88,6 +94,7 @@ export function createTaskStatusController(context, {
     tasks.clear();
     progressHistory.clear();
     activeDetailId = null;
+    liveOutput.watch(null);
     const list = taskList();
     if (list) {
       list.replaceChildren();
@@ -165,9 +172,7 @@ export function createTaskStatusController(context, {
       if (loaded) return;
       loaded = true;
       context.socket?.emit('task:output', { instanceId: inst, taskId }, res => {
-        if (!res?.ok) { body.textContent = res?.error || t('输出不可用'); return; }
-        const head = res.truncated ? t('…（仅显示末尾）') + '\n' : '';
-        body.textContent = head + (res.text || t('（空输出）'));
+        body.textContent = formatTaskOutput(res);
       });
     };
     wrap.append(btn, body);
@@ -177,6 +182,7 @@ export function createTaskStatusController(context, {
   function renderTaskList() {
     const list = taskList();
     if (!list) return;
+    syncLiveOutput();
     // list 是滚动容器：replaceChildren 会把 scrollTop 归零，心跳重绘时先存后还，否则每拍跳回顶部。
     const prevScroll = list.scrollTop;
     // 焦点同理（#402）：行里的「展开」「停」每次重绘都是新节点，键盘用户按一下展开，按住的那颗钮
@@ -326,11 +332,31 @@ export function createTaskStatusController(context, {
     if (expanding) taskList()?.querySelector?.('[data-testid="task-detail-panel"]')?.scrollIntoView?.({ block: 'nearest' });
   }
 
+  // 只盯此刻真看得见的那一个：行展开着、整张列表没折叠。所有状态变化都经 renderTaskList，在它开头对一次就够。
+  function syncLiveOutput() {
+    const task = activeDetailId ? tasks.get(activeDetailId) : null;
+    const shown = task && !bgTaskListCollapsed({ count: tasks.size, userExpanded })
+      && taskHasLiveOutput({ taskId: activeDetailId, taskType: task.taskType });
+    liveOutput.watch(shown ? activeDetailId : null);
+  }
+
+  // 要看的是末尾，而输出一直在变长：贴着底就跟随，往上翻着看的时候不动滚动位置。
+  function paintLiveOutput() {
+    const list = taskList();
+    if (!list || !liveOutputBody) return;
+    const belowFold = () => liveOutputBody.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom;
+    const follow = belowFold() <= LIVE_OUTPUT_FOLLOW_SLACK_PX;
+    liveOutputBody.textContent = liveOutput.display();
+    if (follow) list.scrollTop += Math.max(0, belowFold());
+  }
+
   // 详情块：该任务的进度历史，作为头行的兄弟渲染在同一张卡片内（共用卡片边框，border-t 作分隔线）。
   // 历史为空返回 null（不渲染空框），activeDetailId 保留——下一拍心跳有内容了自然显示出来。
+  // 后台命令描述为空时也没有历史，但它有输出可看，所以照样出详情块。
   function buildDetailPanel(taskId) {
     const hist = progressHistory.get(taskId) || [];
-    if (hist.length === 0) return null;
+    const watching = liveOutput.isWatching(taskId);
+    if (hist.length === 0 && !watching) return null;
     const panel = createElement('<div class="border-t border-line-soft px-2 py-1.5 space-y-1.5 text-[11px] cursor-default" data-testid="task-detail-panel"></div>');
     for (const entry of hist) {
       const { time, text, hasSummary } = formatProgressHistoryEntry(entry);
@@ -342,6 +368,12 @@ export function createTaskStatusController(context, {
       body.textContent = text;
       row.append(ts, icon, body);
       panel.appendChild(row);
+    }
+    if (watching) {
+      // 命令输出按纯文本显示：只走 textContent
+      liveOutputBody = createElement('<pre class="text-left overflow-x-auto whitespace-pre-wrap break-words text-ink-soft" data-testid="bg-task-live-output"></pre>');
+      liveOutputBody.textContent = liveOutput.display() ?? t('加载中…');
+      panel.appendChild(liveOutputBody);
     }
     return panel;
   }

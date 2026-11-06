@@ -108,6 +108,7 @@ let pushTestNtfy = null;
 let untitledSessionArmed = false;
 let pendingPermission = null;
 let pendingQuestion = null;
+let taskOutputPolls = 0; // test:taskoutput-running：bg_shell_1 被问了几次，每次输出多一行
 let pendingQuestionGroup = null; // test:question-group*：一次问多道、整组作答
 let questSeq = 0; // 每次 test:question* 递增，避免 TC-5 答过后 TC-5b 同 requestId 被 answeredQuestionIds 吞掉
 let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
@@ -686,6 +687,7 @@ const mockFolderRelOk = rel => typeof rel === 'string' && !rel.startsWith('/') &
 let mockScenarioErrors = [];
 
 function resetMockState() {
+  taskOutputPolls = 0;
   mockResetGeneration += 1;
   resetAuthCooldown();
   mockApproveLog = [];
@@ -5500,6 +5502,35 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:taskoutput-running',
+      run: async ({ activeInst }) => {
+        // 运行中的后台命令 + 一个子代理：后台命令不发 task_progress 心跳，这里只推一次全量快照（background_tasks_changed 的形态）。
+        // 窗口 15s：要看够两拍轮询（一拍 3s），还要切后台、回前台各断言一次。
+        console.log('[mock] test:taskoutput-running — 推送运行中的后台命令');
+        const targetInstanceId = activeInst.instanceId;
+        activeInst.state = 'busy';
+        const tasks = [
+          { taskId: 'bg_shell_1', taskType: 'local_bash', message: 'npm run build' },
+          { taskId: 'bg_agent_1', taskType: 'local_agent', message: 'Explore：搜索用例' },
+        ];
+        io.emit('agent:event', {
+          seq: 50, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
+          type: 'task_progress', transient: true,
+          payload: { taskId: tasks[0].taskId, taskType: tasks[0].taskType, message: tasks[0].message, tasks }
+        });
+        await delay(15_000);
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 51, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
+          type: 'task_notification', payload: { source: 'system', status: 'completed', summary: '全部后台任务完成', tasks: [] }
+        });
+        socket.emit('agent:event', {
+          seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_taskoutput', durationMs: 2000, costUsd: 0.001, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:exitplan',
       run: async ({ activeInst }) => {
         // Regression TC-15: approving ExitPlanMode should fall permission mode back to default.
@@ -7231,6 +7262,15 @@ io.on('connection', socket => {
     if (typeof ack !== 'function') return;
     if (taskId === 'bg_task_1') {
       return ack({ ok: true, text: 'MOCK_TASK_OUTPUT_LINE\n=== e2e finished ok ===', truncated: false, size: 42 });
+    }
+    // 运行中的后台命令：每次多一行，用例据此数轮询。超出 40 行才够把列表撑到要滚动，<b> 是命令打印的字面量。
+    if (taskId === 'bg_shell_1') {
+      taskOutputPolls += 1;
+      const filler = Array.from({ length: 40 }, (_, i) => `build step ${i + 1}`).join('\n');
+      return ack({ ok: true, text: `${filler}\n<b>not html</b>\nPOLL_${taskOutputPolls}_END`, truncated: true, size: 20_000 });
+    }
+    if (taskId === 'bg_agent_1') {
+      return ack({ ok: false, error: '子代理、工作流这类任务运行中看不了输出，只有后台命令和 Monitor 可以' });
     }
     ack({ ok: false, error: '输出不可用（mock 未记录该任务）' });
   });
