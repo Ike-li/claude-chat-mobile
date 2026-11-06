@@ -228,6 +228,17 @@ export function hasWaitingTerminalSessionForCwd(cwd, states) {
   return hasTerminalStateForCwd(cwd, states, 'waiting');
 }
 
+// 无人值守写入的否定证据（消息排队）：此刻有没有别的驾驶员在用这个会话。alive（开着但闲着）不算，与手动发送同口径。
+// 按 sessionId 扫全表，不按 (cwd, sessionId) 取一条：会话中途进出 worktree 后，别的进程登记的 cwd 可能和
+// 本实例不同，按键取会漏掉，而漏掉就是两端同时写。sessionId 是 uuid，不会误伤别的会话。
+export function sessionHasOtherDriver(states, sessionId) {
+  for (const [key, info] of states) {
+    if (!key.endsWith(`\u0000${sessionId}`)) continue;
+    if (info.blocked || info.state === 'busy' || info.state === 'waiting') return true;
+  }
+  return false;
+}
+
 // rewind 的否定证据（2026-09-24）：已连接文件夹的子目录可达之后，父目录或子目录里跑着 / 等着的终端会话
 // 改的可能正是 rewind 要覆盖的那批文件——上面两个按 cwd 相等判的汇总会把它们漏掉，而 rewind 没有下游兜底。
 // 判「重叠」= 一方是另一方的祖先（含相等），带分隔符边界（/code/app-x 不是 /code/app 的后代）。
@@ -353,10 +364,12 @@ export async function listTerminalSessionStates({
 // 自己的 fail-open 方向相反：那是给状态显示的，读不动少标一个运行中无害；这里读不动的那一条可能正是
 // 开着本会话的终端，把「没读到」当成「没有」就是两端同时写。目录不存在（ENOENT）是确定的「没有」，
 // 照常返回空表（readAllEntries 不对它回调 onUnreadable）。rewind confirm 在 app.js 里内联了同一判据。
-export async function listTerminalSessionStatesOrNull({ dir = DEFAULT_SESSION_REGISTRY_DIR, isAlive = defaultIsAlive } = {}) {
+// classifyTail 同 listTerminalSessionStates：不自报 status 的条目（旧版桌面端）没有它就恒为 alive。调用方要区分
+// 「开着」和「在跑」时必须传；只问「有没有开着」的可以不传。
+export async function listTerminalSessionStatesOrNull({ dir = DEFAULT_SESSION_REGISTRY_DIR, isAlive = defaultIsAlive, classifyTail = null } = {}) {
   let unreadable = false;
   try {
-    const states = await listTerminalSessionStates({ dir, isAlive, onUnreadable: () => { unreadable = true; } });
+    const states = await listTerminalSessionStates({ dir, isAlive, classifyTail, onUnreadable: () => { unreadable = true; } });
     return unreadable ? null : states;
   } catch {
     return null;

@@ -152,15 +152,15 @@ test.describe('MSG-01: 并发在途占用（in-flight claim / release）', () =>
 });
 
 test.describe('MSG-01 & SRV-001: 生产代码关键顺序与并发懒开单飞收敛', () => {
-  test('user:message 处理器中 commitProcessed 必须排在 send 成功后、且在所有副作用之前', () => {
-    const src = readFileSync(new URL('../../app/src/server/app.js', import.meta.url), 'utf8');
+  test('发送闸 deliver 中 commitProcessed 必须排在 send 成功后、且在所有副作用之前', () => {
+    const src = readFileSync(new URL('../../app/src/server/send-gate.js', import.meta.url), 'utf8');
 
     const sendFailedIdx = src.indexOf('if (!sent) {');
     assert.ok(sendFailedIdx > 0, '必须包含 send 失败判断分支');
-    const finallyIdx = src.indexOf('} finally {', sendFailedIdx);
-    assert.ok(finallyIdx > sendFailedIdx, '必须包含 finally 释放 in-flight 分支');
+    const successIdx = src.indexOf('return { ok: true, ack:', sendFailedIdx);
+    assert.ok(successIdx > sendFailedIdx, '必须包含成功回执分支');
 
-    const segment = src.slice(sendFailedIdx, finallyIdx);
+    const segment = src.slice(sendFailedIdx, successIdx);
     const commitIdx = segment.indexOf('commitProcessed(');
     assert.ok(commitIdx > 0, 'send 成功后必须调用 commitProcessed');
 

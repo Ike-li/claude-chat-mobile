@@ -238,6 +238,7 @@ See the [README security model](../README.en.md#security-model) for the concise 
 - `app/src/agent/agent.js`: `AgentSession`, SDK mapping, permission gate, and ring buffer.
 - `app/src/server/mirror-engine.js`: catch-up scheduling and the mirror state machine (owns its state).
 - `app/src/server/auto-continue.js` / `app/src/agent/quota-auto-continue.js`: usage-limit auto-continue scheduling (owns its state) and its pure decisions.
+- `app/src/server/send-gate.js`: the send gate. `prepare` only decides whether the instance can be written to, `deliver` only sends; unattended mode also checks for another driver and never swaps the instance.
 - `app/src/sessions/history.js`: transcript reading, history rebuild, and pure mirror-decision functions.
 - `app/src/sessions/resume-anchor.js`: predicts which chain a CLI resume will pick up, plus the send gate for "resuming would leave part of the conversation out".
 - `app/src/ops/cli-hooks-bridge.js` / `app/src/ops/cli-statusline-bridge.js`: CLI signal and snapshot consumers.
