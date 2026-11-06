@@ -42,9 +42,15 @@
 //             task_updated{patch.is_backgrounded:true} → background_tasks_changed（它成了后台任务）→
 //             「running in the background」的 tool_result → 回答与 result。给的 tool_use_id 对不上回 backgrounded:false。
 //             CCM_FAKE_CLAUDE_BG_DISABLED=1 → 那条控制请求回 error，原文照 CLI 2.1.309。
-//   turn-autoreport → 同 turn，收尾后再吐一条后台任务完成（system/task_notification）与下一轮的
-//             message_start，且那一轮不收尾——实例停在「后台任务完成触发的自动汇报轮正在跑」。
+//   turn-autoreport → 同 turn，收尾后再吐一条后台任务完成（system/task_notification）、下一轮的 system/init
+//             与 message_start，且那一轮不收尾——实例停在「后台任务完成触发的自动汇报轮正在跑」。
 //             没有用户输入的轮次，账面靠 agent 自己合成（maybeSynthesizeAutoTurn）。
+//             真 CLI 每轮都先吐 init，且先于 API 请求（2.1.318 实测），这档 2026-11-06 前漏了这一条。
+//   turn-autoreport-collide → 手动发送撞上汇报轮。前半段同 turn-autoreport，但汇报轮停在等首字节：吐了
+//             task_notification 与 init、还没有 message_start，账面是 0，发送闸放行。下一条 user 进来时排在这一轮
+//             后面，次序照真 CLI 2.1.318 实测：command_lifecycle:queued →（隔 CCM_FAKE_CLAUDE_AUTOREPORT_MS）
+//             汇报轮的 message_start、正文与不带 user_message_uuid 的 result → command_lifecycle:started →
+//             system/init →（隔 CCM_FAKE_CLAUDE_RESULT_DELAY_MS）这条自己的正文与 result。
 //
 // 【回合晚一点收尾】与模式正交，默认关：
 //   CCM_FAKE_CLAUDE_RESULT_DELAY_MS=<毫秒> → turn 系各档在 init 之后隔这么久才吐回答与 result。
@@ -119,12 +125,78 @@ const EXIT_MARKER = process.env.CCM_FAKE_CLAUDE_EXIT_MARKER || '';
 const EXIT_WRITES_LOST = process.env.CCM_FAKE_CLAUDE_EXIT_WRITES_LOST || '';
 const EXIT_TITLE = process.env.CCM_FAKE_CLAUDE_EXIT_TITLE || '';
 const RESULT_DELAY_MS = Number(process.env.CCM_FAKE_CLAUDE_RESULT_DELAY_MS) || 0;
+const AUTOREPORT_MS = Number(process.env.CCM_FAKE_CLAUDE_AUTOREPORT_MS) || 0;
 const BG_DISABLED = process.env.CCM_FAKE_CLAUDE_BG_DISABLED === '1';
 const FG_TOOL_USE_ID = 'toolu_fake_fg';
 const FG_TASK_ID = 'fake-fg-task';
 let fgPendingMsg = null; // turn-fg-task：被前台任务挡着、还没收尾的那条 user 消息
+let autoReportState = 'none'; // turn-autoreport-collide：none → waiting（汇报轮等首字节）→ done
 
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
+
+function emitInit() {
+  out({
+    type: 'system',
+    subtype: 'init',
+    session_id: SESSION_ID,
+    uuid: randomUUID(),
+    cwd: process.cwd(),
+    tools: [],
+    model: (INIT_EACH_TURN && GATEWAY_MODEL) || 'fake-claude',
+    permissionMode: 'default',
+    ...(COMMANDS ? { slash_commands: COMMANDS.map(c => c.name) } : {}),
+  });
+}
+
+function emitLifecycle(state, msg) {
+  out({ type: 'command_lifecycle', command_uuid: msg.uuid, state, uuid: randomUUID(), session_id: SESSION_ID });
+}
+
+function emitBgTaskDone() {
+  out({
+    type: 'system',
+    subtype: 'task_notification',
+    session_id: SESSION_ID,
+    uuid: randomUUID(),
+    task_id: 'fake-bg-task',
+    status: 'completed',
+    summary: '后台任务跑完了',
+  });
+}
+
+function emitMessageStart() {
+  out({
+    type: 'stream_event',
+    session_id: SESSION_ID,
+    uuid: randomUUID(),
+    parent_tool_use_id: null,
+    event: { type: 'message_start', message: { id: `msg_${randomUUID()}` } },
+  });
+}
+
+// 手动消息排在等首字节的汇报轮后面：汇报轮先跑完，这条才开跑，见文件头 turn-autoreport-collide
+function queueBehindAutoReport(msg) {
+  autoReportState = 'done';
+  emitLifecycle('queued', msg);
+  setTimeout(() => {
+    emitMessageStart();
+    out({
+      type: 'assistant', session_id: SESSION_ID, uuid: randomUUID(), parent_tool_use_id: null,
+      message: { role: 'assistant', content: [{ type: 'text', text: '(fake-claude) 汇报' }] },
+    });
+    out({
+      type: 'result', subtype: 'success', session_id: SESSION_ID, uuid: randomUUID(), is_error: false,
+      duration_ms: 1, duration_api_ms: 1, num_turns: 1, result: '(fake-claude) 汇报', total_cost_usd: 0,
+      terminal_reason: 'completed',
+    });
+    emitLifecycle('started', msg);
+    emitInit();
+    setTimeout(() => {
+      finishTurn(msg);
+      emitLifecycle('completed', msg);
+    }, RESULT_DELAY_MS);
+  }, AUTOREPORT_MS);
+}
 
 let announcedInit = false;
 const ELICIT_REQUEST_ID = 'fake-elicit-1';
@@ -202,19 +274,11 @@ rl.on('line', (line) => {
 
   if (msg.type !== 'user') return;
 
+  if (autoReportState === 'waiting') { queueBehindAutoReport(msg); return; }
+
   if (!announcedInit || INIT_EACH_TURN) {
     announcedInit = true;
-    out({
-      type: 'system',
-      subtype: 'init',
-      session_id: SESSION_ID,
-      uuid: randomUUID(),
-      cwd: process.cwd(),
-      tools: [],
-      model: (INIT_EACH_TURN && GATEWAY_MODEL) || 'fake-claude',
-      permissionMode: 'default',
-      ...(COMMANDS ? { slash_commands: COMMANDS.map(c => c.name) } : {}),
-    });
+    emitInit();
   }
 
   if (MODE === 'turn-elicitation') { sendElicitation(msg); return; }
@@ -223,7 +287,7 @@ rl.on('line', (line) => {
     return;
   }
 
-  if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport' && MODE !== 'turn-screenshot' && MODE !== 'turn-local-command') return;
+  if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport' && MODE !== 'turn-autoreport-collide' && MODE !== 'turn-screenshot' && MODE !== 'turn-local-command') return;
 
   if (RESULT_DELAY_MS > 0) setTimeout(() => finishTurn(msg), RESULT_DELAY_MS);
   else finishTurn(msg);
@@ -328,23 +392,15 @@ function finishTurn(msg, reply = REPLY) {
     total_cost_usd: 0,
   });
   if (MODE === 'turn-autoreport') {
-    out({
-      type: 'system',
-      subtype: 'task_notification',
-      session_id: SESSION_ID,
-      uuid: randomUUID(),
-      task_id: 'fake-bg-task',
-      status: 'completed',
-      summary: '后台任务跑完了',
-    });
+    emitBgTaskDone();
+    emitInit();
     // 模型被通知唤起、自动开讲：只有流式的 message_start，这一轮不吐 result
-    out({
-      type: 'stream_event',
-      session_id: SESSION_ID,
-      uuid: randomUUID(),
-      parent_tool_use_id: null,
-      event: { type: 'message_start', message: { id: `msg_${randomUUID()}` } },
-    });
+    emitMessageStart();
+  }
+  if (MODE === 'turn-autoreport-collide' && autoReportState === 'none') {
+    emitBgTaskDone();
+    emitInit();
+    autoReportState = 'waiting';
   }
 }
 
