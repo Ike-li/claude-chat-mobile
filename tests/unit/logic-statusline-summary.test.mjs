@@ -34,6 +34,12 @@ test('shouldRenderStatusline: 会话内与 compose 表面渲染；空首页与�
   assert.equal(shouldRenderStatusline({}), true);
 });
 
+test('formatStatuslineCopyText：完整路径不进复制文本（这份是贴公开 issue 的，路径里有本机用户名）', () => {
+  const text = formatStatuslineCopyText({ project: 'demo', cwd: '/Users/someone/code/demo', git: { branch: 'dev', worktree: true } });
+  assert.match(text, /project demo/);
+  assert.doesNotMatch(text, /someone/);
+});
+
 test('formatStatuslineGitBrief：分支 + 三分 + ahead', () => {
   assert.equal(
     formatStatuslineGitBrief({ branch: 'dev', staged: 2, modified: 1, untracked: 0, ahead: 54 }),
