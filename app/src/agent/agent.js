@@ -278,7 +278,13 @@ export function buildAgentQueryOptions(session, env = process.env) {
     effort: session.effort || undefined,                 // SDK 0.3+ 一等 Options.effort；null=模型默认不传
     // flag settings 叠加，不替代 user/project/local（与 CLI /effort ultracode 同语义）；两者皆无则整个不传
     ...(settings ? { settings } : {}),
-    ...(chromeDefaultEnabled(session.claudeGlobalConfigPath) ? { extraArgs: { chrome: null } } : {}),
+    extraArgs: {
+      // 手机上等回复时，思考摘要是最早出现的内容。CLI 默认发 display:"updates"，近 30 天 SDK 会话只有 17% 的
+      // thinking 块有文字；设置 showThinkingSummaries 只是去掉 display，同样没有文字（2026-11-06 真实请求对比）。
+      // 用这个参数而不是 Options.thinking：后者多带 --thinking=adaptive，这里只改显示，开不开仍归 CLI 和用户配置。
+      'thinking-display': 'summarized',
+      ...(chromeDefaultEnabled(session.claudeGlobalConfigPath) ? { chrome: null } : {}),
+    },
     permissionMode: session.sdkPermissionMode(),         // bypass 映射为 SDK default
     // 附件已不落在 cwd 内（见 files/uploads.js 头注释），这一行把附件根纳入权限范围，Read 才免审批。
     // 映射到 CLI 的 --add-dir。**只加 uploads 这一个子目录**，绝不是整个 dataDir——那里有设备信任
