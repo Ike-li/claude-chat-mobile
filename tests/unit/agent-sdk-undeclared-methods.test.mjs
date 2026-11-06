@@ -1,11 +1,12 @@
 // tests/unit/agent-sdk-undeclared-methods.test.mjs —— agent.js 依赖、sdk.d.ts 没声明的 Query 方法还在不在
 //
-// 测什么：真 SDK 的 query() 返回的对象上，askSideQuestion 和 getSettings 仍是函数。
-//   这两个方法上游没有承诺，agent.js 又是先判存在再调用，所以上游删掉时不报错，功能静默消失。
+// 测什么：真 SDK 的 query() 返回的对象上，askSideQuestion、getSettings、getTaskOutput 仍是函数。
+//   这几个方法上游没有承诺，agent.js 又是先判存在再调用，所以上游删掉时不报错，功能静默消失。
 //   side-question.test.mjs、agent-control.test.mjs 用假 q，SDK 升级时照样全绿，咬不住这种情况。
-//   官方 promptSuggestions 替代不了（网关和冷缓存下不出建议，recap 也没有官方接口），这两个方法要长期留着。
-// 不测什么 + 为什么：① CLI 还认不认 side_question / get_settings 控制请求：fake-claude 对任何控制请求
-//   都回 success，要真 CLI 才答得了，属 S5。② 返回值形状：这里不调用这两个方法，上游改形状看不到。
+//   官方 promptSuggestions 替代不了（网关和冷缓存下不出建议，recap 也没有官方接口），前两个方法要长期留着。
+//   getTaskOutput 经真 SDK 的回包在 agent-running-task-output.test.mjs，这里只管它还在不在。
+// 不测什么 + 为什么：① CLI 还认不认 side_question / get_settings / get_task_output 控制请求：fake-claude 对任何控制请求
+//   都回 success，要真 CLI 才答得了，属 S5。② 返回值形状：这里不调用这几个方法，上游改形状看不到。
 // 槽位：S1（真 SDK + fake-claude，零 token）
 
 import { after, before, describe, it } from 'node:test';
@@ -37,6 +38,11 @@ const METHODS = [
     method: 'getSettings',
     consequence: 'refreshEffectiveEffort() 会直接返回，没指定 effort 时手机上看不到实际生效的档（effort_mode.effective），不报错',
     lookAt: '去新版 sdk.mjs 查 get_settings 控制请求现在由哪个方法发出，再改 app/src/agent/agent.js 的 refreshEffectiveEffort()',
+  },
+  {
+    method: 'getTaskOutput',
+    consequence: 'AgentSession.readRunningTaskOutput() 会一律回落，手机上运行中的后台命令只显示「输出不可用」，看不到最新输出，不报错',
+    lookAt: '去新版 sdk.mjs 查 get_task_output 控制请求现在由哪个方法发出，再改 app/src/agent/agent.js 的 readRunningTaskOutput()',
   },
 ];
 
