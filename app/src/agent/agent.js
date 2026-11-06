@@ -1080,6 +1080,9 @@ export class AgentSession {
     if (this.effortAuto && !this._autoAsserted) await this._reassertEffort();
 
     if (this.disposed) return false; // S3：setModel 的 await 间隙实例可能已被 dispose，勿再往弃用实例排队
+    // 排队释放的最后一道：上面的 setModel 可能等到控制超时，这期间用户可能点了停止或取回了这条。
+    // 从这里到入队全程同步，所以「没被取消」和「进了队列」是同一刻的事。
+    if (opts.shouldSend && !opts.shouldSend()) return false;
     // 双重检查：setModel / 补发是 await 让出点，间隙内其他 send 可能已经开了一轮
     if (this.pendingTurns >= 1) {
       this.emit('system', { message: '当前任务运行中，请等待完成' });

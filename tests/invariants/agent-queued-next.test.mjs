@@ -176,6 +176,33 @@ test('onCliIdle 抛错被隔离', () => {
   s.dispose();
 });
 
+test('MSG-03：send 在切模型的 await 期间被取消 → 不入队、不上气泡、不开槽，账面不动', async () => {
+  let finishSetModel;
+  const { s, events } = makeSession();
+  s.q = { ...fakeQuery, setModel: () => new Promise((r) => { finishSetModel = r; }) };
+  let wanted = true;
+  const sending = s.send('排队的话', 'opus', { shouldSend: () => wanted });
+  await Promise.resolve();
+  assert.equal(typeof finishSetModel, 'function', '前提：卡在 setModel 上');
+  wanted = false;                      // 用户在这期间点了停止
+  finishSetModel();
+  assert.equal(await sending, false);
+  assert.deepEqual(s.queue, []);
+  assert.equal(s.pendingTurns, 0);
+  assert.equal(events.filter(e => e.type === 'user_message').length, 0, '气泡上屏就等于告诉用户发出去了');
+  s.dispose();
+});
+
+test('send 的取消判断没被取消时不影响发送，正对照', async () => {
+  const { s, events } = makeSession();
+  s.q = fakeQuery;
+  assert.equal(await s.send('排队的话', undefined, { shouldSend: () => true }), true);
+  assert.equal(s.queue.length, 1);
+  assert.equal(s.pendingTurns, 1);
+  assert.equal(events.filter(e => e.type === 'user_message').length, 1);
+  s.dispose();
+});
+
 test('SDK 子进程打开会话状态帧：不设这个变量真 CLI 一帧都不吐（2.1.318 实测）', () => {
   assert.equal(sdkChildEnv({ PATH: '/bin' }).CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS, '1');
 });

@@ -23,7 +23,7 @@ const NOT_READY_ERROR = '会话还在启动，暂时不能排队';
 const QUEUE_FULL_ERROR = '已有一条排队消息，先处理它';
 const TOTAL_FULL_ERROR = '排队的消息太多了，先处理已有的';
 
-// 对外只暴露三态：等 idle 和过闸都还算「排队中」，用户都还能撤回。
+// 对外只暴露三态：等 idle 和过闸都还算「排队中」。sending 是正在投递，消息进实例之前用户仍能撤回或停止。
 const EXPOSED_STATE = { waiting: 'waiting', settling: 'waiting', releasing: 'waiting', sending: 'sending', held: 'held' };
 
 export function createMessageQueue({
@@ -99,11 +99,15 @@ export function createMessageQueue({
       if (gate.code === 'turn_running') return setPhase(entry, 'waiting');
       return toHeld(entry, gate.code);
     }
-    setPhase(entry, 'sending'); // 从这里起不能取回
+    setPhase(entry, 'sending');
+    // 附件落盘和切模型都要等，消息还没进实例，这期间 interrupt 没东西可取消，只有这里拦得住。shouldSend 在 send 入队
+    // 那一刻判断，入队之后到这里只有同步代码和微任务，socket 回调插不进来：看得到 sending 就说明它还没发出去。
     const out = await sendGate.deliver(gate.instance, {
       text: entry.text, model: entry.model, attachments: entry.attachments, clientMessageId: entry.clientMessageId,
+      shouldSend: () => isCurrent(entry) && entry.phase === 'sending',
     });
     if (out.ok) return remove(entry, 'sent');
+    if (!isCurrent(entry) || entry.phase !== 'sending') return undefined; // 入队之前被取回或停止
     if (gate.instance.pendingTurns > 0) return setPhase(entry, 'waiting'); // 手动发送抢先了：等那一轮结束
     return toHeld(entry, out.reason);
   }
@@ -148,10 +152,10 @@ export function createMessageQueue({
     startRelease(entry);
   }
 
-  /** 停止、额度墙、实例退出、关标签：转未发送。sending 之后这条已经发出去了，不动。 */
+  /** 停止、额度墙、实例退出、关标签：转未发送。第一次的原因才是用户要看的。 */
   function hold(sessionId, reason) {
     const entry = entries.get(sessionId);
-    if (!entry || entry.phase === 'held' || entry.phase === 'sending') return;
+    if (!entry || entry.phase === 'held') return;
     toHeld(entry, reason);
   }
 
@@ -159,7 +163,6 @@ export function createMessageQueue({
   function take(sessionId, clientMessageId) {
     const entry = entries.get(sessionId);
     if (!entry || entry.clientMessageId !== clientMessageId) return { ok: false, error: 'not_found' };
-    if (entry.phase === 'sending') return { ok: false, error: 'sending' };
     remove(entry, 'taken');
     return { ok: true, text: entry.text, model: entry.model, attachments: entry.attachments };
   }

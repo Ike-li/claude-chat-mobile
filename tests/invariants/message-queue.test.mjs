@@ -31,10 +31,29 @@ function makeInstance(over = {}) {
     sent: [], notices: [], swapped: 0,
     isBusy() { return this.pendingTurns > 0 || this.bgTasks.size > 0; },
     logKey() { return this.sessionId; },
-    async send(text, model, opts) { this.sent.push({ text, model, opts }); this.pendingTurns += 1; return true; },
+    async send(text, model, { shouldSend, ...opts } = {}) {
+      if (shouldSend && !shouldSend()) return false;
+      this.sent.push({ text, model, opts });
+      this.pendingTurns += 1;
+      return true;
+    },
     emitNotice(text, level) { this.notices.push({ text, level }); },
   };
   return Object.assign(inst, over);
+}
+
+// 卡在切模型上的实例：真 send 在 setModel 的 await 之后才判断、才入队
+function slowSendInstance() {
+  const gate = { release: null };
+  const a = makeInstance({
+    async send(text, model, { shouldSend } = {}) {
+      await new Promise((r) => { gate.release = r; });
+      if (shouldSend && !shouldSend()) return false;
+      this.sent.push({ text });
+      return true;
+    },
+  });
+  return { a, gate };
 }
 
 function setup({ instance = makeInstance(), gateOver = {} } = {}) {
@@ -488,22 +507,18 @@ test('撤回赢闸门 await：释放醒来后不发', async () => {
   assert.deepEqual(ctx.a.sent, []);
 });
 
-test('sending 之后撤回失败：这条随即开跑，要纠偏用停止', async () => {
-  let unblock;
-  const ctx = setup({
-    instance: makeInstance({
-      async send(text) { await new Promise(r => { unblock = r; }); this.sent.push({ text }); return true; },
-    }),
-  });
+test('sending 期间撤回：切模型还在等，消息没进实例，撤回成功且不再发', async () => {
+  const { a, gate } = slowSendInstance();
+  const ctx = setup({ instance: a });
   ctx.accept();
   ctx.endTurn();
   ctx.q.onCliIdle(ctx.a);
   await flush();
   assert.equal(ctx.state(), 'sending');
-  assert.deepEqual(ctx.q.take(SID, 'c1'), { ok: false, error: 'sending' });
-  unblock();
+  assert.equal(ctx.q.take(SID, 'c1').text, '接下来跑测试');
+  gate.release();
   await flush();
-  assert.equal(ctx.a.sent.length, 1);
+  assert.deepEqual(ctx.a.sent, []);
   assert.deepEqual(ctx.q.snapshot(), []);
 });
 
@@ -535,22 +550,51 @@ test('停止赢闸门 await：不发，转未发送', async () => {
   assert.equal(ctx.reason(), 'stopped');
 });
 
-test('sending 之后的停止作用在新一轮上，条目不转未发送', async () => {
-  let unblock;
-  const ctx = setup({
-    instance: makeInstance({
-      async send(text) { await new Promise(r => { unblock = r; }); this.sent.push({ text }); return true; },
-    }),
-  });
+test('MSG-03：sending 期间点停止（切模型还在等）→ 未发送，之后不发，取得回', async () => {
+  const { a, gate } = slowSendInstance();
+  const ctx = setup({ instance: a });
   ctx.accept();
   ctx.endTurn();
   ctx.q.onCliIdle(ctx.a);
   await flush();
-  ctx.q.hold(SID, 'stopped');
   assert.equal(ctx.state(), 'sending');
-  unblock();
+  ctx.q.hold(SID, 'stopped');
+  assert.equal(ctx.state(), 'held', '消息还没进实例，interrupt 没东西可取消，只有这里拦得住');
+  gate.release();
   await flush();
-  assert.deepEqual(ctx.q.snapshot(), []);
+  assert.deepEqual(ctx.a.sent, [], '点了停止之后不得发出');
+  assert.equal(ctx.reason(), 'stopped', '取消造成的 send=false 不得改写原因');
+  assert.equal(ctx.q.take(SID, 'c1').text, '接下来跑测试');
+});
+
+test('MSG-03：附件还在落盘时点停止 → 未发送，附件还在', async () => {
+  let finishSave;
+  const attachments = [{ name: 'a.png', mimeType: 'image/png', data: 'BASE64' }];
+  const ctx = setup({ gateOver: { saveAttachments: () => new Promise((r) => { finishSave = () => r([]); }) } });
+  ctx.accept({ attachments });
+  ctx.endTurn();
+  ctx.q.onCliIdle(ctx.a);
+  await flush();
+  assert.equal(ctx.state(), 'sending');
+  ctx.q.hold(SID, 'stopped');
+  finishSave();
+  await flush();
+  assert.deepEqual(ctx.a.sent, []);
+  assert.equal(ctx.reason(), 'stopped');
+  assert.deepEqual(ctx.q.take(SID, 'c1').attachments, attachments);
+});
+
+test('附件落盘失败与停止撞车：保留用户的停止原因，不改写成 attachment_failed', async () => {
+  let failSave;
+  const ctx = setup({ gateOver: { saveAttachments: () => new Promise((_, rej) => { failSave = () => rej(new Error('磁盘满')); }) } });
+  ctx.accept({ attachments: [{ name: 'a', data: 'x' }] });
+  ctx.endTurn();
+  ctx.q.onCliIdle(ctx.a);
+  await flush();
+  ctx.q.hold(SID, 'stopped');
+  failSave();
+  await flush();
+  assert.equal(ctx.reason(), 'stopped');
 });
 
 test('未发送的条目永不自动释放，只有用户取回', async () => {
@@ -618,7 +662,7 @@ test('只有对外状态变了才广播：sending 要让别的设备看到（否
   let unblock;
   const ctx = setup({
     instance: makeInstance({
-      async send(text) { await new Promise(r => { unblock = r; }); this.sent.push({ text }); return true; },
+      async send(text) { await new Promise((r) => { unblock = r; }); this.sent.push({ text }); return true; },
     }),
   });
   ctx.accept();

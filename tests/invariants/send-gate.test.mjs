@@ -182,6 +182,17 @@ test('投递：纯文本 → 原样交给 send，成功 ack 带实例号', async
   assert.ok(trace.includes('broadcast'), '开跑要立刻广播，多端靠它禁发送');
 });
 
+test('投递：无人值守传的 shouldSend 交给 send，由它在入队那一刻判断；交互路径不传', async () => {
+  const { gate } = makeGate();
+  const shouldSend = () => false;
+  const plain = makeInstance();
+  await gate.deliver(plain, { ...MSG, shouldSend });
+  assert.equal(plain.sent[0].opts.shouldSend, shouldSend);
+  const withAtt = makeInstance();
+  await gate.deliver(withAtt, { ...MSG, attachments: [{ name: 'a', data: 'x' }], shouldSend });
+  assert.equal(withAtt.sent[0].opts.shouldSend, shouldSend);
+});
+
 test('投递：带附件 → 落盘后把绝对路径写进 prompt，气泡只用原文和元数据', async () => {
   const saved = [{ absPath: '/data/uploads/a.png', name: 'a.png', mimeType: 'image/png', size: 3, thumb: 't' }];
   let savedTo = null;
