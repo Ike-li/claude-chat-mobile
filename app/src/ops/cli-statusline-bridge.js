@@ -1,28 +1,19 @@
 // CLI statusline bridge core: normalize the CLI's stdin JSON into a small,
 // versioned snapshot that is safe for the Web mirror to consume.
 
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import {
-  chmodSync,
-  closeSync,
-  constants,
-  fsyncSync,
   lstatSync,
-  mkdirSync,
-  openSync,
   readdirSync,
   readFileSync,
-  renameSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join, resolve } from 'node:path';
 import { ccmUnderClaudeHome, claudeSettingsPath } from '../shared/claude-home.js';
 // 两个桥读的是**同一个** ~/.claude/settings.json，故共用一份读函数——各写一份是本仓出过事的形态。
-// 注意它与 scripts/statusline-bridge-setup.js 里那个私有 readSettings 有一处有意的差异：
-// 文件不存在时这里回 {}（新装 claude 的合法起点 = 确定没装），那边抛 ENOENT（安装前必须已有配置）。
 import { readClaudeSettings } from './cli-hooks-bridge.js';
+import { atomicWriteFile, ensurePrivateDirectory, lstatIfPresent } from './bridge-namespace.js';
 
 const CLI_STATUSLINE_SCHEMA_VERSION = 1;
 const MAX_CLI_STATUSLINE_SNAPSHOT_BYTES = 64 * 1024;
@@ -225,17 +216,6 @@ export function snapshotFilePath(dir = DEFAULT_CLI_STATUSLINE_DIR, sessionId) {
   return join(resolve(dir), `${key}.json`);
 }
 
-function ensurePrivateDirectory(dir) {
-  const resolved = resolve(dir);
-  mkdirSync(resolved, { recursive: true, mode: 0o700 });
-  const stat = lstatSync(resolved);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error('snapshot directory must be a real directory');
-  }
-  if (platform() !== 'win32') chmodSync(resolved, 0o700);
-  return resolved;
-}
-
 function assertSnapshotForWrite(snapshot) {
   if (!snapshot || typeof snapshot !== 'object'
       || snapshot.schemaVersion !== CLI_STATUSLINE_SCHEMA_VERSION
@@ -252,33 +232,13 @@ export function writeCliStatusSnapshot(snapshot, {
   now = Date.now(),
 } = {}) {
   assertSnapshotForWrite(snapshot);
-  const privateDir = ensurePrivateDirectory(dir);
+  const privateDir = ensurePrivateDirectory(dir, 'snapshot');
   const destination = snapshotFilePath(privateDir, snapshot.sessionId);
   // R9：写入即清扫过期快照。挂在这条路径上是因为 CLI 每次刷 statusline 都会写——不必新增调度，
   // 也不会在 server 侧读路径上加开销。skip 掉本次目标（见 sweepStatusSnapshots 内注释）。
   // 清扫失败不得影响写入（它是加分项）。
   try { sweepStatusSnapshots({ dir: privateDir, now, skip: basenameForTemp(destination) }); } catch { /* 清扫失败不挡写入 */ }
-  const temporary = join(privateDir, `.${basenameForTemp(destination)}.${process.pid}.${randomUUID()}.tmp`);
-  let fd;
-  let renamed = false;
-  try {
-    fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
-    writeFileSync(fd, JSON.stringify(snapshot), 'utf8');
-    fsyncSync(fd);
-    closeSync(fd);
-    fd = undefined;
-    renameSync(temporary, destination);
-    renamed = true;
-    if (platform() !== 'win32') chmodSync(destination, 0o600);
-    return destination;
-  } finally {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* preserve the original write error */ }
-    }
-    if (!renamed) {
-      try { unlinkSync(temporary); } catch { /* absent / already cleaned */ }
-    }
-  }
+  return atomicWriteFile(destination, JSON.stringify(snapshot));
 }
 
 export function readCliStatusSnapshot(sessionId, {
@@ -332,11 +292,8 @@ export function readCliStatusSnapshot(sessionId, {
 // externalDirty 故意不参与——它只表示「SDK 子进程内存滞后于磁盘、下次发送前须置换实例」，
 // 不表示 CLI 此刻仍是驾驶员。mirror 自动解锁后 Web 已可输入；若仍因 externalDirty 锁在 CLI
 // 来源，而 Web 会话从不写 CLI 快照（CCM_STATUSLINE_ORIGIN=web-sdk 跳过 capture），会长期显示
-// 「CLI 状态暂不可用 (missing)」。形参保留以兼容旧调用方，忽略其值。
-export function selectStatusOwner({
-  mirrorReadonly = false,
-  externalDirty: _externalDirty = false,
-} = {}) {
+// 「CLI 状态暂不可用 (missing)」。
+export function selectStatusOwner({ mirrorReadonly = false } = {}) {
   return mirrorReadonly ? 'cli' : 'sdk';
 }
 
@@ -386,21 +343,12 @@ function basenameForTemp(path) {
 // **写入路径（install/uninstall）仍留在 scripts**：那边要的是「安装前必须已配置好 statusLine」
 // 的严格语义，与只读路径的宽容语义不同，合并会让某一侧变错。
 
-function lstatOrNull(path) {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
 function statuslineManifestPath(home) {
   return ccmUnderClaudeHome(home, 'statusline-v1', 'install-manifest.json');
 }
 
-function readStatuslineManifest(path) {
-  const stat = lstatOrNull(path);
+export function readStatuslineManifest(path) {
+  const stat = lstatIfPresent(path);
   if (!stat) return null;
   if (stat.isSymbolicLink()) throw new Error(`statusline bridge refused symbolic link path: ${path}`);
   const parsed = JSON.parse(readFileSync(path, 'utf8'));
@@ -412,14 +360,22 @@ function readStatuslineManifest(path) {
   return parsed;
 }
 
-// refreshInterval 也是安装的一部分（wrapper 把它带进命令行），只比 command 会漏掉一整类漂移。
-// 用 Object.is 而不是 ===：两侧都可能是 null，且要区分 null 与 undefined。
-export function statuslineInstalledStateMatches(settings, manifest) {
-  const current = Object.hasOwn(settings?.statusLine || {}, 'refreshInterval')
+export function statuslineRefreshInterval(settings) {
+  return Object.hasOwn(settings?.statusLine || {}, 'refreshInterval')
     ? settings.statusLine.refreshInterval
     : null;
+}
+
+// 用 Object.is 而不是 ===：两侧都可能是 null，且要区分 null 与 undefined。
+// 早期 manifest 没有 originalRefreshInterval 字段，算没设过（null）。
+export function statuslineRefreshMatches(settings, manifest) {
+  return Object.is(statuslineRefreshInterval(settings), manifest.originalRefreshInterval ?? null);
+}
+
+// refreshInterval 也是安装的一部分（wrapper 把它带进命令行），只比 command 会漏掉一整类漂移。
+export function statuslineInstalledStateMatches(settings, manifest) {
   return settings?.statusLine?.command === manifest.installedCommand
-    && Object.is(current, manifest.originalRefreshInterval ?? null);
+    && statuslineRefreshMatches(settings, manifest);
 }
 
 /**

@@ -88,7 +88,8 @@ import {
   snapshotResumeTranscript, startResumeDivergence, awaitResumeDivergence,
 } from '../sessions/resume-anchor.js';
 import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
-import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
+import { listDir, openInScope, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
+import { createFileTickets } from '../files/file-tickets.js';
 import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
 import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
 import { searchFiles } from '../files/file-search.js';
@@ -119,7 +120,6 @@ import {
   isValidDeviceToken,
   noteAuditedExternally,
   addPendingDevice,
-  getLatestPendingDevice,
   approveDevice,
   denyDevice,
   getPendingDevices,
@@ -131,6 +131,7 @@ import {
   setDeviceAlias
 } from '../auth/devices.js';
 import { createDeviceGate } from '../auth/device-gate.js';
+import { createTtyDeviceConsole } from '../auth/tty-device-console.js';
 import * as approvalStore from '../agent/approval-store.js';
 import { expireOrphanedPending, startApprovalRetentionSweep } from '../agent/approval-lifecycle.js';
 import * as audit from '../ops/audit.js';
@@ -152,6 +153,7 @@ import { createSocketEventRegistrar, registerSocketConnection } from './socket.j
 import { createMirrorEngine } from './mirror-engine.js';
 import { createAutoContinue } from './auto-continue.js';
 import { registerFileSocketHandlers, OUT_OF_SCOPE_ERROR } from './socket-files.js';
+import { registerFileTicketRoute } from './file-ticket-route.js';
 import { registerFolderSocketHandlers } from './socket-folders.js';
 import { CLAUDE_PROJECTS_DIR, claudeHome } from '../shared/claude-home.js';
 import { appendRegularFileSync } from '../shared/regular-file.js';
@@ -419,6 +421,29 @@ function reloadWorkdirs({ explicit = false } = {}) {
   return 'applied';
 }
 
+// 改 WORKDIRS 的入口共用：配置文件存在、来源确实是内联 WORKDIRS、读得出来。三项之外的前置检查走 precheck
+// （返回错误 ack 或 null），排在读配置之前，保持错误码优先级。
+function openWorkdirConfig(precheck) {
+  if (!usingConfigJson()) return { denied: { ok: false, error: 'no_config_file' } };
+  if (readWorkdirSource().from !== 'WORKDIRS') return { denied: { ok: false, error: 'source_readonly' } };
+  const denied = precheck?.();
+  if (denied) return { denied };
+  try {
+    return { config: loadConfigSources({ configPath: CONFIG_FILE_PATH, envPath: ENV_FILE_PATH }).fileValues };
+  } catch {
+    return { denied: { ok: false, error: 'config_unreadable' } };
+  }
+}
+
+function writeWorkdirs(config, next) {
+  try {
+    writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(config, { WORKDIRS: next }), null, 2)}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // 手机上「添加文件夹」（FOLDER-01）：追加进配置文件的内联 WORKDIRS，同步热加载，回报生效后的列表。
 // 只在工作区列表**确实来自**那份内联配置时才写——来源是 WORK_DIRS / WORK_DIRS_FILE 时写了也不生效
 // （环境变量压过文件），报成功就是假成功；配置文件不存在时也不替用户建（hard-rules §4.6）。
@@ -426,24 +451,14 @@ function reloadWorkdirs({ explicit = false } = {}) {
 // 读与写之间没有 await：追加到的是写入前那一刻的列表，原有条目（含 sessionLimit）原样保留。
 // 不等文件监听：那条要过防抖，ack 回来时新目录还没生效，手机上接着点进去会被当成越界。
 function addConnectedFolder(path) {
-  if (!usingConfigJson()) return { ok: false, error: 'no_config_file' };
-  if (readWorkdirSource().from !== 'WORKDIRS') return { ok: false, error: 'source_readonly' };
-  let config;
-  try {
-    config = loadConfigSources({ configPath: CONFIG_FILE_PATH, envPath: ENV_FILE_PATH }).fileValues;
-  } catch {
-    return { ok: false, error: 'config_unreadable' };
-  }
+  const { config, denied } = openWorkdirConfig();
+  if (denied) return denied;
   const next = [...(Array.isArray(config.WORKDIRS) ? config.WORKDIRS : []), path];
   const verdict = validateEnvChanges({ WORKDIRS: next }, {
     current: structuredToStringValues(config), fileExists: existsSync, isExecutable: () => true, probePort: () => false, usingConfigJson: true,
   });
   if (!verdict.ok) return { ok: false, error: 'invalid', message: verdict.results.find(r => r.level === 'error')?.message ?? '' };
-  try {
-    writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(config, { WORKDIRS: next }), null, 2)}\n`);
-  } catch {
-    return { ok: false, error: 'write_failed' };
-  }
+  if (!writeWorkdirs(config, next)) return { ok: false, error: 'write_failed' };
   reloadWorkdirs();
   return workDirs.includes(path) ? { ok: true, dirs: workDirs } : { ok: false, error: 'not_applied', dirs: workDirs };
 }
@@ -455,15 +470,10 @@ function addConnectedFolder(path) {
 // 热加载走 explicit：剩下的条目全都找不到时，「保留旧清单」那道保护（防编辑器写到一半）会把这次断开吞掉。
 // 已开在里面的会话照常跑，只拒新开（同设置面板里删掉一项）。
 function removeConnectedFolder(path) {
-  if (!usingConfigJson()) return { ok: false, error: 'no_config_file' };
-  if (readWorkdirSource().from !== 'WORKDIRS') return { ok: false, error: 'source_readonly' };
-  if (typeof path !== 'string' || !workDirs.includes(path)) return { ok: false, error: 'not_connected' };
-  let config;
-  try {
-    config = loadConfigSources({ configPath: CONFIG_FILE_PATH, envPath: ENV_FILE_PATH }).fileValues;
-  } catch {
-    return { ok: false, error: 'config_unreadable' };
-  }
+  const { config, denied } = openWorkdirConfig(
+    () => (typeof path === 'string' && workDirs.includes(path) ? null : { ok: false, error: 'not_connected' }),
+  );
+  if (denied) return denied;
   const list = Array.isArray(config.WORKDIRS) ? config.WORKDIRS : [];
   const realOf = p => { try { return realpathSync.native(p); } catch { return null; } };
   // 目录已经不在了（外置盘拔了、被删了）realpath 解析不出：按配置里记的原样比。断开不能要求目录还在——
@@ -476,11 +486,7 @@ function removeConnectedFolder(path) {
   const next = list.filter(e => !isTarget(e));
   // 清单里有它、配置的 WORKDIRS 里却没有：是退役的 WORK_DIR 折进来的那一项，删 WORKDIRS 删不掉它
   if (next.length === list.length) return { ok: false, error: 'not_connected' };
-  try {
-    writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(config, { WORKDIRS: next }), null, 2)}\n`);
-  } catch {
-    return { ok: false, error: 'write_failed' };
-  }
+  if (!writeWorkdirs(config, next)) return { ok: false, error: 'write_failed' };
   reloadWorkdirs({ explicit: true });
   return workDirs.includes(path) ? { ok: false, error: 'not_applied', dirs: workDirs } : { ok: true, dirs: workDirs };
 }
@@ -493,14 +499,8 @@ function removeConnectedFolder(path) {
 // 退役的 WORK_DIR 不给自动移除（删 WORKDIRS 删不掉它，折进列表后还会再冒出来）。
 // 只读来源 / 没有配置文件在这一层拒绝；设备信任闸在 socket-folders 里（不能只靠前端隐藏按钮）。
 function removeMissingFolders(paths) {
-  if (!usingConfigJson()) return { ok: false, error: 'no_config_file' };
-  if (readWorkdirSource().from !== 'WORKDIRS') return { ok: false, error: 'source_readonly' };
-  let config;
-  try {
-    config = loadConfigSources({ configPath: CONFIG_FILE_PATH, envPath: ENV_FILE_PATH }).fileValues;
-  } catch {
-    return { ok: false, error: 'config_unreadable' };
-  }
+  const { config, denied } = openWorkdirConfig();
+  if (denied) return denied;
   const list = Array.isArray(config.WORKDIRS) ? config.WORKDIRS : [];
   // 复核：对着刚读出的原始条目再跑一遍 resolveWorkdirs，只信这一趟确认仍缺失的原样路径
   const { missing: confirmedMissing } = resolveWorkdirs(normalizeWorkdirEntries(list).entries);
@@ -521,11 +521,7 @@ function removeMissingFolders(paths) {
     if (skippedLegacy.length) return { ok: false, error: 'legacy_workdir' };
     return { ok: false, error: 'nothing_removable' };
   }
-  try {
-    writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(config, { WORKDIRS: next }), null, 2)}\n`);
-  } catch {
-    return { ok: false, error: 'write_failed' };
-  }
+  if (!writeWorkdirs(config, next)) return { ok: false, error: 'write_failed' };
   // 显式：剩下的条目可能全找不到，「保留旧清单」那道保护不能把这次移除吞掉
   reloadWorkdirs({ explicit: true });
   return {
@@ -623,8 +619,11 @@ function preflight() {
     // 恒为 unknown，而它恰恰是本段头注说的「升级后回归核对」要用的那一项。
     versions.server = require('../../../package.json').version;
   } catch { /* 非致命 */ }
+  // 不是告警：推荐的网关配法是写进 Claude Code 自己的 settings.json env 块（doctor 也这么劝），那份配置只有 claude
+  // 子进程自己读，本进程环境里本来就看不到。此前这里打 ⚠️「将依赖 claude CLI 自身的登录态」，照文档配好网关的人
+  // 每次启动都被警告一次，而且说错了路径（2026-11-03 mini 全新安装核对）。
   if (!process.env.ANTHROPIC_AUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) {
-    console.warn('⚠️  未检测到 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY，将依赖 claude CLI 自身的登录态');
+    console.log('本进程环境里没有 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY：模型调用按 claude 自己的配置走（settings.json 的 env 块，或它的登录态）');
   }
   return claudeBin;
 }
@@ -849,6 +848,11 @@ registerOperationalRoutes({
   }, clientIp),
 });
 
+// 文件链接的字节出口：票据由 file:open 签发（已过设备审批的 socket），每次请求重查身份、设备、范围。
+// n1: N1-FILE-TICKET 进程内单例、重启清零、全服务端共用 200 张上限，不分账号——多用户下一个人连点就能把别人的票据挤掉。
+const fileTickets = createFileTickets();
+registerFileTicketRoute({ app, tickets: fileTickets, strategy: authStrategy, isDeviceTrusted, scopeRootsFor: fileScopeRootsFor });
+
 // Historical replay stays on the authenticated session:history socket event;
 // the HTTP data plane intentionally exposes no unauthenticated transcript route.
 const httpServer = createServer(app);
@@ -887,7 +891,17 @@ function unlockSocket(socket) {
   });
 
   // 无缝补发跳过的初始数据重放，使用户不需要刷新页面即可直入聊天界面
+  replayViewStateTo(socket);
+  scheduleStatusRefresh();
+}
+
+// 已批准设备的初始视图状态：connection 的即时批准和 unlockSocket 的待审批转批准走同一份。
+// 合成事件惯例：epoch:'server'、sessionId:null，不触发客户端会话切换。
+function replayViewStateTo(socket) {
   if (lastInit) {
+    // 台阶3：lastInit 是全局最近一次（可能来自后台实例），重放时校正到当前查看 tab——
+    // permissionMode 同理（否则前端先按陈旧档定基线、再被下方 permission_mode 重放纠正，冒出假「权限档→X」）；
+    // model/cwd 一并校正，避免新设备连入时短暂显示后台实例的模型/目录（下一轮真 init 到达即自愈）。
     const va = agents.get(viewingInstanceId);
     // #5：全局 lastInit 的 slashCommands 可能来自别 cwd（含 project skill）→ 先剥离，再按 viewing cwd 注入 per-cwd 缓存
     // （有缓存才注入；无则省略字段，前端保留 localStorage，真 init 到达即校正）
@@ -921,12 +935,14 @@ function unlockSocket(socket) {
       type: 'models', payload: replayModels
     });
   }
-  replayStatusLineTo(socket);
-  permModeTo(socket);
-  effortTo(socket);
-  instancesTo(socket);
-  mirrorStateTo(socket); // 解锁这一刻起该 socket 才第一次拿到只读快照——不经过 connection 回调，漏了会一直假当成可写
-  scheduleStatusRefresh();
+  replayStatusLineTo(socket); // 仅 owner/instance/session/cwd 全匹配才即时上屏
+  permModeTo(socket);   // 总是发，含 default
+  effortTo(socket);     // 总是发，含 null=模型默认
+  instancesTo(socket);  // tab 栏快照：viewingInstanceId + dirs + 各实例状态
+  // 只读追平：补发权威完整快照（含 readonly=false）。setMirror 仅在变化时广播，若空闲态省略事件，
+  // 断线前残留 readonly=true 的客户端会在重连后继续假锁；实例 ID 重启复用时尤其明显。unlockSocket 不经过
+  // connection 回调，这一刻该 socket 才第一次拿到只读快照，漏了会一直假当成可写。
+  mirrorStateTo(socket);
 }
 
 // 配置类文件的变更监听（workdirs.json 与 ccm.config.json 共用）。
@@ -963,6 +979,14 @@ if (process.env.WORK_DIRS_FILE) {
   watchFileDebounced(resolveWorkdirsFilePath(process.env.WORK_DIRS_FILE, HERE), reloadWorkdirs, 'workdirs');
 }
 
+function readJsonOrNull(path) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 // 统一配置文件热加载（P1b）：hot 项就地生效，restart 项只提示 —— 热应用一个需重启的项是假生效。
 //
 // **只在文件已存在时才装监听**：未迁移的部署一个 watch 都不多加，与 P1a 的零影响立场一致。
@@ -970,13 +994,7 @@ if (process.env.WORK_DIRS_FILE) {
 // 换源本来就需要重启。
 if (usingConfigJson()) {
   const configReloader = createConfigReloader({
-    readConfig: () => {
-      try {
-        return JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8'));
-      } catch {
-        return null; // 编辑器写到一半 → 保留旧快照，别把白名单判成全部删除
-      }
-    },
+    readConfig: () => readJsonOrNull(CONFIG_FILE_PATH), // null=编辑器写到一半 → 保留旧快照，别把白名单判成全部删除
     onHot: (keys) => {
       console.log(`[config] 热加载生效：${keys.join(', ')}`);
       if (keys.includes('WORKDIRS')) reloadWorkdirs();
@@ -987,40 +1005,10 @@ if (usingConfigJson()) {
   watchFileDebounced(CONFIG_FILE_PATH, () => configReloader.handleChange(), 'config');
 }
 
-// 终端控制台交互：敲回车一键同意最新申请设备，或输入 deny 拒绝。
+// 终端控制台交互：敲回车一键同意最新申请设备，或输入 deny 拒绝（逻辑在 auth/tty-device-console.js）。
 if (process.stdin.isTTY) {
   process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (data) => {
-    const text = data.trim().toLowerCase();
-    const latest = getLatestPendingDevice();
-    if (text === '') {
-      if (latest) {
-        console.log(`\n[TTY] 收到回车！一键批准最新设备: ${latest}`);
-        // F2（code-review #5）：回车批准的是「Enter 那刻的最新」待审设备——若你看提示到按回车之间又来了新设备，
-        // 批准的可能已不是你以为的那个。这里若尚有其他待审设备就告警，让你察觉可能的竞态、必要时 deny 复核。
-        const others = getPendingDevices().filter(d => d.deviceToken !== latest).length;
-        if (others > 0) {
-          console.log(`   ⚠️ 另有 ${others} 个待审设备未处理——请确认刚批准的正是你想放行的那台（如有疑虑，运行 node scripts/device.js deny "${latest}" 撤销）`);
-        }
-        if (approveDevice(latest)) {
-          unlockDeviceSockets(latest);
-          broadcastPendingDevices();
-        } else {
-          console.error(`   ❌ 批准 ${latest} 落盘失败、未生效，请检查服务端磁盘后重试`); // BE-011：不静默当成功
-        }
-      }
-    } else if (text === 'deny') {
-      if (latest) {
-        console.log(`\n[TTY] 收到 deny！拒绝并移除最新设备: ${latest}`);
-        const denied = denyDevice(latest);
-        disconnectDeviceSockets(latest); // 断连照做（纵深防御）
-        broadcastPendingDevices();
-        if (!denied) console.error(`   ❌ 吊销 ${latest} 落盘失败、可能未生效（设备重连会复活），请检查服务端磁盘后重试`); // BE-011
-      } else {
-        console.log('\n[TTY] 当前没有等待审批的设备。');
-      }
-    }
-  });
+  process.stdin.on('data', createTtyDeviceConsole({ unlockDeviceSockets, disconnectDeviceSockets, broadcastPendingDevices }));
 }
 
 // 握手拒绝：把 authRejection 的判定翻译成 socket.io 的错误对象。
@@ -1325,14 +1313,6 @@ const SERVICE_EVENTS_FILE = dataFile('service-events.json');
 const SERVICE_SNAPSHOT_FILE = dataFile('service-snapshot.json');
 const SERVICE_SAMPLE_INTERVAL_MS = 60_000;
 let serviceSampleInterval;
-
-const readJsonOrNull = (path) => {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    return null;
-  }
-};
 
 // writeOwnerOnlyFile 不建父目录（realWriteManifest 就自己先 mkdir 了，这里上一版漏了）。
 // 全新安装、用户还没聊过天时 dataDir 可能尚未被 sessions/approval-store 顺手创建 ⇒ 每次采样
@@ -1881,6 +1861,21 @@ if (process.env.CLI_HOOKS_BRIDGE === 'off') {
 // statusline 桥同理：读一次落进缓存，供 service:status 下发给面板。
 // 只在装/卸时变，而 instances 广播很频繁——不能每次广播都去读盘。
 refreshStatuslineInstallState();
+// 启动日志也说一句：此前只有 hooks 桥有，电脑上看不出 statusline 桥装没装（2026-11-03 mini 全新安装核对）。
+// 读不出（unknown）不说「未安装」——那是一句确定的断言，会让人以为不必再查（同 readStatuslineInstallState 头注）。
+if (statusBridgeOff) {
+  console.log('[statusline] CLI statusline 桥已由 CLI_STATUSLINE_BRIDGE=off 停用（状态栏只用 SDK 自己的数据）');
+} else if (statuslineInstallState === 'installed') {
+  console.log('[statusline] CLI statusline 桥已安装——终端会话的模型 / 额度 / 上下文用量会同步到手机');
+} else if (statuslineInstallState === 'drifted') {
+  console.log('[statusline] ⚠️ CLI statusline 桥安装记录与 ~/.claude/settings.json 已漂移，运行 npm run statusline:status 检查');
+} else if (statuslineInstallState === 'unknown') {
+  console.log(`[statusline] ⚠️ CLI statusline 桥安装态读不出（${statuslineInstallDetail.unreadable === 'manifest' ? '安装清单' : '~/.claude/settings.json'}），运行 npm run statusline:status 检查`);
+} else if (statuslineInstallDetail.configured === false) {
+  console.log('[statusline] CLI statusline 桥未安装：终端会话的模型 / 额度 / 上下文用量不同步到手机。要先给 Claude Code 配好状态栏（~/.claude/settings.json 的 statusLine）才能装');
+} else {
+  console.log('[statusline] CLI statusline 桥未安装：终端会话的模型 / 额度 / 上下文用量不同步到手机（npm run statusline:install 或在设置面板一键启用）');
+}
 
 // effort UI 归一：normalizeEffortUiLevel（cli-settings-defaults.js）——ultracode → xhigh + Settings.ultracode。
 // 最近一次 init payload + 按 cwd 归键的 models / slashCommands 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
@@ -1995,10 +1990,7 @@ function statusOwnerFor(agent, instanceId = viewingInstanceId) {
   if (agent?.externalObserved) return 'cli';
   if (statusBridgeOff || !agent?.sessionId) return 'sdk';
   // 只看 mirror 锁：externalDirty 管发送前置换，不把 statusline 锁到 CLI（见 selectStatusOwner 注释）。
-  return selectStatusOwner({
-    mirrorReadonly: mirrorOwnedBy(agent.sessionId, instanceId),
-    externalDirty: agent.externalDirty === true, // 兼容形参，selectStatusOwner 忽略
-  });
+  return selectStatusOwner({ mirrorReadonly: mirrorOwnedBy(agent.sessionId, instanceId) });
 }
 
 function replayStatusLineTo(socket) {
@@ -2916,48 +2908,7 @@ registerSocketConnection(io, socket => {
     // 断开 socket，但 viewingInstanceId 全程不变，前端不会重新 emit user:setViewing）。幂等、null 安全，
     // 无关紧要的网络抖动重连也可放心无脑调用。
     captureUnreadSnapshot(viewingInstanceId);
-    // 已授权的设备：重放最近 init/models（合成事件惯例：epoch:'server'、sessionId:null，不触发客户端会话切换）
-    if (lastInit) {
-      // 台阶3：lastInit 是全局最近一次（可能来自后台实例），重放时校正到当前查看 tab——
-      // permissionMode 同理（否则前端先按陈旧档定基线、再被下方 permission_mode 重放纠正，冒出假「权限档→X」）；
-      // model/cwd 一并校正，避免新设备连入时短暂显示后台实例的模型/目录（下一轮真 init 到达即自愈）。
-      const va = agents.get(viewingInstanceId);
-      // #5：全局 lastInit 的 slashCommands 可能来自别 cwd → 先剥离，再按 viewing cwd 注入 per-cwd 缓存
-      // （terminalSlashCommands 同理一并剥离，两者必须同源，见 resolveSlashCommandsForCwd 头注）
-      const { slashCommands: _omitCmds, terminalSlashCommands: _omitTerm, ...initBase } = lastInit;
-      const replayCwd = va?.cwd ?? viewingCwd;
-      const replayCmds = resolveSlashCommandsForCwd(slashCommandsCache, replayCwd, lastInit);
-      socket.emit('agent:event', {
-        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'init', payload: {
-          ...initBase,
-          permissionMode: permModeOf(viewingInstanceId),
-          // model/cwd 校正到当前查看 tab：va 存在用实例值（FRESH 实例 activeModel 为空则 null，不回退 lastInit）；
-          // va 为空（空首页）model 不下发=null（新会话模型=env 默认、服务端不可知，前端显「不指定」，A1）、cwd 用 viewingCwd
-          ...(va ? { model: va.activeModel ?? null, cwd: va.cwd }
-                : { model: null, cwd: viewingCwd }),
-          ...(replayCmds ? { slashCommands: replayCmds.slashCommands, terminalSlashCommands: replayCmds.terminalSlashCommands } : {}),
-        }
-      });
-    }
-    // models 校正到当前查看 tab 的 cwd（同 unlockSocket）：未知工作区不重放，绝不回退别区清单
-    const replayModels = modelsCache.get(agents.get(viewingInstanceId)?.cwd ?? viewingCwd);
-    if (replayModels) {
-      socket.emit('agent:event', {
-        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'models', payload: replayModels
-      });
-    }
-    replayStatusLineTo(socket); // 仅 owner/instance/session/cwd 全匹配才即时上屏
-    // 台阶3：重放当前查看 tab 的权限档（总是发，含 default）
-    permModeTo(socket);
-    // 重放当前查看 tab 的思考强度档（总是发，含 null=模型默认）
-    effortTo(socket);
-    // 台阶3：重放 tab 栏快照（viewingInstanceId + dirs + 各实例状态）
-    instancesTo(socket);
-    // 只读追平：向(重)连客户端补发权威完整快照（含 readonly=false）。setMirror 仅在变化时广播，
-    // 若空闲态省略事件，断线前残留 readonly=true 的客户端会在重连后继续假锁；实例 ID 重启复用时尤其明显。
-    mirrorStateTo(socket);
+    replayViewStateTo(socket);
     // 可信端连入时重放当前待审批设备列表，使其可立即在 Web UI 远程审批
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -3366,7 +3317,7 @@ registerSocketConnection(io, socket => {
       broadcastTrustedDevices();
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_approved', target: deviceId, outcome: 'allowed', meta: { via: 'web' } });
       // 已在这里记过 via:'web'，登记一下免得文件监听器按差集再补一条 via:'cli'（同一动作两条记录、
-      // 且归因是错的）。TTY 的回车批准【不】登记——它自己不记审计，监听器是它唯一的审计来源。
+      // 且归因是错的）。终端里的回车批准 / deny 同理，在 auth/tty-device-console.js 自记 via:'tty' 再登记。
       noteAuditedExternally({ trustedAdded: [deviceId], pendingRemoved: [deviceId] });
     } else {
       // BE-011：批准落盘失败——设备并未真正信任（isDeviceTrusted 每次重读磁盘），不解锁、不谎报成功，告警并提示重试。
@@ -4039,19 +3990,27 @@ registerSocketConnection(io, socket => {
   // 【为什么不复用 session:history】那份是展平后的气泡（一轮会展成多条 text/tool_use），
   // 且工具卡不带 uuid；回退锚点只认人类 prompt 自身的 uuid，得从原始 jsonl 条目上取。
   // 【text 在这里截断】清单只需要一行预览，而大会话有几百轮，整段正文传过去是白付流量。
-  on(socket, 'session:rewind:candidates', async (payload, ack) => {
-    const reply = (r) => { if (typeof ack === 'function') ack(r); };
+  // 回退三步共用的入口校验，不通过时已经 reply 并返回 null。
+  // 树已删：同 session:fork。在这里先拦——要往那棵树里还原文件、再从那里分叉，无处落地；
+  // 清单这一步就说清，免得列出一串点了也做不成的轮次。
+  const rewindTarget = async (payload, reply) => {
     const sessionId = payload?.sessionId;
-    // 树已删：同 session:fork。回退三步都在这里先拦——要往那棵树里还原文件、再从那里分叉，无处落地；
-    // 清单这一步就说清，免得列出一串点了也做不成的轮次。
-    if (resolveGoneWorktreeParent(payload?.cwd, workDirs)) { reply({ ok: false, error: worktreeGoneError(payload.cwd, '所以没法回退') }); return; }
+    if (resolveGoneWorktreeParent(payload?.cwd, workDirs)) { reply({ ok: false, error: worktreeGoneError(payload.cwd, '所以没法回退') }); return null; }
     const routed = routeCwd(payload?.cwd);
-    if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
+    if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return null; }
     const cwd = ensureAuthorized(routed);
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       reply({ ok: false, error: '会话不存在' });
-      return;
+      return null;
     }
+    return { cwd, sessionId };
+  };
+
+  on(socket, 'session:rewind:candidates', async (payload, ack) => {
+    const reply = (r) => { if (typeof ack === 'function') ack(r); };
+    const target = await rewindTarget(payload, reply);
+    if (!target) return;
+    const { cwd, sessionId } = target;
     let entries;
     try {
       entries = await readSessionEntries(cwd, sessionId);
@@ -4069,16 +4028,10 @@ registerSocketConnection(io, socket => {
 
   on(socket, 'session:rewind:preview', async (payload, ack) => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
-    const sessionId = payload?.sessionId;
+    const target = await rewindTarget(payload, reply);
+    if (!target) return;
+    const { cwd, sessionId } = target;
     const promptUuid = payload?.promptUuid;
-    if (resolveGoneWorktreeParent(payload?.cwd, workDirs)) { reply({ ok: false, error: worktreeGoneError(payload.cwd, '所以没法回退') }); return; }
-    const routed = routeCwd(payload?.cwd);
-    if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
-    const cwd = ensureAuthorized(routed);
-    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
-      reply({ ok: false, error: '会话不存在' });
-      return;
-    }
     if (typeof promptUuid !== 'string' || !promptUuid) {
       reply({ ok: false, error: '缺少回退锚点' });
       return;
@@ -4174,16 +4127,10 @@ registerSocketConnection(io, socket => {
   // 前者的中间态是自洽的，后者不是。
   on(socket, 'session:rewind:confirm', async (payload, ack) => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
-    const sessionId = payload?.sessionId;
+    const target = await rewindTarget(payload, reply);
+    if (!target) return;
+    const { cwd, sessionId } = target;
     const promptUuid = payload?.promptUuid;
-    if (resolveGoneWorktreeParent(payload?.cwd, workDirs)) { reply({ ok: false, error: worktreeGoneError(payload.cwd, '所以没法回退') }); return; }
-    const routed = routeCwd(payload?.cwd);
-    if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
-    const cwd = ensureAuthorized(routed);
-    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
-      reply({ ok: false, error: '会话不存在' });
-      return;
-    }
     if (typeof promptUuid !== 'string' || !promptUuid) {
       reply({ ok: false, error: '缺少回退锚点' });
       return;
@@ -4656,6 +4603,8 @@ registerSocketConnection(io, socket => {
     getWorkDirs: () => workDirs,
     listDir,
     browseReadFile,
+    openInScope,
+    fileTickets,
     locateStoredAttachment,
     listGitChanges,
     readGitDiff,
@@ -4832,50 +4781,21 @@ registerSocketConnection(io, socket => {
 
   // ④ UI 安全体检：运行时检查 + 全局危险白名单审查（项数见 runDoctor）。走 on() 鉴权闸（deviceApproved fail-closed）。
   // 全程脱敏（runDoctor 只出布尔/计数/危险规则串，绝不回显明文 token/绝对路径/AUD/密钥）。
-  // CLI hooks 桥的一键安装/卸载。**这是 server 唯一会写用户全局 ~/.claude/settings.json 的路径**，
-  // 且只在已鉴权设备显式点击时执行——绝不在启动、连接或任何后台时机自动触发。
-  // 之所以开这个口子：ccm 的主界面在手机上，而 npm 命令只能在电脑终端跑；只留 CLI 入口等于让手机
-  // 用户永远发现不了这个功能（它又恰恰是终端会话能推手机的唯一通道）。
-  // 实现上不复用内存里的函数，而是 spawn 安装器脚本：安装器已有全套纪律（symlink fail-closed /
-  // 原子写 / 先 manifest 后 settings / 幂等 / CAS 卸载 / 回环验证），进程隔离也保证它崩了不掀翻 server。
-  on(socket, 'hooks:setup', (payload, ack) => {
+  // 两个桥的安装器共用的 handler：execFile 调 scripts 下的安装器，而不是 import 它（运行时禁止 import scripts/）。
+  const bridgeSetupHandler = ({ tag, script, actions, refreshState }) => (payload, ack) => {
     if (typeof ack !== 'function') return;
     const action = payload?.action;
-    if (!['install', 'uninstall', 'verify'].includes(action)) return ack({ ok: false, error: '未知操作' });
-    execFile(process.execPath, [join(HERE, 'scripts', 'hooks-bridge-setup.js'), action], {
+    if (!actions.includes(action)) return ack({ ok: false, error: '未知操作' });
+    execFile(process.execPath, [join(HERE, 'scripts', script), action], {
       cwd: HERE, timeout: 20000, maxBuffer: 256 * 1024,
     }, (err, stdout, stderr) => {
-      const state = refreshHooksInstallState();
-      // 服务端留痕：这是 server 唯一会改用户全局 ~/.claude/settings.json 的动作，只有前端弹报告
-      // 不够——事后想查"这台机器上的 hooks 是谁什么时候装的"，得能在服务日志里翻到。
-      console.log(`[hooks] 经 UI ${action} ${err ? '失败' : '完成'}，当前安装态=${state}`
+      const state = refreshState();
+      // 服务端留痕：这是 server 会改用户全局 ~/.claude/settings.json 的动作，只有前端弹报告
+      // 不够——事后想查"这台机器上的桥是谁什么时候装的"，得能在服务日志里翻到。
+      console.log(`[${tag}] 经 UI ${action} ${err ? '失败' : '完成'}，当前安装态=${state}`
         + (err ? `：${String(err.message || err).split('\n')[0]}` : ''));
       broadcastInstances(); // 安装态变了 → 面板/镜像提示即时跟上
       // 报告直接回传安装器的人类可读输出（含四种结局文案），前端原样展示，不在两处各写一套话术
-      const report = String(stdout || '').split('\n').filter(l => l && !l.trim().startsWith('{')).join('\n').trim();
-      ack({
-        ok: !err,
-        state,
-        report: report || String(stderr || '').trim().split('\n').slice(-3).join('\n') || (err ? '执行失败' : ''),
-      });
-    });
-  });
-
-  // statusline 桥的装/卸。与 hooks:setup 同构：走 execFile 调 scripts 下的安装器，而不是 import 它
-  // （运行时禁止 import scripts/）。**读态不走这里**——那条在 ops/cli-statusline-bridge.js 里同步读，
-  // service:status 每 5s 要用，spawn 一个 node 进程太贵。
-  on(socket, 'statusline:setup', (payload, ack) => {
-    if (typeof ack !== 'function') return;
-    const action = payload?.action;
-    if (!['install', 'uninstall'].includes(action)) return ack({ ok: false, error: '未知操作' });
-    execFile(process.execPath, [join(HERE, 'scripts', 'statusline-bridge-setup.js'), action], {
-      cwd: HERE, timeout: 20000, maxBuffer: 256 * 1024,
-    }, (err, stdout, stderr) => {
-      const state = refreshStatuslineInstallState();
-      // 同 hooks:setup：这是 server 会改用户全局 ~/.claude/settings.json 的动作，服务日志要留痕
-      console.log(`[statusline] 经 UI ${action} ${err ? '失败' : '完成'}，当前安装态=${state}`
-        + (err ? `：${String(err.message || err).split('\n')[0]}` : ''));
-      broadcastInstances();
       const report = String(stdout || '').split('\n').filter(l => l && !l.trim().startsWith('{')).join('\n').trim();
       // 安装器拒装时带原因码：透传给面板按码出文案（验收 O125），stderr 那句英文留给 report 兜底
       const code = err ? setupFailureCode(stdout) : null;
@@ -4886,7 +4806,30 @@ registerSocketConnection(io, socket => {
         ...(code ? { code } : {}),
       });
     });
-  });
+  };
+
+  // CLI hooks 桥的一键安装/卸载。**这是 server 唯一会写用户全局 ~/.claude/settings.json 的路径**，
+  // 且只在已鉴权设备显式点击时执行——绝不在启动、连接或任何后台时机自动触发。
+  // 之所以开这个口子：ccm 的主界面在手机上，而 npm 命令只能在电脑终端跑；只留 CLI 入口等于让手机
+  // 用户永远发现不了这个功能（它又恰恰是终端会话能推手机的唯一通道）。
+  // 实现上不复用内存里的函数，而是 spawn 安装器脚本：安装器已有全套纪律（symlink fail-closed /
+  // 原子写 / 先 manifest 后 settings / 幂等 / CAS 卸载 / 回环验证），进程隔离也保证它崩了不掀翻 server。
+  on(socket, 'hooks:setup', bridgeSetupHandler({
+    tag: 'hooks',
+    script: 'hooks-bridge-setup.js',
+    actions: ['install', 'uninstall', 'verify'],
+    refreshState: refreshHooksInstallState,
+  }));
+
+  // statusline 桥的装/卸。与 hooks:setup 同构：走 execFile 调 scripts 下的安装器，而不是 import 它
+  // （运行时禁止 import scripts/）。**读态不走这里**——那条在 ops/cli-statusline-bridge.js 里同步读，
+  // service:status 每 5s 要用，spawn 一个 node 进程太贵。
+  on(socket, 'statusline:setup', bridgeSetupHandler({
+    tag: 'statusline',
+    script: 'statusline-bridge-setup.js',
+    actions: ['install', 'uninstall'],
+    refreshState: refreshStatuslineInstallState,
+  }));
 
   // 测试推送：自己验"推送到底通不通"，不必等真事件。今晚的教训——曾一直以为推送在工作，
   // 实际上从未订阅成功过，而界面上没有任何办法自证。与「▶ 试听提示音」同一心智（那个验本地
@@ -4959,22 +4902,9 @@ registerSocketConnection(io, socket => {
   // 正是本仓出过事的形态）。前端因此完全无感。
   // 原始结构化值。只供 list 档回显——其余项一律走投影后的字符串态，免得两套读法分叉。
   // .env 时代没有数组形态，回 null（编辑器据此显示空列表）。
-  const readStructuredValues = () => {
-    if (!usingConfigJson()) return null;
-    try {
-      return JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8'));
-    } catch {
-      return null;
-    }
-  };
+  const readStructuredValues = () => (usingConfigJson() ? readJsonOrNull(CONFIG_FILE_PATH) : null);
   const readEnvValues = () => {
-    if (usingConfigJson()) {
-      try {
-        return structuredToStringValues(JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8')));
-      } catch {
-        return {};
-      }
-    }
+    if (usingConfigJson()) return structuredToStringValues(readJsonOrNull(CONFIG_FILE_PATH) ?? {});
     try {
       return dotenvParse(readFileSync(ENV_FILE_PATH));
     } catch {
@@ -5677,7 +5607,8 @@ httpServer.listen(listenPort, host, () => {
   // 而那条路径退出太快、状态文件还没写完就没了，留下关不掉的孤儿窗口（实测踩到）。
   startLogTerminal({ home: homedir(), dataDir: DATA_DIR }).catch(() => {});
   console.log('========================================');
-  console.log('  Claude Chat Mobile v2');
+  // 版本取 package.json（preflight 已读进 versions.server）：此前写死的「v2」与发布号对不上（2026-11-03 mini）。
+  console.log(`  Claude Chat Mobile v${versions.server}`);
   console.log(workDirs.length
     ? `  工作目录: ${primaryWorkDir()}${workDirs.length > 1 ? `  (可切换 ${workDirs.length} 个: ${workDirs.join(', ')})` : ''}`
     : workdirStatus.missing()

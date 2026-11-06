@@ -70,7 +70,8 @@ export function createSheetController(context, {
 
   function openSheet(el) {
     haptic('tap');
-    let focusPrev = doc.activeElement;
+    const focusAtOpen = doc.activeElement;
+    let focusPrev = focusAtOpen;
     // 接力：焦点还停在一层正在收起的 sheet 里（抽屉会话行「⋯」菜单点「删除」：先收菜单、再开确认）。
     // 本层关闭时该还的是那层当初的触发按钮，不是那层里的项——那层到时已 display:none，接不住焦点，会丢到 body。
     // 那层到点还焦时不抢本层的焦点，见 closeSheet。
@@ -89,8 +90,12 @@ export function createSheetController(context, {
     if (!el.getAttribute('aria-modal')) el.setAttribute('aria-modal', 'true');
     // #399：焦点放到容器本身（tabindex=-1），不放第一个控件——与 focus-layers.js / settings.js 对齐；
     // 第一个若是输入框会在手机上直接弹键盘；容器带 aria-label 时读屏照样念标题。
+    // 这是默认值：调用方在打开的同一拍聚焦了里面的控件（改名的输入框）就不抢回来。只认这一拍新移进来的——
+    // 重复打开时焦点本来就在里面（排队的下一条审批，焦点还在「允许」上），要收回容器，否则一个回车就批了。
     requestAnimationFrame(() => {
-      try { focusInto(el); } catch { /* 单测桩可能无 focus */ }
+      try {
+        if (doc.activeElement === focusAtOpen || !el.contains(doc.activeElement)) focusInto(el);
+      } catch { /* 单测桩可能无 focus */ }
     });
     // 每层自己的 handler，只在自己的 sheet-open 期间生效——同时挂多个不冲突：非本层的 Tab
     // 事件命中不了本层的 first/last，直接 no-op（见上方模块注释）。
@@ -355,6 +360,5 @@ export function createSheetController(context, {
     setGestureDismiss,
     _test: { onDragPointerDown, onDragPointerMove, endDrag, getDrag: () => drag, ensureGestureDismiss },
   };
-  context.state.sheets = controller;
   return controller;
 }

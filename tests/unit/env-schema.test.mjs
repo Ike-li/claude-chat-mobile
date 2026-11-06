@@ -527,6 +527,19 @@ test('PUBLIC_URL help 中英对称：都要交代回落 Cloudflare 域名，以�
   }
 });
 
+// ── 两个 CLI 桥开关的帮助文案（2026-11-03）──────────────────────────────
+// 这两个开关是 env 层的停用闸（=off 才停），不是安装态。mini 全新安装核对时 statusline 桥没装，
+// 全部配置里它的开关照样是「开」——面板上能把这件事说清的只有 help。两个桥是孪生，一起钉。
+test('两个 CLI 桥开关的 help 中英都说清「开着不代表已安装」，并指向宿主机页看安装态', () => {
+  for (const key of ['CLI_HOOKS_BRIDGE', 'CLI_STATUSLINE_BRIDGE']) {
+    const help = ENV_SCHEMA[key].help || {};
+    assert.match(String(help.zh), /不代表已安装/, `${key} zh：要说开着不等于装了`);
+    assert.match(String(help.zh), /宿主机/, `${key} zh：要指向装没装在哪看`);
+    assert.match(String(help.en), /does not mean (it is )?installed/i, `${key} en：要说开着不等于装了`);
+    assert.match(String(help.en), /Host/, `${key} en：要指向装没装在哪看`);
+  }
+});
+
 // ── TRUSTED_PROXY：采信 X-Forwarded-For 的显式开关（2026-09-06）─────────────
 //
 // 它是一个「开错等于关掉限速」的安全开关：透传型反代 / ssh -R / frp tcp 会把客户端自带的 XFF

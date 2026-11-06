@@ -120,6 +120,30 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 文件链接：模型回复里各种形态的链接（真实 transcript 统计见 logic/file-links.js 的单测样本），外加不该被认成文件的外部链接。
+      command: 'test:file-links',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel, delay } = getContext();
+        const text = [
+          '- [带行号](demo.js:2)', '- [长文件](long.js:300)', '- [分页日志](paged.log#L700)', '- [太远的行](paged.log:3900)',
+          '- [页尾的下一行](page-edge.log#L129)',
+          '- [视频](media/clip.webm)', '- [图片](media/cover.png)', '- [坏图](media/broken.png)', '- [压缩包](media/out.zip)',
+          '- [目录](media/)', '- [不存在](missing/nope.txt)', '- [旧后端](stale-backend.txt)', '- [别的文件夹](../sibling/notes.txt)',
+          '- [网页](https://example.com/page)', '- [电话](tel:10086)', '- [邮件](mailto:a@example.com)',
+          '- <a href="https://example.com/forged" data-file-path="demo.js" data-file-line="2">伪造</a>',
+        ].join('\n');
+        await delay(50);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_file_links', text },
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_file_links', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       // API 重试态：CLI 会把整条 spinner 行顶替成 "✻ API error · Retrying in 4s · attempt 2/10"。
       // 【必须是独立命令，绝不并进 test:stream / test:question / test:exitplan】——那三条的 spec 用
       // /^✻ .+… \(\d+s/ 锚定普通 spinner 形态，而重试行不含 "… ("，混进去会把它们一起打红。
@@ -421,6 +445,32 @@ export function createContentScenarios(getContext) {
               { role: 'user', content: '压缩前的问题', uuid: 'u-compact-1' },
               { role: 'system', kind: 'compact_summary', content: '' },
               { role: 'user', content: '压缩后的问题', uuid: 'u-compact-2' },
+            ],
+          },
+        });
+      },
+    },
+    {
+      // 不是用户按的停止。字段形态复刻 agent.js：看门狗走强制收口时只有 system 没有 result，工具卡靠 system
+      // 分支收尾；走到 result 时带 interruptedBy。历史标记复刻 history.js：不带 uuid，走 history_append。
+      command: 'test:interrupt-sources',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel } = getContext();
+        const base = seq => ({ seq, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now() });
+        const interruptedResult = interruptedBy => ({ durationMs: 1000, costUsd: 0, isError: true, interrupted: true, interruptedBy, models: [activeModel] });
+        socket.emit('agent:event', { ...base(1), type: 'tool_use', payload: { toolUseId: 't_stuck', name: 'run_command', inputSummary: 'sleep 9999' } });
+        socket.emit('agent:event', { ...base(2), type: 'system', payload: { message: '已中断', kind: 'interrupted', interruptedBy: 'system:idle-watchdog' } });
+        socket.emit('agent:event', { ...base(3), type: 'result', payload: interruptedResult('system:idle-watchdog') });
+        socket.emit('agent:event', { ...base(4), type: 'result', payload: interruptedResult('cli') });
+        socket.emit('agent:event', {
+          ...base(5),
+          type: 'history_append',
+          payload: {
+            external: true,
+            messages: [
+              { role: 'user', content: '中断前的问题', uuid: 'u-interrupt-1' },
+              { role: 'system', kind: 'interrupted', content: '' },
+              { role: 'user', content: '中断后的问题', uuid: 'u-interrupt-2' },
             ],
           },
         });

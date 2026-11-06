@@ -3,7 +3,6 @@
 // 强制浅/深时写 data-theme，并把对应资源的 media 设为 all、另一侧 not all。
 import {
   THEME_COLORS,
-  readThemePref,
   resolveTheme,
   themeHtmlAttribute,
   manifestHrefForTheme,
@@ -66,15 +65,6 @@ export function applyThemeToDocument(doc, pref, { systemDark = false } = {}) {
   }
 
   return resolved;
-}
-
-export function readAndApplyTheme(doc, {
-  getItem = (typeof localStorage !== 'undefined' ? (k) => localStorage.getItem(k) : null),
-  systemDark = false,
-} = {}) {
-  const pref = readThemePref(getItem);
-  applyThemeToDocument(doc, pref, { systemDark });
-  return pref;
 }
 
 export { readThemePref, writeThemePref, resolveTheme, THEME_STORAGE_KEY, THEME_COLORS, MANIFEST_HREF, manifestHrefForTheme } from './logic/theme.js';

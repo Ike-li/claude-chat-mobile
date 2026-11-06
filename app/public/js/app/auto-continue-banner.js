@@ -61,7 +61,6 @@ export function createAutoContinueBannerController(context, {
   }
 
   const controller = { update, refresh: render, isVisible: () => visible };
-  context.state.autoContinueBanner = controller;
   return controller;
 }
 

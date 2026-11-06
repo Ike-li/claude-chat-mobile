@@ -1,14 +1,10 @@
-// tests/unit/logic-session-search.test.mjs —— 会话抽屉的标题搜索（纯函数）
-// 覆盖：空/空白 query 全匹配 · 大小写不敏感子串 · 搜索键的收集顺序（summary/aiTitle/首条 user 文本）
-//       · remainingOlderSessionCount 折叠计数
+// tests/unit/logic-session-search.test.mjs —— 会话标题的展示与通知身份（纯函数）
+// 覆盖：remainingOlderSessionCount 折叠计数 · displaySessionTitle 占位本地化 · 通知横幅身份
+// 标题搜索的用例在 history-list.test.mjs：搜索只在服务端做，前端那份副本已删。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  matchesSessionTitle,
   remainingOlderSessionCount,
-  sessionTitleSearchKeys,
-  matchesSessionSearch,
-  resolveSessionListTitle,
   sanitizeNotifySessionTitle,
   formatNotifyIdentity,
   notifySessionTag,
@@ -17,18 +13,6 @@ import {
   displaySessionTitle,
 } from '../../app/public/js/logic/session-search.js';
 import { setLang } from '../../app/public/js/i18n.js';
-
-test('matchesSessionTitle: 空/空白 query 全匹配', () => {
-  assert.equal(matchesSessionTitle('Hello', ''), true);
-  assert.equal(matchesSessionTitle('Hello', '   '), true);
-  assert.equal(matchesSessionTitle('Hello', null), true);
-});
-
-test('matchesSessionTitle: 大小写不敏感子串', () => {
-  assert.equal(matchesSessionTitle('Alpha Plan', 'alpha'), true);
-  assert.equal(matchesSessionTitle('ALPHA notes', 'pha n'), true);
-  assert.equal(matchesSessionTitle('beta', 'alpha'), false);
-});
 
 test('remainingOlderSessionCount: total>visible 时返回差值', () => {
   assert.equal(remainingOlderSessionCount(60, 50), 10);
@@ -43,43 +27,6 @@ test('remainingOlderSessionCount: 补回的「稍后再看」行也算可见，�
   assert.equal(remainingOlderSessionCount(73, 50, 1), 22);
   assert.equal(remainingOlderSessionCount(51, 50, 1), null, '页内 + 补回正好等于总数时没有更早的会话');
   assert.equal(remainingOlderSessionCount(60, 50, 0), 10, '没有补回行时与原来一致');
-});
-
-test('sessionTitleSearchKeys: 收集 summary/aiTitle/firstUser/firstCmd，去掉空白', () => {
-  assert.deepEqual(
-    sessionTitleSearchKeys({
-      summary: 'CLI /resume 标题',
-      aiTitle: 'AI 生成标题',
-      firstUser: '首条用户问题',
-      firstCmd: '/compact',
-    }),
-    ['CLI /resume 标题', 'AI 生成标题', '首条用户问题', '/compact'],
-  );
-  assert.deepEqual(sessionTitleSearchKeys({ summary: '  ', aiTitle: null, firstUser: '' }), []);
-});
-
-test('matchesSessionSearch: 任一键命中即可（抽屉可见 summary ≠ readHeadMeta 时仍能搜到）', () => {
-  const keys = sessionTitleSearchKeys({
-    summary: 'Renamed Visible Title',
-    firstUser: 'hello world from the first prompt',
-  });
-  assert.equal(matchesSessionSearch(keys, 'Renamed Visible'), true);
-  assert.equal(matchesSessionSearch(keys, 'HELLO WORLD'), true);
-  assert.equal(matchesSessionSearch(keys, 'nope'), false);
-  assert.equal(matchesSessionSearch(keys, '  '), true);
-});
-
-test('matchesSessionSearch: firstUser 超过展示 60 字的尾部仍能命中', () => {
-  const firstUser = `${'x'.repeat(80)}UniqueTailToken`;
-  const keys = sessionTitleSearchKeys({ firstUser, aiTitle: firstUser.slice(0, 60) });
-  assert.equal(matchesSessionSearch(keys, 'UniqueTailToken'), true);
-});
-
-test('resolveSessionListTitle: 展示优先 SDK summary（与浏览行同源），否则 meta，再否则占位', () => {
-  assert.equal(resolveSessionListTitle({ summary: 'CLI /resume 同款标题', metaTitle: '首条用户' }), 'CLI /resume 同款标题');
-  assert.equal(resolveSessionListTitle({ summary: '', metaTitle: '首条用户' }), '首条用户');
-  assert.equal(resolveSessionListTitle({}), '(无标题)');
-  assert.equal(resolveSessionListTitle({ metaTitle: 'y'.repeat(80) }), 'y'.repeat(60));
 });
 
 // 验收 O42 / O75：服务端给无标题会话写死占位「(无标题)」（通知层与 cross-side-parity 认这个字面量，不动），

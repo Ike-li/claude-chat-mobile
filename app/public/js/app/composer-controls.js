@@ -11,7 +11,7 @@ export function createComposerControls(context, {
   effortSelect, effortUnsupported, el, ensureModelOption, haptic, hidePromptSuggestion, inputEl,
   isTouchDevice, leftSidebar, modelInput, modelIntent, permModeSelect, pillDefaults, pillEffort,
   pillEffortText, pillModelText, pillPermText, projectsState, refreshComposeDefaultsSummary, requestCwd,
-  send, socket, topContextPill, updateSendButtonState, getComposeReady, getComposing, getCurrentEffort,
+  send, socket, topContextPill, getComposeReady, getComposing, getCurrentEffort,
   getCurrentGatewaySuffix, getCurrentModel, getCurrentPermMode, getCwdDefaultModel, getMirrorReadonlySid, getPanelIsExternal = () => false,
   getModelsList, getUltracodeArmed, getViewingInstanceId, setCurrentEffort, setCurrentGatewaySuffix,
   setCurrentModel, setCurrentPermMode, setCurrentSessionIdForCopy, setUltracodeArmed,
@@ -291,7 +291,6 @@ export function createComposerControls(context, {
     inputEl.focus();
     inputEl.setSelectionRange(cursorPos, cursorPos);
     autosize();
-    updateSendButtonState();
   }
 
   function renderAtMentionList(paths, { emptyHint = '' } = {}) {
@@ -388,7 +387,6 @@ export function createComposerControls(context, {
     hideCmdHints();
     inputEl.focus();
     autosize();
-    updateSendButtonState();
   }
   // 前端本地拦截命令（不透传后端），并入提示列表。说明现取 t()：跟着当前语言走
   const localCommandHints = () => [

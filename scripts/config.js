@@ -21,9 +21,8 @@
 //
 // 3. **secret 明文绝不默认离开进程。** get 只出「设了没 + 多长」，须显式 --reveal。
 //    同 buildEnvView 的脱敏纪律与 CCMCore.swift 那条「刻意不拼 #token=」。
-import { randomBytes } from 'node:crypto';
-import { accessSync, constants as fsConstants, existsSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { accessSync, constants as fsConstants, existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { writeOwnerOnlyFile } from '../app/src/files/file-security.js';
@@ -42,6 +41,7 @@ import {
 import { isSerializableEnvValue } from '../app/src/ops/env-file.js';
 import { resolveWorkdirsFilePath } from '../app/src/sessions/workdirs.js';
 import { buildEnvView, ENV_SCHEMA, validateEnvChanges } from '../app/src/ops/env-schema.js';
+import { generateToken, invokedDirectly } from './setup.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -127,10 +127,6 @@ export function formatValueForDisplay(key, value, { reveal = false } = {}) {
     return len > 0 ? `<已设置，${len} 字符>` : '';
   }
   return typeof value === 'string' ? value : JSON.stringify(value);
-}
-
-export function generateToken(bytes = 32) {
-  return randomBytes(bytes).toString('hex');
 }
 
 // ──────────────────────── 命令实现（IO 注入）────────────────────────
@@ -518,18 +514,4 @@ function main() {
 }
 
 // 仅直接运行时执行；被测试 import 时不跑。
-// 不能只比字符串：node 加载模块时会解析符号链接，import.meta.url 可能是 realpath 而 argv[1]
-// 是调用者原样传进来的（macOS 的 /var → /private/var 就会踩到）。两者不等时 main 从不执行、
-// 命令静默退出 0 什么都不做 —— 同 scripts/setup.js:290 的教训，实现也照它。
-function invokedDirectly() {
-  if (!process.argv[1]) return false;
-  const self = fileURLToPath(import.meta.url);
-  if (self === resolve(process.argv[1])) return true;
-  try {
-    return self === realpathSync(process.argv[1]);
-  } catch {
-    return false;
-  }
-}
-
-if (invokedDirectly()) main();
+if (invokedDirectly(import.meta.url)) main();

@@ -1,6 +1,6 @@
 const SEEN_DISK_LEN_CAP = 40; // 与 sessionDraft 同量级有界，防长生命周期 PWA 无限涨
 
-export function createSessionWorkspaceState(context) {
+export function createSessionWorkspaceState() {
   const sessionDomCache = new Map();
   const sessionDraftCache = new Map();
   const seenDiskLenBySession = new Map();
@@ -28,6 +28,5 @@ export function createSessionWorkspaceState(context) {
     // 拿它当「离开的是哪个工作区」等于自己跟自己比。
     displayedCwd: null,
   };
-  context.state.sessionWorkspaces = state;
   return state;
 }

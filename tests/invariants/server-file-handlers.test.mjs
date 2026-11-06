@@ -3,16 +3,18 @@
 //   进 handler 的路径有没有真的被送进那道门」，以及越界时 fail-closed 且【记审计】；审计的
 //   target 记真实落点所属 workdir 而非请求声明的 cwd，R10，2026-08-06：记错归属会让事后追责
 //   指向错误的项目）
-// 覆盖：browse/read/write/search/git/tool:preview/attachment:read 各自的范围门 · 越界审计的
+// 覆盖：browse/read/write/search/git/tool:preview/attachment:read/file:open 各自的范围门 · 越界审计的
 //   via 标注与归属 · 无 ack 时的静默路径
 // 槽位：S1（全部依赖可注入的桩，零 I/O、不起 server、不 spawn claude）
 // 不测什么 + 为什么：不测范围判据本身（realpath 后的前缀比较属纯函数侧，在
 //   tests/invariants/workdir-scope-guard.test.mjs）；不测真组装根上的端到端（起真 server，
 //   属 S2 的 tests/invariants/server/files-scope.test.mjs）。三份各守一层，缺哪层都补不上另一层。
 import assert from 'node:assert/strict';
+import { openSync } from 'node:fs';
 import { test } from 'node:test';
 import { OUT_OF_SCOPE_ERROR, registerFileSocketHandlers } from '../../app/src/server/socket-files.js';
 import { attributePath as realAttributePath } from '../../app/src/files/file-preview.js';
+import { createFileTickets } from '../../app/src/files/file-tickets.js';
 // R10 归属断言用真实 attributePath（纯函数、零 I/O）：手写 stub 曾把契约编错——它对 relPath 直接看
 // 前缀，而真实实现先 resolve(cwd, relPath)，于是测试与实现互相印证、恒绿。
 
@@ -94,7 +96,7 @@ test('attachment:read：读到的是 notFound / notOpenable 时回「附件不�
 
 // 显式越界的 cwd（routeCwd 判 null，SCOPE-05 起不再回落查看目录）：每个走 routeCwd 的文件事件都要
 // 明确拒绝、不碰盘、不跑 git。ok 必须是 false——前端按 ok 分支，ok:true 带 error 会被当成一次空结果画出来。
-test('显式越界 cwd（routeCwd → null）：八个文件事件一律 ok:false 并说明原因，不读盘、不跑 git', async () => {
+test('显式越界 cwd（routeCwd → null）：九个文件事件一律 ok:false 并说明原因，不读盘、不跑 git', async () => {
   const touched = [];
   const spy = name => () => { touched.push(name); return null; };
   const { handlers } = register({
@@ -117,6 +119,7 @@ test('显式越界 cwd（routeCwd → null）：八个文件事件一律 ok:fals
     ['git:diff', { cwd: '/elsewhere', path: 'a.js' }],
     ['files:search', { cwd: '/elsewhere', query: 'a' }],
     ['files:write', { cwd: '/elsewhere', relPath: 'a.txt', content: 'x', baseHash: null }],
+    ['file:open', { cwd: '/elsewhere', path: 'a.txt' }],
   ];
   for (const [event, payload] of cases) {
     let response;
@@ -510,5 +513,140 @@ test.describe('tool:full 历史卡片：先过门再取，内存没有就读 tra
     assert.deepEqual(await run(handlers, { instanceId: 'i1', toolUseId: 't1' }), { ok: true, text: 'live text' });
     const { handlers: none } = register({ routeInstance: () => null });
     assert.deepEqual(await run(none, { instanceId: 'nope', toolUseId: 't1' }), { ok: false, error: '实例不存在' });
+  });
+});
+
+test.describe('file:open：点消息里的文件链接', () => {
+  const NOT_A_DIRECTORY = { notDirectory: true };
+
+  function registerOpen(extra = {}) {
+    const fileTickets = createFileTickets();
+    const reads = [];
+    const registered = register({
+      attributePath: realAttributePath,
+      fileTickets,
+      listDir: (root, relPath) => { reads.push(['list', root, relPath]); return NOT_A_DIRECTORY; },
+      // fd 用一个真能关的：handler 只拿元数据，不读内容
+      openInScope: (root, relPath) => { reads.push(['open', root, relPath]); return { fd: openSync('/dev/null', 'r'), size: 2048 }; },
+      ...extra,
+    });
+    const open = async payload => {
+      let response;
+      await registered.handlers.get('file:open')(payload, value => { response = value; });
+      return response;
+    };
+    return { ...registered, fileTickets, open, reads };
+  }
+
+  test('文件：回定位坐标和票据 URL，票据换得回同一个文件', async () => {
+    const { open, fileTickets } = registerOpen();
+    const response = await open({ cwd: '/repo', path: 'out/final/video.mp4' });
+    const { url, ...rest } = response;
+    assert.deepEqual(rest, { ok: true, root: '/repo', relPath: 'out/final/video.mp4', kind: 'file', name: 'video.mp4', size: 2048, media: 'video' });
+    assert.match(url, /^\/f\/[\w-]{43}$/, 'URL 里只能有票据：带文件名就把路径泄露给了 CDN，带扩展名会被 CF 按后缀缓存');
+    const entry = fileTickets.lookup(url.slice('/f/'.length));
+    assert.deepEqual([entry.cwd, entry.relPath, entry.name], ['/repo', 'out/final/video.mp4', 'video.mp4'], '票据记错坐标，播放的就是别的文件');
+  });
+
+  test('不能内联的文件 media 为 null：前端按文本或下载处理', async () => {
+    const { open } = registerOpen();
+    const response = await open({ cwd: '/repo', path: 'page.html' });
+    assert.equal(response.media, null, 'html 标成可预览，前端就会把它塞进媒体元素');
+    assert.match(response.url, /^\/f\//, '下载也要靠这张票据');
+  });
+
+  test('目录：回坐标，不发票据，也不去打开', async () => {
+    const { open, reads } = registerOpen({ listDir: () => ({ entries: [], truncated: false, totalCount: 0 }) });
+    const response = await open({ cwd: '/repo', path: 'skills/evals/' });
+    assert.deepEqual(response, { ok: true, root: '/repo', relPath: 'skills/evals', kind: 'dir', name: 'evals' });
+    assert.deepEqual(reads, [], '目录不是 /f/ 能发的东西');
+  });
+
+  test('链接就是 cwd 自己：relPath 为空串，定位到根', async () => {
+    const { open } = registerOpen({ listDir: (_root, relPath) => { assert.equal(relPath, ''); return { entries: [] }; } });
+    const response = await open({ cwd: '/repo', path: './' });
+    assert.deepEqual([response.root, response.relPath, response.kind], ['/repo', '', 'dir'], 'attributePath 对根回 basename，照用会拼出不存在的路径');
+  });
+
+  test('cwd 是子目录：根留在 cwd，不跑到父文件夹', async () => {
+    const { open } = registerOpen({ routeCwd: () => '/repo/sub' });
+    const response = await open({ cwd: '/repo/sub', path: 'a.txt' });
+    assert.deepEqual([response.root, response.relPath], ['/repo/sub', 'a.txt'], 'sheet 根变成父目录后，用户返回上级看到的不是当前项目');
+  });
+
+  test('../ 和绝对路径落到别的已连接文件夹：根跟着落点走', async () => {
+    const { open } = registerOpen({ routeCwd: () => '/repo/sub', getWorkDirs: () => ['/repo', '/other'] });
+    const up = await open({ cwd: '/repo/sub', path: '../x.txt' });
+    assert.deepEqual([up.root, up.relPath], ['/repo', 'x.txt'], '../ 要解析到 cwd 上一层');
+    const absolute = await open({ cwd: '/repo/sub', path: '/other/b.png' });
+    assert.deepEqual([absolute.root, absolute.relPath, absolute.media], ['/other', 'b.png', 'image'], '绝对路径要归到它自己的文件夹');
+  });
+
+  test('链接指到已连接文件夹之外：说清楚，不碰盘，不记越界', async () => {
+    const { open, reads, audits } = registerOpen();
+    for (const path of ['/private/tmp/claude-501/p/s/scratchpad/1.mp3', '/blog/handbook/', '../outside.txt']) {
+      const response = await open({ cwd: '/repo', path });
+      assert.equal(response.ok, false, `${path} 不该打开`);
+      assert.match(response.error, /不在已连接的文件夹里/, '用户要知道为什么打不开');
+    }
+    assert.deepEqual(reads, [], '范围外的路径不能碰盘');
+    assert.deepEqual(audits, [], '点一下模型写的链接不是越界尝试：记了服务面板就红，真记录被挤掉');
+  });
+
+  test('范围内打不开的分档：不记越界', async () => {
+    const cases = [
+      [{ listDir: () => ({ notFound: true }) }, /文件不存在/],
+      [{ openInScope: () => ({ notFound: true }) }, /文件不存在/],
+      [{ openInScope: () => ({ notOpenable: true }) }, /不能预览/],
+      [{ openInScope: () => ({ blockedSymlink: true }) }, /符号链接/],
+    ];
+    for (const [extra, expected] of cases) {
+      const { open, audits } = registerOpen(extra);
+      const response = await open({ cwd: '/repo', path: 'a.txt' });
+      assert.equal(response.ok, false);
+      assert.match(response.error, expected);
+      assert.deepEqual(audits, [], '范围内读不了的东西记成越界，会淹没真正的越界');
+    }
+  });
+
+  test('落点在范围内、实际逃出去（目录符号链接）：拒绝并记越界', async () => {
+    for (const extra of [{ listDir: () => null }, { openInScope: () => null }]) {
+      const { open, audits } = registerOpen({ ...extra, fileTickets: { issue: () => assert.fail('越界了还发票据') } });
+      const response = await open({ cwd: '/repo', path: 'link/secret.txt' });
+      assert.equal(response.ok, false);
+      assert.equal(audits[0]?.action, 'scope_violation', '真逃逸没留痕，事后查不到');
+      assert.equal(audits[0]?.meta.via, 'file:open');
+    }
+  });
+
+  test('path 不是字符串：拒绝，不抛错', async () => {
+    const { open } = registerOpen();
+    for (const path of [undefined, 42, {}, '']) {
+      assert.equal((await open({ cwd: '/repo', path })).ok, false, `${JSON.stringify(path)} 进 path.resolve 会抛错`);
+    }
+  });
+
+  test('票据绑定设备：只有走信任表的连接才记 deviceToken', async () => {
+    const issuedTo = async socket => {
+      const { open, fileTickets } = registerOpen({ socket });
+      const { url } = await open({ cwd: '/repo', path: 'a.png' });
+      return fileTickets.lookup(url.slice('/f/'.length)).deviceToken;
+    };
+    assert.equal(
+      await issuedTo({ trustBasis: 'device-token', handshake: { auth: { deviceToken: 'phone' } } }),
+      'phone',
+      '没绑设备，吊销后这张票据还能用',
+    );
+    assert.equal(
+      await issuedTo({ trustBasis: 'bypass', handshake: { auth: { deviceToken: 'phone' } } }),
+      null,
+      'bypass 连接不在信任表里，绑了设备就永远取不到文件',
+    );
+  });
+
+  test('没有 ack：忽略', async () => {
+    const { handlers, reads } = registerOpen();
+    await handlers.get('file:open')({ cwd: '/repo', path: 'a.txt' });
+    assert.deepEqual(reads, []);
   });
 });

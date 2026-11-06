@@ -171,10 +171,3 @@ export function agentResult(sessionId, text, model, effort, permissionMode) {
   if (!enabled) return;
   console.log(`[interact] [SDK→agt] session=${sessionId}${model ? ` model=${model}` : ''} ← result: ${f}`);
 }
-
-// text_delta 流式片段（可选，量大时关闭；调试时开启看流式细节）
-export function textDelta(_sessionId, _delta) {
-  if (!enabled) return;
-  // 默认不记 delta（太多），只记 result；若需要看流式细节，取消下行注释
-  // console.log(`[interact] [SDK→agt] session=${sessionId} ← delta: ${fmt(delta)}`);
-}

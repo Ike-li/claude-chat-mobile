@@ -1,3 +1,5 @@
+import { parseFileLink } from '../logic/file-links.js';
+
 export function createMessageRenderer(context, { scrollBottom = () => {} } = {}) {
   const marked = context.dependencies.marked;
   const purifier = context.dependencies.DOMPurify;
@@ -5,10 +7,24 @@ export function createMessageRenderer(context, { scrollBottom = () => {} } = {})
 
   marked?.setOptions({ breaks: true, gfm: true });
   purifier?.addHook('afterSanitizeAttributes', node => {
-    if (node.tagName === 'A') {
+    if (node.tagName === 'A' && !node.hasAttribute('data-file-path')) {
       node.setAttribute('target', '_blank');
       node.setAttribute('rel', 'noopener noreferrer');
     }
+  });
+  // 本机文件链接换成 data-*，点击交给工作区 sheet（见 app.js 的委托）。要赶在属性过滤之前：
+  // `foo.js:12` 形似未知 scheme，过滤时 href 就没了，行号也跟着丢。
+  purifier?.addHook('beforeSanitizeAttributes', node => {
+    if (node.tagName !== 'A') return;
+    // 模型写的原始 HTML 能自带这两个属性：留着的话外链拿不到 target，点一下整个 PWA 被带走
+    node.removeAttribute('data-file-path');
+    node.removeAttribute('data-file-line');
+    const link = parseFileLink(node.getAttribute('href'));
+    if (!link) return;
+    node.removeAttribute('href');
+    node.setAttribute('data-file-path', link.path);
+    node.setAttribute('role', 'link');
+    if (link.line) node.setAttribute('data-file-line', String(link.line));
   });
 
   // SEC：DOMPurify 默认表放行 <label for> 与 style 属性（实测 3.4.10）。二者组合成纯 HTML/CSS 点击劫持：

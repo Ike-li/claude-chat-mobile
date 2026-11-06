@@ -152,6 +152,5 @@ export function createConnectionBannerController(context, {
     isConnected: () => phase === 'online',
     hasEverConnected: () => everConnected,
   };
-  context.state.connBanner = controller;
   return controller;
 }

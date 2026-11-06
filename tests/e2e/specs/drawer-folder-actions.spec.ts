@@ -1,8 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import {
-  ANOTHER_WORKSPACE, MAIN_WORKSPACE, chooseFolderMenuItem, dragFolderWithMouse, expandWorkspace, expectSidebarOpen, folderDragDelta, folderMenuItem,
-  openFolderMenu, openSessionMenu, openSessionsSidebar, openWorkspaceSession, sessionMenuItem, showMoreSessions, workspaceRow, workspaceSubtree,
+  ANOTHER_WORKSPACE, MAIN_WORKSPACE, chooseFolderMenuItem, dragFolderWithMouse, expandWorkspace, expectSidebarClosed, expectSidebarOpen, folderDragDelta, folderMenuItem,
+  openFolderMenu, openSessionMenu, openSessionsSidebar, openWorkspaceSession, sessionMenuItem, showMoreSessions, startNewSessionInWorkspace, workspaceRow, workspaceSubtree,
 } from '../../helpers/sidebar-ui';
 
 // 抽屉文件夹行的动作（2026-10-26）：「⋯」菜单里的「全部标为已读」（#300）与「断开连接」，长按拖动调整连接根的上下位置
@@ -297,9 +297,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   });
 
   // 回归（2026-10-26）：MAIN_WORKSPACE 是当前正在看的工作区——先点开 inst_1 的会话把 currentCwd 钉在
-  // 这里（connectTwoRoots 本身会把 viewing 归位到「无文件夹」，不代表真实场景），UX-007 让重开抽屉时
-  // 默认展开它；用户手动折叠它之后，挪动别的文件夹顺序不该把它重新强制展开——那次广播只是顺序变了，
-  // 目录集合、viewingInstanceId、currentCwd 都没变，不该走全量重建那条路径。
+  // 这里（connectTwoRoots 本身会把 viewing 归位到「无文件夹」，不代表真实场景），UX-007 让切到它时
+  // 自动展开；用户手动折叠它之后，挪动别的文件夹顺序不该把它重新展开——那次广播只是顺序变了，
+  // 目录集合、viewingInstanceId、currentCwd 都没变。
   //
   // 排序本身是客户端拖动时就地摆好的（folder-drag.js），sectionOrder 松手即对；但「是否被连带强制展开」
   // 取决于服务端回广播、落地处理完之后的状态，必须等这条广播真落地再断言——否则在它赶到前就断言，
@@ -331,6 +331,116 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect.poll(() => sectionOrder(page)).toEqual([ANOTHER_WORKSPACE, MAIN_WORKSPACE, SUBFOLDER, SCRATCH_ROOT]);
     await expect.poll(() => instancesFrames.length, '等服务端换序广播真的落地，不能在它赶到前就断言').toBeGreaterThan(framesBeforeDrag);
     await expect(mainSubtree, '换序不该把手动折叠的当前工作区重新展开').not.toHaveClass(/expanded/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 回归（2026-11-04）：当前文件夹只在切到它的那一刻自动展开一次，手动折叠之后就听用户的。此前每次全量重建抽屉
+  // 都把它加回展开集合，#414 只堵了换序这一条路，断开别的文件夹照样把它弹开。
+  async function openDrawerWithTwoRoots(page: Page) {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:projects');
+    await waitForIdle(page);
+    await connectTwoRoots(page);
+    await openSessionsSidebar(page);
+  }
+
+  async function collapseFolder(page: Page, cwd: string) {
+    const subtree = workspaceSubtree(page, cwd);
+    await expect(subtree, '前提：切到当前文件夹时自动展开').toHaveClass(/expanded/);
+    await workspaceRow(page, cwd).locator('button').first().click();
+    await expect(subtree, '手动折叠').not.toHaveClass(/expanded/);
+    return subtree;
+  }
+
+  async function collapseCurrentMainFolder(page: Page) {
+    await openDrawerWithTwoRoots(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await waitForIdle(page);
+    await openSessionsSidebar(page);
+    return collapseFolder(page, MAIN_WORKSPACE);
+  }
+
+  async function closeDrawer(page: Page) {
+    await page.locator('#sidebarScrim').click({ position: { x: 360, y: 400 }, force: true });
+    await expectSidebarClosed(page);
+  }
+
+  test('P0-FOLDER-COLLAPSE-1 折叠当前文件夹后断开别的文件夹，它不该弹开', async ({ page }) => {
+    const mainSubtree = await collapseCurrentMainFolder(page);
+
+    await chooseFolderMenuItem(page, ANOTHER_WORKSPACE, 'disconnect');
+    await page.locator('#confirmOk').click();
+    await expect(workspaceRow(page, ANOTHER_WORKSPACE), '等断开的广播落地、抽屉重建完再断言').toHaveCount(0);
+    await expect(mainSubtree, '断开别的文件夹把手动折叠的当前文件夹弹开了').not.toHaveClass(/expanded/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-FOLDER-COLLAPSE-2 折叠当前文件夹后关抽屉再打开，它保持折叠', async ({ page }) => {
+    const mainSubtree = await collapseCurrentMainFolder(page);
+
+    await closeDrawer(page);
+    await openSessionsSidebar(page);
+    await expect(workspaceRow(page, MAIN_WORKSPACE), '抽屉已重建').toHaveCount(1);
+    await expect(mainSubtree, '重开抽屉把手动折叠的当前文件夹弹开了').not.toHaveClass(/expanded/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 改名、删除成功后走全量重建（行不在折叠的小节里，所以操作的是别的文件夹的会话）。mock 只接受主工作区的会话，
+  // 当前文件夹因此换成另一个工作区。
+  test('P0-FOLDER-COLLAPSE-3 折叠当前文件夹后改名、删除别处的会话，它不该弹开', async ({ page }) => {
+    await openDrawerWithTwoRoots(page);
+    await startNewSessionInWorkspace(page, ANOTHER_WORKSPACE);
+    await expectSidebarClosed(page);
+    await openSessionsSidebar(page);
+    const anotherSubtree = await collapseFolder(page, ANOTHER_WORKSPACE);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const archived = page.locator('[data-testid="session-row"][data-session-id="mock-session-archived"]');
+
+    await openSessionMenu(page, archived);
+    await page.locator('#sessionMenuModal [data-menu-action="rename"]').click();
+    await page.getByTestId('session-rename-input').fill('规划 v2');
+    await page.getByTestId('session-rename-save').click();
+    await expect(archived, '等改名落地、抽屉重建完再断言').toContainText('规划 v2');
+    await expect(anotherSubtree, '改名把手动折叠的当前文件夹弹开了').not.toHaveClass(/expanded/);
+
+    await openSessionMenu(page, archived);
+    await sessionMenuItem(page, 'delete').click();
+    await page.locator('#confirmOk').click();
+    await expect(archived, '等删除落地、抽屉重建完再断言').toHaveCount(0);
+    await expect(anotherSubtree, '删除把手动折叠的当前文件夹弹开了').not.toHaveClass(/expanded/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 反方向：折叠只管到下一次切文件夹。两条写入路径都走到：抽屉 ＋ 是发起方先改、广播落地时已无变化；另一台设备换文件夹
+  // 是广播改。后半段抽屉全程关着，一次没重建——只在重建时比较新旧目录的实现看不出变过。
+  test('P0-FOLDER-COLLAPSE-4 手动折叠后切走再切回这个文件夹，又自动展开', async ({ page }) => {
+    const mainSubtree = await collapseCurrentMainFolder(page);
+
+    await startNewSessionInWorkspace(page, ANOTHER_WORKSPACE);
+    await expectSidebarClosed(page);
+    await openSessionsSidebar(page);
+    await expect(workspaceSubtree(page, ANOTHER_WORKSPACE), '＋ 切过去的文件夹没有自动展开').toHaveClass(/expanded/);
+    await expect(mainSubtree, '切走时把原来折叠的文件夹弹开了').not.toHaveClass(/expanded/);
+
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expectSidebarClosed(page);
+    await openSessionsSidebar(page);
+    await expect(mainSubtree, '＋ 切回来没有自动展开').toHaveClass(/expanded/);
+
+    await workspaceRow(page, MAIN_WORKSPACE).locator('button').first().click();
+    await expect(mainSubtree, '再次手动折叠').not.toHaveClass(/expanded/);
+    await closeDrawer(page);
+    const projectPill = page.locator('[data-testid="compose-surface"]').getByTestId('compose-project-pill');
+    await page.request.post(`/__compose-cwd?cwd=${encodeURIComponent(ANOTHER_WORKSPACE)}`);
+    await expect(projectPill, '前提：这一页跟着广播切走了').toContainText('another-react-project');
+    await page.request.post(`/__compose-cwd?cwd=${encodeURIComponent(MAIN_WORKSPACE)}`);
+    await expect(projectPill, '前提：这一页跟着广播切回来了').toContainText('claude-chat-mobile');
+    await openSessionsSidebar(page);
+    await expect(mainSubtree, '抽屉关着时切走再切回，没有自动展开').toHaveClass(/expanded/);
 
     await expectNoBrowserErrors(page);
   });

@@ -257,6 +257,29 @@ test.describe('probeTailscale：四种返回形态', () => {
     assert.equal(r.backendState, '');
     assert.match(String(r.error), /ETIMEDOUT/);
   });
+
+  // 2026-11-03 mini 装机核对：PATH 里残留一个跑不起来的 tailscale，CLI doctor 的报告中间夹进了它的 stderr。
+  // execFileSync 不给 stdio 时会把子进程 stderr 转写到本进程 stderr——所以这条用真子进程：注入的 execFile
+  // 只替换 which，status 那一步走真的 execFileSync。
+  test('★ 跑不起来的 tailscale 的 stderr 不漏进本进程输出，原因的那一行带回 error', { skip: process.platform === 'win32' }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-ts-broken-'));
+    const bin = join(dir, 'tailscale');
+    writeFileSync(bin, '#!/bin/sh\necho "ccm-test: tailscale shim is broken" >&2\nexit 1\n');
+    chmodSync(bin, 0o755);
+    const written = [];
+    const origWrite = process.stderr.write;
+    process.stderr.write = (chunk) => { written.push(String(chunk)); return true; };
+    let r;
+    try {
+      r = probeTailscale({ platform: 'linux', execFile: (cmd, args, opts) => (cmd === 'which' ? `${bin}\n` : execFileSync(cmd, args, opts)) });
+    } finally {
+      process.stderr.write = origWrite;
+      rmSync(dir, { recursive: true, force: true });
+    }
+    assert.doesNotMatch(written.join(''), /shim is broken/, '子进程 stderr 漏进了 doctor 的输出');
+    assert.equal(r.found, true);
+    assert.equal(r.error, 'ccm-test: tailscale shim is broken', '诊断要能直接引用这一行，Command failed 加路径的整段读不出原因');
+  });
 });
 
 test.describe('CLAUDE_BIN：实时探测而非回放启动快照', () => {

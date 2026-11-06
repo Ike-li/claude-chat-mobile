@@ -9,25 +9,18 @@
 // 快照是【状态】（按 sessionId 覆盖、TTL 判新鲜），hook 事件是【信号】（一次性、消费即删）。
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  chmodSync,
-  closeSync,
-  constants,
-  fsyncSync,
   lstatSync,
-  mkdirSync,
-  openSync,
   readFileSync,
   readdirSync,
-  renameSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
-import { homedir, platform } from 'node:os';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { throttleNotify } from './notifications.js';
 import { claudeSettingsPath, ccmUnderClaudeHome } from '../shared/claude-home.js';
+import { atomicWriteFile, ensurePrivateDirectory, lstatIfPresent } from './bridge-namespace.js';
 
 export const CLI_HOOKS_SCHEMA_VERSION = 1;
 const DEFAULT_CLI_HOOKS_ROOT = ccmUnderClaudeHome(homedir(), 'hooks-v1');
@@ -98,52 +91,6 @@ export function isVerifyEvent(event) {
   return Boolean(event && typeof event.sessionId === 'string' && event.sessionId.startsWith(HOOK_VERIFY_PREFIX));
 }
 
-// server 启动时自建投递箱目录：目录存在 watch 才建得起来，否则"装完 hooks 得重启 server 才生效"。
-// 注意这只创建 ccm 自己命名空间下的目录（~/.claude/ccm/hooks-v1/）。
-// 写用户 CLI 配置（~/.claude/settings.json）的红线是：**只在用户显式动作时写**——CLI 侧跑安装器，
-// 或已鉴权设备在服务状态面板点「开启终端会话推送」（socket hooks:setup，2026-07-26 维护者批准开的口子，
-// 理由：手机上跑不了 npm，只留 CLI 入口等于让移动端用户永远发现不了这个能力）。
-// 启动、连接、任何后台时机一律不写。
-export function ensureHooksDirectory(dir) {
-  return ensurePrivateDirectory(dir);
-}
-
-function ensurePrivateDirectory(dir) {
-  const resolved = resolve(dir);
-  mkdirSync(resolved, { recursive: true, mode: 0o700 });
-  const stat = lstatSync(resolved);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error('hooks directory must be a real directory');
-  }
-  if (platform() !== 'win32') chmodSync(resolved, 0o700);
-  return resolved;
-}
-
-function atomicWriteJson(dir, filename, payload) {
-  const destination = join(dir, filename);
-  const temporary = join(dir, `.${filename}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`);
-  let fd;
-  let renamed = false;
-  try {
-    fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
-    writeFileSync(fd, JSON.stringify(payload), 'utf8');
-    fsyncSync(fd);
-    closeSync(fd);
-    fd = undefined;
-    renameSync(temporary, destination);
-    renamed = true;
-    if (platform() !== 'win32') chmodSync(destination, 0o600);
-    return destination;
-  } finally {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* preserve the original write error */ }
-    }
-    if (!renamed) {
-      try { unlinkSync(temporary); } catch { /* absent / already cleaned */ }
-    }
-  }
-}
-
 // 只认下方 eventFileName 写出的命名形态（<capturedAt>-<事件名>-<pid>-<hex6>.json）。
 // 扫描/启动清扫/容量修剪的删除面都以此为界（R5/2026-08-06）：CLI_HOOKS_DIR 是用户可配路径
 // （env-schema 文档化），指到含无关 *.json 的目录时，旧判据「目录下所有 json」会把别人的文件
@@ -164,7 +111,7 @@ export function writeCliHookEvent(event, { dir = DEFAULT_CLI_HOOKS_EVENTS_DIR, c
   if (!event || event.schemaVersion !== CLI_HOOKS_SCHEMA_VERSION || event.source !== 'claude-cli-hook') {
     throw new TypeError('invalid CLI hook event');
   }
-  const privateDir = ensurePrivateDirectory(dir);
+  const privateDir = ensurePrivateDirectory(dir, 'hooks');
   // 容量护栏：server 长期不在（没人消费）时不能把目录撑爆。先清过期，仍然满就跳过本次写入——
   // hook 是加分信号，宁可丢事件也不能让 CLI 侧的写入变成负担。
   let names = eventFileNames(privateDir);
@@ -179,7 +126,7 @@ export function writeCliHookEvent(event, { dir = DEFAULT_CLI_HOOKS_EVENTS_DIR, c
     names = eventFileNames(privateDir);
     if (names.length >= cap) return null;
   }
-  return atomicWriteJson(privateDir, eventFileName(event), event);
+  return atomicWriteFile(join(privateDir, eventFileName(event)), JSON.stringify(event));
 }
 
 // 扫描并消费：返回有效事件，同时把读到的文件全部删掉（删除即 ack）。任何异常按"该文件不存在"跳过。
@@ -257,15 +204,6 @@ export function hooksPathsForHome(home = homedir()) {
     settings: claudeSettingsPath(home),
     manifest: ccmUnderClaudeHome(home, 'hooks-v1', 'install-manifest.json'),
   };
-}
-
-function lstatIfPresent(path) {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return null;
-    throw error;
-  }
 }
 
 // settings.json 不存在是合法起点（新装 claude 的用户可能还没这个文件）→ 视作 {}。
@@ -408,9 +346,9 @@ function ackFilePath(dir, verifyId) {
 // 为什么不让安装器直接看"事件文件消失了"——文件消失无法区分「被 server 消费」和「压根没写成功」，
 // 回执是确定性的正向证据，且让安装器↔server 的契约保持纯文件系统（与鉴权配置完全解耦）。
 export function writeHookVerifyAck(verifyId, { dir = DEFAULT_CLI_HOOKS_ACKS_DIR, ackedAt = Date.now() } = {}) {
-  const privateDir = ensurePrivateDirectory(dir);
+  const privateDir = ensurePrivateDirectory(dir, 'hooks');
   const key = createHash('sha256').update(String(verifyId), 'utf8').digest('hex');
-  return atomicWriteJson(privateDir, `${key}.json`, { schemaVersion: CLI_HOOKS_SCHEMA_VERSION, ackedAt });
+  return atomicWriteFile(join(privateDir, `${key}.json`), JSON.stringify({ schemaVersion: CLI_HOOKS_SCHEMA_VERSION, ackedAt }));
 }
 
 export function readHookVerifyAck(verifyId, { dir = DEFAULT_CLI_HOOKS_ACKS_DIR } = {}) {

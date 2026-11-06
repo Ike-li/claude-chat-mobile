@@ -8,28 +8,17 @@
 // 且它是缓存类——丢了只是顺序回到默认，所以读坏了当作没有、打一行警告，绝不挡启动。
 // 写盘照 read-state.js：200ms 防抖、退出时同步 flush。ack 的含义是「内存已接受并已广播」，不保证已落盘。
 import { readFileSync, mkdirSync } from 'node:fs';
-import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
-import { createSerialWriter } from '../shared/serial-writer.js';
+import { createSerialWriter, writeFileAtomic } from '../shared/serial-writer.js';
 import { dataFile } from '../shared/data-dir.js';
 
 export function createFolderOrderStore({ file = dataFile('pinned-roots.json'), log = console, debounceMs = 200 } = {}) {
   let roots = load(file, log);
   let changed = false; // 从没改过就不在退出时写：没排过序的安装不凭空多一个文件
 
-  let saveSeq = 0;
   const writer = createSerialWriter(async (shouldCommit) => {
-    await mkdir(dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.${++saveSeq}.tmp`;
-    try {
-      await writeFile(tmp, JSON.stringify(roots), { mode: 0o600 });
-      if (!shouldCommit()) { await unlink(tmp).catch(() => {}); return; }
-      await rename(tmp, file);
-    } catch (e) {
-      try { await unlink(tmp); } catch { /* tmp 可能未生成 */ }
-      throw e;
-    }
+    await writeFileAtomic(file, JSON.stringify(roots), shouldCommit);
   }, { onError: e => log.error(`[folder-order] 保存失败（顺序本次照常生效，重启后可能回到默认）: ${e?.message || e}`) });
 
   let saveTimer = null;

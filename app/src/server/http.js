@@ -173,36 +173,29 @@ export function createHttpAuth({ authToken, strategy, rateLimit = null, onAuthFa
   };
 }
 
-// 递归收集 public/js 下全部 .js（含 app/* 子模块），供 assetVersion 哈希。
-// 只哈希根层几个文件时，改 connection-sync.js 不会换 ?v=，手机继续吃缓存。
-function listJsFilesRecursive(dir) {
+// 递归收集目录下的文件，按路径排序。目录读不到时当空目录。
+function listFilesRecursive(dir, keep = () => true) {
   const out = [];
   let entries;
   try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   for (const entry of entries) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...listJsFilesRecursive(path));
-    else if (entry.isFile() && entry.name.endsWith('.js')) out.push(path);
+    if (entry.isDirectory()) out.push(...listFilesRecursive(path, keep));
+    else if (entry.isFile() && keep(entry.name)) out.push(path);
   }
   return out.sort();
 }
+
+// 递归收集 public/js 下全部 .js（含 app/* 子模块），供 assetVersion 哈希。
+// 只哈希根层几个文件时，改 connection-sync.js 不会换 ?v=，手机继续吃缓存。
+const listJsFilesRecursive = dir => listFilesRecursive(dir, name => name.endsWith('.js'));
 
 // vendor/ 与 css/ 下的全部文件同样进版本链。带当前 ?v= 的请求会被回 immutable, max-age=31536000
 // （见 configureHttpShell 里按版本戳定缓存头的中间件）——一年内浏览器绝不会重新请求，唯一能逼它换新
 // 的手段就是让 URL 本身变，所以能拿到 immutable 的文件都得算进来，不只 .js/.css（app.css 引的 woff2 字体
 // 同样带 ?v=）。vendor 之前不在这个哈希范围内，?v= 只在 index.html 里的引用点原样打了个不会变的旧值，
 // 等于没有失效手段；css/ 之前只算 app.css，Tailwind 预编译出的 tw.css 同样漏在外面。
-function listAssetFilesRecursive(dir) {
-  const out = [];
-  let entries;
-  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
-  for (const entry of entries) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...listAssetFilesRecursive(path));
-    else if (entry.isFile()) out.push(path);
-  }
-  return out.sort();
-}
+const listAssetFilesRecursive = dir => listFilesRecursive(dir);
 
 // vendorDir 缺省不传：既有单测靠 selfJsFiles 限定一个小而确定的哈希范围，不该被真实
 // vendor 目录的内容悄悄带进去，那会让"传固定 files 断言固定哈希"的用例失去确定性来源

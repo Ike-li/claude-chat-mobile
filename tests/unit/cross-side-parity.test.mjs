@@ -49,22 +49,6 @@ function collect(dir) {
 
 // 已登记的孪生对：name → 对照用例。新增同名 export 必须在这里补一行，否则下面第一条断言红。
 const PAIRS = {
-  matchesSessionTitle: [
-    ['proj', 'PROJ'], ['Proj', 'pro'], ['', 'x'], [null, 'x'], ['abc', ''], ['abc', '  '],
-    ['abc', null], ['大小写ABC', 'abc'], ['abc', 'abc'], [undefined, undefined],
-  ],
-  sessionTitleSearchKeys: [
-    [{ summary: 'a', aiTitle: 'b', firstUser: 'c', firstCmd: 'd' }],
-    [{ summary: '  ', aiTitle: '', firstUser: null, firstCmd: undefined }],
-    [{}], [undefined], [{ summary: '  x  ' }],
-  ],
-  matchesSessionSearch: [
-    [['a', 'b'], 'A'], [[], 'x'], [null, 'x'], [['abc'], ''], [['abc'], null], [undefined, undefined],
-  ],
-  resolveSessionListTitle: [
-    [{ summary: 's', metaTitle: 'm' }], [{ summary: '  ', metaTitle: 'm' }], [{}], [undefined],
-    [{ metaTitle: 'x'.repeat(80) }], [{ metaTitle: '  ' }],
-  ],
   sanitizeNotifySessionTitle: [
     ['改个bug'], ['  多  空白\n换行  '], ['新会话'], ['(无标题)'], ['New session'],
     ['x'.repeat(50)], ['x'.repeat(40)], [''], ['   '], [null], [undefined], [123],

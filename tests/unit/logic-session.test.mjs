@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, resolveRowTerminalState, mirrorRowLockChanged, isBlockedSurfaceTarget, formatSessionRowSubtitle, mergeOrphanRowsByTime, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, resolveRowTerminalState, mirrorRowLockChanged, isBlockedSurfaceTarget, formatSessionRowSubtitle, mergeOrphanRowsByTime, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -419,6 +419,28 @@ test('presentTurnResult: interrupted=true 压过 isError/ede_diagnostic，不画
 // 出错分支有意不改 CLI 化：出错时更需要显式秒数，保留中文灰条+红色错误条（用户确认「出错分支不变」）。
 // 2026-10-19 验收 O57：原来那行还挂着「· $成本」，可 costUsd 是 CLI 的累计费用（恢复的会话里网关 503、一个 token
 // 没用，也显示 $0.38），读起来像这条失败的消息花了这么多钱；标签还写着「完成」。去掉成本、标签改「出错」，秒数照留。
+// 「已中止」只能留给用户自己按的停止：看门狗和 CLI 自己停的要说清楚，缺字段是升级前的旧事件，按手动算。
+test('presentTurnResult: 非手动中断的条/通知/工具收尾都说清来源', () => {
+  const present = interruptedBy => presentTurnResult({ interrupted: true, isError: true, durationMs: 1000, ...(interruptedBy ? { interruptedBy } : {}) });
+
+  const watchdog = present('system:idle-watchdog');
+  assert.equal(watchdog.statusBar.text, '超时中断 · 1.0s');
+  assert.equal(watchdog.notify.title, '⚠️ 任务超时中断');
+  assert.equal(watchdog.failToolsMessage, '超时中断');
+  assert.equal(watchdog.errorBar, null, '仍是中断不是出错：不画红条');
+
+  const cli = present('cli');
+  assert.equal(cli.statusBar.text, '已中断（非手动） · 1.0s');
+  assert.equal(cli.notify.title, '⚠️ 任务被中断');
+  assert.equal(cli.failToolsMessage, '已中断（非手动）');
+
+  for (const by of ['user', undefined]) {
+    assert.equal(present(by).statusBar.text, '已中止 · 1.0s');
+    assert.equal(present(by).notify.title, '⏹ 任务已中止');
+    assert.equal(present(by).failToolsMessage, '已中止');
+  }
+});
+
 test('presentTurnResult: 真错误仍中文灰条 + 红条（不 CLI 化）；灰条写「出错」、不挂累计成本', () => {
   const err = presentTurnResult({ isError: true, errors: ['boom'], durationMs: 1200, costUsd: 0.1 });
   assert.equal(err.kind, 'error');
@@ -653,27 +675,8 @@ test('shouldRestoreOptimisticBusy: 同会话静默换实例且 pendingSendBusySe
   }), false);
 });
 
-// bindView 切视图时是否该清空输入框未发送草稿。思考强度/模型切档会让后端 dispose 旧实例 + resume 同会话
-// 开新实例（instanceId 变了、sessionId 不变），这只是底层实例被静默替换、用户视角仍在同一个聊天里——
-// 此时清空草稿是误伤（真实 bug：切效果强度/模型会清空正在输入的指令）。真正切到另一个会话/全新未开会话
-// 才应该清空（用户明确导航离开，草稿属于旧会话）。
-test('shouldClearInputOnBindView: 同一会话静默换实例保留草稿，真实切会话才清空', () => {
-  // 同一非空 sessionId（effort/model 触发的 dispose+recreate，同会话换了个 instanceId）：保留草稿
-  assert.equal(shouldClearInputOnBindView({ prevSessionId: 'sess_1', newSessionId: 'sess_1' }), false);
-  // 真实切到另一个已有会话：清空
-  assert.equal(shouldClearInputOnBindView({ prevSessionId: 'sess_1', newSessionId: 'sess_2' }), true);
-  // 切到全新未开会话（newSessionId 尚无）：清空
-  assert.equal(shouldClearInputOnBindView({ prevSessionId: 'sess_1', newSessionId: null }), true);
-  // 从空首页首次绑定到会话：清空（无「同一会话」可言）
-  assert.equal(shouldClearInputOnBindView({ prevSessionId: null, newSessionId: 'sess_1' }), true);
-  // 两端都空（新会话间切换/初始态）：清空，无法判定是否同一草稿归属
-  assert.equal(shouldClearInputOnBindView({ prevSessionId: null, newSessionId: null }), true);
-  // 空/未定义入参安全：默认清空（保守，不吞真实切换场景）
-  assert.equal(shouldClearInputOnBindView(), true);
-});
-
 // bindView 切会话时未发送草稿（文字 + 附件）按 sessionId 存/取。
-// 与 shouldClearInputOnBindView 同判定边界：同会话静默换实例 = keep；真实导航 = swap（存旧取新）。
+// 判定边界：同会话静默换实例 = keep；真实导航 = swap（存旧取新）。
 // 新会话在发出第一条消息前没有 sessionId。bindView 被 setInstances 无条件调用，
 // 而 broadcastInstances() 在服务端有 28 个触发点且都是 io.emit 全员广播——于是
 // 「新会话已就绪、还没发第一条」这整段时间里，任何一个实例的状态变化（别的会话跑完

@@ -521,6 +521,7 @@ export class AgentSession {
     this.stallWarnedForActivity = 0;   // 网关挂起告警去重锚：告警时记当时的 lastActivity——同段静默不重复告，
                                        // 有新消息（lastActivity 前移）后的新静默段可再告。不动 lastActivity 本身（那会推迟真中断）。
     this._awaitingInterruptResult = false; // P1-4：interrupt() 成功且确有在途轮时置真，标记"下一条 result 是这次中断的终态确认"
+    this._interruptedBy = null;            // 这次中断是谁发起的（decidedBy 同一套取值）：归属被中断的那一轮，随 result 带出或开新轮时作废
     // 验收 O30：本轮有审批等到 TTL 过期时置真，随下一条 result 带出 approvalExpired 后复位。那一轮 CLI 以 is_error
     // 收尾，推送只看 isError 会写成「任务出错」；用户要知道的是审批过期、操作没执行。
     this._approvalExpiredInTurn = false;
@@ -995,16 +996,7 @@ export class AgentSession {
     this._approvalExpiredInTurn = false;
     this.bgTasks.clear();         // 实例结束清空活后台注册表，防残留误亮 ⏳
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy: 'system:exit' });
-    // F2：清理挂起的 AskUserQuestion（直接 resolve，不走 resolveQuestion 避免重复逻辑）
-    for (const [toolUseID, pending] of this.pendingQuestions) {
-      pending.signal?.removeEventListener('abort', pending.abortHandler);
-      if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
-      for (let i = 0; i < pending.questions.length; i++) {
-        this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
-      }
-      pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
-    }
-    this.pendingQuestions.clear();
+    this._cancelPendingQuestions();
     this._cancelPendingElicitations();
     this.denyKinds.clear(); // 与 dispose 路径对称：无论哪种退出，denyKind 残留都应清理
     // AG-005：自然退出（CLI 进程结束）也要标 disposed/inputEnded——否则 onExit 删 Map 前的竞态窗口里
@@ -1149,6 +1141,7 @@ export class AgentSession {
   // msgUuid：本轮消息透传给 CLI 的 uuid（send 路径有；合成轮/后台任务这类无对应用户消息的槽为 null）。
   // result 上的 user_message_uuid 就是它，据此精确出槽，见 _settleOneResultTurn。
   _openTurnSlot(msgUuid = null) {
+    this._interruptedBy = null; // 配对 result 可能永不到（见 _armInterruptSettleWatchdog），不能带进新一轮
     const id = ++this._turnIdSeq;
     this._openTurns.push({ id, forceSettled: false, msgUuid });
     return id;
@@ -1308,27 +1301,21 @@ export class AgentSession {
       this._awaitingInterruptResult = false; // 无伴随 result 可消费
       this._clearLocalCommandProgress();      // 同 settle 看门狗：强制收口须带上本地命令状态机（review #1）
       for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy });
-      for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
-        pending.signal?.removeEventListener('abort', pending.abortHandler);
-        if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
-        this.pendingQuestions.delete(toolUseID);
-        for (let i = 0; i < pending.questions.length; i++) {
-          this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
-        }
-        setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
-        try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
-      }
+      this._cancelPendingQuestions();
       this._cancelPendingElicitations();
       if (droppedIds.length > 0) {
         this.emit('system', { message: '尚未送达的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
       }
-      this.emit('system', { message: '已中断', kind: 'interrupted' });
+      this._interruptedBy = decidedBy; // abort 前已缓冲的 aborted_* 还可能吐出来，它也是这次中断
+      this.emit('system', { message: '已中断', kind: 'interrupted', interruptedBy: decidedBy });
       // 超时路径：再 abort 子进程，防止 CLI 仍在限流重试里挂着
       this.terminating = true;
       try { this.abort?.abort(); } catch { /* noop */ }
     };
     const _diagStartedAt = Date.now();
     let _diagOutcome = null, _diagTimedOut = false;
+    // CLI 可以先吐配对的 aborted_* 再回控制应答，来源要赶在让出之前记好。toDrop 还没送达 SDK，不算被中断的轮
+    if (this.pendingTurns > dropped) this._interruptedBy = decidedBy;
     try {
     try {
       await raceInterrupt();
@@ -1338,13 +1325,7 @@ export class AgentSession {
         this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
         this._dropOpenTurnSlots(dropped);
         for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy });
-        for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
-          pending.signal?.removeEventListener('abort', pending.abortHandler);
-          if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
-          this.pendingQuestions.delete(toolUseID);
-          setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
-          try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
-        }
+        this._cancelPendingQuestions({ silent: true });
         this._cancelPendingElicitations({ silent: true });
         _diagOutcome = 'disposed';
         return;
@@ -1355,28 +1336,22 @@ export class AgentSession {
       // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result。账面为 0（纯后台任务期空输入也有停止钮）
       // 时没有这条 result，标记置上就没人清，会把用户下一轮的正常完成标成「已中止」。
       this._awaitingInterruptResult = this.pendingTurns > 0;
-      if (this.pendingTurns > 0) this._armInterruptSettleWatchdog(); // …但"即将"不保证到达，见方法注释
+      if (this.pendingTurns > 0) {
+        this._interruptedBy = decidedBy; // 等应答期间才开的轮：让出前没记过，_awaitingInterruptResult 也算到了它头上
+        this._armInterruptSettleWatchdog(); // …但"即将"不保证到达，见方法注释
+      }
       // AG-004：Stop 应对齐「取消在途工具审批/提问」——不依赖 SDK 是否 abort canUseTool signal。
       // 若 signal 已 abort，abortHandler 会先清 Map，下面 resolve/expire 幂等（pending 不在则 no-op）。
       // 注意：Map.keys() 的元素是字符串，for-of 解构 for (const [id] of keys) 会把 't1' 拆成字符 't'——
       // 必须 for (const id of keys) 或 entries() 解构。
       for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy });
-      for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
-        pending.signal?.removeEventListener('abort', pending.abortHandler);
-        if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
-        this.pendingQuestions.delete(toolUseID);
-        for (let i = 0; i < pending.questions.length; i++) {
-          this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
-        }
-        setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
-        pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
-      }
+      this._cancelPendingQuestions();
       this._cancelPendingElicitations();
       // 被丢弃消息的可见性：前端据 clientMessageIds 把对应气泡标「已取消」（含 buffer 回放收敛）
       if (droppedIds.length > 0) {
         this.emit('system', { message: '尚未送达的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
       }
-      this.emit('system', { message: '已中断', kind: 'interrupted' }); // M7：kind 字段，勿靠字符串匹配
+      this.emit('system', { message: '已中断', kind: 'interrupted', interruptedBy: decidedBy }); // M7：kind 字段，勿靠字符串匹配
       _diagOutcome = 'success';
     } catch (err) {
       _diagTimedOut = !!(err && /interrupt_timeout/.test(String(err.message || err)));
@@ -2065,6 +2040,24 @@ export class AgentSession {
     this.pendingQuestions.delete(toolUseID);
     this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome }); // M4 整组终态
     pending.resolve({ behavior: 'allow', updatedInput: buildQuestionUpdatedInput(pending.input, pending.questions, pending.answers, { annotate }) });
+  }
+
+  // F2：实例结束 / 中断时把挂着的提问都结算成 deny + interrupt（等价终端 Esc）。直接 resolve，不走 resolveQuestion 避免重复逻辑。
+  // 先摘除再 emit：request_resolved 让 server 同步广播 instances，条目还在就会把已取消的提问报成 permission。
+  // 先 emit 再 resolve：保证多设备收到问题取消通知（否则前端弹窗永远不消失）。silent：实例已 dispose、没有监听者，不再发事件。
+  _cancelPendingQuestions({ silent = false } = {}) {
+    for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
+      pending.signal?.removeEventListener('abort', pending.abortHandler);
+      if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
+      this.pendingQuestions.delete(toolUseID);
+      if (!silent) {
+        for (let i = 0; i < pending.questions.length; i++) {
+          this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
+        }
+      }
+      setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
+      pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
+    }
   }
 
   // ---- MCP elicitation（#460）：服务器要表单输入或 URL 授权 ----
@@ -2801,18 +2794,7 @@ export class AgentSession {
     if (this._textTimer) { clearTimeout(this._textTimer); this._textTimer = null; }
     if (this._thinkTimer) { clearTimeout(this._thinkTimer); this._thinkTimer = null; }
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy: 'system:dispose' });
-    // F2：清理挂起的 AskUserQuestion——与 consume 清理路径一致：先 emit request_resolved 再 resolve，
-    // 保证多设备收到问题取消通知（否则前端弹窗永远不消失）
-    for (const [toolUseID, pending] of this.pendingQuestions) {
-      pending.signal?.removeEventListener('abort', pending.abortHandler);
-      if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
-      for (let i = 0; i < pending.questions.length; i++) {
-        this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
-      }
-      setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
-      pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
-    }
-    this.pendingQuestions.clear();
+    this._cancelPendingQuestions();
     this._cancelPendingElicitations();
     this.denyKinds.clear(); // 防 dispose 后残留（实例即弃，无 tool_result 来消费）
     this.lastToolName = null;
@@ -3736,11 +3718,14 @@ export class AgentSession {
         // 只认 aborted_* 前缀，不把 max_turns / budget_exhausted / hook_stopped 这些别的死因混进来。
         const wasInterrupted = this._awaitingInterruptResult || (terminalReason?.startsWith('aborted_') ?? false);
         this._awaitingInterruptResult = false;
+        // 本仓没发起过这次中断却收到 aborted_* ⇒ 不是任何一个按了停止的人，归给 CLI
+        const interruptedBy = wasInterrupted ? (this._interruptedBy ?? 'cli') : null;
+        this._interruptedBy = null;
         const approvalExpired = this._approvalExpiredInTurn;
         this._approvalExpiredInTurn = false;
         this._clearInterruptSettleWatchdog(); // 配对 result 已到：撤销兜底，否则悬挂计时会误清后续轮次的账
         diagLog.record(this.logKey(), 'queue', 'turn_settled', {
-          pendingTurnsAfter: this.pendingTurns, wasInterrupted, isError: !!msg.is_error, durationMs: msg.duration_ms,
+          pendingTurnsAfter: this.pendingTurns, wasInterrupted, interruptedBy, isError: !!msg.is_error, durationMs: msg.duration_ms,
           terminalReason, // 排障时能直接看到 CLI 的死因，不必再从消息形态倒推
         });
         this.emit('result', {
@@ -3751,7 +3736,8 @@ export class AgentSession {
           errors: msg.subtype === 'success' ? undefined : msg.errors,
           models: Object.keys(msg.modelUsage ?? {}), // F1：语义断言用
           text: this.assistantResponseBuffer || undefined, // 完整回复文本：供前端断网恢复后校正截断的 s.raw
-          interrupted: wasInterrupted, // 这条 result 是否由用户主动中止直接导致（区别于独立的真实错误/完成）
+          interrupted: wasInterrupted, // 这一轮是否被腰斩（区别于独立的真实错误/完成）；是不是用户按的看 interruptedBy
+          ...(interruptedBy ? { interruptedBy } : {}), // user / system:idle-watchdog / cli
           ...(approvalExpired ? { approvalExpired: true } : {}), // 本轮有审批等到过期（推送据此改说「审批已过期」）
           ...(terminalReason ? { terminalReason } : {}), // CLI 权威死因；旧 CLI 无此字段时整个不带
         });

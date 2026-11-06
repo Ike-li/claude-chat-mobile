@@ -46,6 +46,5 @@ export function createSessionDeleteController(context, {
   }
 
   const controller = { openDeleteSession };
-  context.state.sessionDelete = controller;
   return controller;
 }

@@ -35,7 +35,7 @@ export const EN_DICT = Object.freeze({
   '#token=值': '#token=VALUE',
   '直接进入。令牌在服务器': '. Find the token in',
   '的': 'as',
-  '或启动日志里。': 'on the server, or in the startup log.',
+  '里（启动日志只显示掩码）。': 'on the server (the startup log only shows a masked copy).',
   '不知道令牌？查看帮助': "Don't know the token? Get help",
   '会话已过期': 'Session expired',
   '等待授权': 'Waiting for approval',
@@ -69,7 +69,6 @@ export const EN_DICT = Object.freeze({
   '通知 · 设备信任 · 语言 · 诊断': 'Notifications · device trust · language · diagnostics',
   '下拉或点外侧关闭 · 不含本会话的模型与权限': "Swipe down or tap outside · this session's model & permissions live elsewhere",
   // L2 页内的组标题与作用域 chip
-  '现在': 'Now',
   '怎么提醒我': 'How to alert me',
   '📱 仅此设备': '📱 This device only',
   '🖥 整机': '🖥 Whole machine',
@@ -331,7 +330,6 @@ export const EN_DICT = Object.freeze({
   '展开/收起任务列表': 'Expand/collapse task list',
   '停止该后台任务': 'Stop this background task',
   '停止': 'Stop',
-  '刷新消息': 'Refresh messages',
   '续接 CLI 会话': 'Resume CLI session',
   '给 Claude 发消息...': 'Message Claude...',
   '默认': 'Default',
@@ -352,13 +350,14 @@ export const EN_DICT = Object.freeze({
 
   // —— 设备授权 / 访问帮助 ——
   '🔒 等待授权': '🔒 Waiting for approval',
-  '这是一台新设备。在你': 'This is a new device. On',
-  '另一台已登录的设备': "another device you're already signed in on",
-  '上会弹出「新设备请求接入」，点一下「准入」即可——': ', a "New device requesting access" prompt will appear. Just tap "Approve" —',
+  // 末尾空格有意为之：紧跟其后的是 <strong> 第二句，中文不需要空格、英文需要
+  '这是一台新设备，需要批准一次。手边有已登录的设备时，那台上会弹出「新设备请求接入」，点「准入」即可；': 'This is a new device and needs a one-time approval. If you have a device that is already signed in, it shows "New device requesting access" — tap "Approve". ',
+  '这是第一台设备': 'If this is your first device',
+  '的话，只能在电脑上批准，见下方。': ', it can only be approved on the computer — see below.',
   '无需上电脑终端': 'no computer terminal needed',
   '。': '.',
   '本设备 ID': 'This device ID',
-  '没有其它已登录的设备？用命令授权 ▾': 'No other signed-in device? Approve by command ▾',
+  '第一台设备，或手边没有已登录的设备？在电脑上批准 ▾': 'First device, or no signed-in device at hand? Approve on the computer ▾',
   '在跑着 server 的那个终端窗口里按': 'In the terminal window running the server, press',
   '回车键': 'Enter',
   '一键同意最新设备，或在该项目目录下执行：': 'to approve the latest device, or run this from that project directory:',
@@ -376,7 +375,7 @@ export const EN_DICT = Object.freeze({
   '里找': 'on your computer for',
   '这一项（旧版装的是': '(older installs use',
   '），或者跑': '), or run',
-  '打一张二维码直接扫。启动日志只有第一次打印完整 URL，之后为防泄露只显示掩码，别照着它输。清除浏览器数据会一并清掉令牌，届时重输一次即可。': 'to print a QR code you can scan directly. The startup log prints the full URL only the first time; after that it shows a masked token — do not type that one in. Clearing browser data wipes the token too, so just enter it again when that happens.',
+  '打一张二维码直接扫。启动日志里的令牌是掩码，别照着它输。清除浏览器数据会一并清掉令牌，届时重输一次即可。': 'to print a QR code you can scan directly. The token in the startup log is masked — do not type that one in. Clearing browser data wipes the token too, so just enter it again when that happens.',
   '🆕 新设备怎么获批': '🆕 How a new device gets approved',
   '除了本机直连、以及已开 Cloudflare Access 的域名，其余路径（局域网 IP、Tailscale、没配 Access 的隧道域名）新设备都要批一次。你已登录的设备上会弹「新设备请求接入」，点「准入」即可——': 'Every path needs a one-time approval for a new device, except direct localhost access and a domain already protected by Cloudflare Access. That includes LAN IPs, Tailscale, and tunnel domains without Access. A device you are already signed in on shows "New device requesting access" — just tap "Approve", ',
   // 末尾空格有意为之：紧跟其后的是 <code>，中文冒号后不留空格、英文冒号后要留
@@ -918,11 +917,16 @@ export const EN_DICT = Object.freeze({
   '出错：': 'Error: ',
   '已完成': 'Done',
   '已中止': 'Interrupted',
+  '已中断': 'Interrupted',
+  '超时中断': 'Timed out',
+  '已中断（非手动）': 'Interrupted (not by you)',
   'Claude 正在回复': 'Claude is responding',
   '已等待 <1 分钟': 'Waiting <1 min',
   '已等待': 'Waiting',
   '用时': 'took',
   '⏹ 任务已中止': '⏹ Task interrupted',
+  '⚠️ 任务超时中断': '⚠️ Task timed out',
+  '⚠️ 任务被中断': '⚠️ Task interrupted',
   '⚠️ 任务出错': '⚠️ Task failed',
   '✅ 任务完成': '✅ Task done',
   // API 重试行（整行顶替 spinner，对齐 CLI "✻ API error · Retrying in 4s · attempt 2/10"）。
@@ -1269,7 +1273,6 @@ export const EN_DICT = Object.freeze({
   '强制立即续接': 'Force resume now',
   '强制立即续接？': 'Force resume now?',
   '尚未判定终端已停止。若终端其实还在跑同一会话，两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n请确认终端确实已关闭再继续。': 'The terminal has not been determined to be stopped yet. If it is actually still running this session, sending from both sides will fork the conversation (the other side\'s messages may become invisible downstream).\n\nMake sure the terminal is really closed before continuing.',
-  '已请求刷新：拉取终端最新消息': 'Refresh requested: pulling the terminal\'s latest messages',
 
   // —— 附件 ——
   '附件': 'attachment',
@@ -1297,6 +1300,11 @@ export const EN_DICT = Object.freeze({
 
   // —— 文件浏览 / git 改动 ——
   '无法加载：': 'Could not load: ',
+  '无法打开：': 'Could not open: ',
+  '无法下载：': 'Could not download: ',
+  '下载': 'Download',
+  '无法预览，可以下载后查看': 'Preview failed. Download the file to view it.',
+  '服务端没响应，刚更新过的话要重启后端': 'No response from the server. If you just updated, restart the backend.',
   '加载更多（已显示': 'Load more (showing',
   '二进制文件（': 'Binary file (',
   '），不支持预览': ') — preview not supported',

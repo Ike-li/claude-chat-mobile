@@ -47,10 +47,6 @@ export function systemBarClass(payload = {}) {
   return 'text-ink-faint';
 }
 
-// UX-010：横幅优先级仲裁（同屏最多一条）。
-// mirror 状态已迁到 input placeholder + 续接钮，#mirrorBanner 恒隐——不得再压住 task_progress
-// （多子代理/后台任务进度是用户在只读时仍需要看到的）。
-// 序：task > subagent > activity > mirror(占位) > null。
 // UX-004：流式 markdown 预览节流间隔（ms）。
 export function formatStreamPreviewIntervalMs(ms) {
   const n = Number(ms);
@@ -870,9 +866,8 @@ export function diffDirSignatures(prev = {}, next = {}) {
 }
 
 // 面板"结构性"指纹：目录集合（忽略顺序）+ viewingInstanceId + 当前查看 cwd 之一变了才算——这三者才
-// 决定 dirRow 高亮与 UX-007 的"当前工作区强制展开"。纯换序（拖动排序广播回来的新顺序，集合不变）
-// 不该算在内：换序只需要调整展示顺序，调用方若把它当结构性变化去触发全量重建，会把强制展开误套在
-// 跟这次换序无关的目录上（2026-10-26：挪别的文件夹顺序，却把当前正在看的工作区连带强制展开了）。
+// 决定有哪些小节与 dirRow 高亮。纯换序（拖动排序广播回来的新顺序，集合不变）不算：只需要调整展示顺序，
+// 用不着全量重建（见 reorderDirSections）。
 export function dirPanelStructuralKey({ dirs = [], viewingInstanceId = null, currentCwd = null } = {}) {
   return `${[...(dirs || [])].sort().join('|')}|${viewingInstanceId || ''}|${currentCwd || ''}`;
 }
