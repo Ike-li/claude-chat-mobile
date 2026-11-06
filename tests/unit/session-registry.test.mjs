@@ -169,6 +169,29 @@ test('listTerminalSessionStatesOrNull：有一条读不动（写到一半的 JSO
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('listTerminalSessionStatesOrNull：不自报 status 的旧版桌面端，靠尾部判据认出在跑', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-sreg-tail-'));
+  try {
+    writeFileSync(join(dir, '1.json'), JSON.stringify({ pid: 1, sessionId: 'S', cwd: '/w', entrypoint: 'claude-desktop', kind: 'interactive' }));
+    const classifyTail = async () => ({ verdict: 'pending', lastChainEntrypoint: 'claude-desktop' });
+    const map = await listTerminalSessionStatesOrNull({ dir, isAlive: () => true, classifyTail });
+    assert.equal(map.get(terminalStateKey('/w', 'S')).state, 'busy', '没传判据时这里恒为 alive，无人值守写入会误判成闲着');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('listTerminalSessionStatesOrNull：尾部判据抛错 → null，不把「不知道」当成闲着', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-sreg-tail-err-'));
+  try {
+    writeFileSync(join(dir, '1.json'), JSON.stringify({ pid: 1, sessionId: 'S', cwd: '/w', entrypoint: 'claude-desktop', kind: 'interactive' }));
+    const classifyTail = async () => { throw new Error('EIO'); };
+    assert.equal(await listTerminalSessionStatesOrNull({ dir, isAlive: () => true, classifyTail }), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('listTerminalSessionStatesOrNull：目录不存在（没装 CLI / 从没跑过终端）→ 空 Map，不是 null', async () => {
   const map = await listTerminalSessionStatesOrNull({ dir: join(tmpdir(), 'ccm-sreg-absent-3'), isAlive: () => true });
   assert.ok(map instanceof Map, 'ENOENT 是确定的「没有」，当成读不动会让这类用户永远续不了');
