@@ -56,5 +56,7 @@ export function sdkChildEnv(base = process.env) {
     // hooks runner 据此直接静默退出。SDK 会话的 settingSources 含 'user'，会加载用户全局 hooks——
     // 不抑制的话，web 自己驱动的每一轮都会经「SDK result」和「Stop hook」两条路各推一次通知。
     CCM_HOOKS_ORIGIN: 'web-sdk',
+    // 让 CLI 吐 session_state_changed，不设一帧都没有（2.1.318 实测）。消息排队靠它的 idle 判断 CLI 是不是真的闲了。
+    CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
   };
 }

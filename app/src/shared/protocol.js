@@ -125,6 +125,7 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'user:message',
   'user:renameTrustedDevice',
   'user:revokeTrustedDevice',
+  'user:takeQueued',
   'user:setEffort',
   'user:setPermissionMode',
   'user:setViewing',

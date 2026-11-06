@@ -49,6 +49,10 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
     assert.doesNotMatch(stopped.title, /出错/);
   });
 
+  test('result：带 queuedNext → 不推，下一条排队消息马上开跑，这时说「任务完成」是假的', () => {
+    assert.equal(notificationForEvent('result', { durationMs: 1500, queuedNext: true }, { hasClients: false }), null);
+  });
+
   // 验收 O30：审批等到 TTL 过期的那一轮，CLI 以 is_error 收尾，原来推成「⚠️ 任务出错 · 用时 1814.0s」。
   // 用户需要知道的是「审批过期了、操作没执行、要重新触发」，不是「出错了」。
   test('result：这一轮有审批过期 → 标题说审批已过期、正文说操作没执行，不说「出错」', () => {

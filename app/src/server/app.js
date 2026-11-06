@@ -152,6 +152,7 @@ import { createSocketEventRegistrar, registerSocketConnection } from './socket.j
 import { createMirrorEngine } from './mirror-engine.js';
 import { createAutoContinue } from './auto-continue.js';
 import { createSendGate } from './send-gate.js';
+import { createMessageQueue } from './message-queue.js';
 import { registerFileSocketHandlers, OUT_OF_SCOPE_ERROR } from './socket-files.js';
 import { registerFileTicketRoute } from './file-ticket-route.js';
 import { registerFolderSocketHandlers } from './socket-folders.js';
@@ -1483,6 +1484,8 @@ function instancesPayload() {
   // 空闲回收，挂在实例上的话横幅会随实例一起消失。恒带（可能是空数组）——前端对「缺字段」的
   // 约定是不动横幅（兼容 E2E mock 的各处内联载荷），只有真 server 的空数组才表示「没有」。
   payload.autoContinue = autoContinue.snapshot();
+  // 排队消息的卡片数据，同样按 sessionId 归键：未发送的条目可能比实例活得久。恒带，前端把缺字段当成后端不支持。
+  payload.queuedMessages = messageQueue.snapshot();
   const composeTarget = composeCwdNow();
   if (composeTarget) payload.composeCwd = composeTarget; // 只在和 viewingCwd 不同时才有（见 composeCwd）
   // 项目清单（按官方桌面端的侧栏分组）：连接根现算；子项目 = 扫盘结果 ∪ 活实例所在的子项目——新会话的
@@ -2274,7 +2277,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, author
     onEvent: envelope => {
       metrics.inc('events'); // 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
       const drivingCwd = instance.cwd; // 见 onSessionId 里的说明：闭包 cwd 会在 EnterWorktree 后过期
+      if (envelope.type === 'system' && envelope.payload?.kind === 'interrupted') messageQueue.hold(instance.sessionId, 'interrupted');
       if (envelope.type === 'init') {
+        messageQueue.onTurnStarted(instance);
         if (!instance.externalDirty) delete instance.externalObserved;
         // slash 命令按本实例 cwd 归键（project/local skill 随区变）；空列表不写，避免冲掉更好缓存。
         // init 只带名字（#456）：成员以它为准，说明沿用缓存里 supportedCommands() 拿到的那份。转发前把信封里的
@@ -2453,7 +2458,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, author
     onStateSettled: () => broadcastInstances(),
     // 额度墙 → 自动续跑调度。sessionId / cwd 在回调那一刻现取：会话 id 可能晚于构造才落定，
     // cwd 也可能中途被 EnterWorktree 换掉（transcript 随之搬家，到点复核要读新位置）。
-    onQuotaWall: wall => autoContinue.onWall({ sessionId: instance.sessionId, cwd: instance.cwd, instance, wall }),
+    onQuotaWall: (wall) => {
+      messageQueue.hold(instance.sessionId, 'quota_wall'); // 撞墙时排队消息转未发送，到点代发的「继续」不带上它
+      autoContinue.onWall({ sessionId: instance.sessionId, cwd: instance.cwd, instance, wall });
+    },
+    onTurnEnded: facts => messageQueue.onTurnEnded(instance, facts),
+    onCliIdle: () => messageQueue.onCliIdle(instance),
     // 会话中途换 cwd（EnterWorktree / ExitWorktree，SESSION-03）。agent 从两条通道报上来——
     // 主链 tool_use_result（主通道）与 CwdChanged hook（冗余），channel 标出是哪条，这里裁决。
     //
@@ -2494,6 +2504,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, author
       // 新会话首次获得 id 时，写 entrypoint 元数据使 CLI /resume 可见（按本实例 cwd 落对应 project 目录）。
       if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, drivingCwd);
       composeInstances.noteSession(id, sid); // 新会话页开出的实例没了之后，这一页的消息据此续接（#328 review P2）
+      messageQueue.onSessionChanged(instance, sid);
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
       // effort 为构造时注入值。web 端续接恢复依赖这两字段。auto 存 'auto' 字面量——存成 null 会被
       // resolveResumeEffort 当「没指定」往下兜底，重启后悄悄换成 settings 里存的档。
@@ -2514,6 +2525,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, author
     onExit: () => {
       if (instance.sessionId) {
         interactionLog.addSessionLog(instance.sessionId, 'sys_info', `[SYS] 实例已退出 (onExit): instanceId=${id}, resumeFailed=${instance.resumeFailed}`);
+        messageQueue.hold(instance.sessionId, 'instance_exit');
       }
       if (agents.get(id) === instance) {
         if (instance.resumeFailed) sessions.setCurrent(routeKey, null);
@@ -2874,6 +2886,14 @@ const sendGate = createSendGate({
   diagLog,
 });
 
+// 消息排队（状态与时机见 src/server/message-queue.js）。此处只做装配。
+const messageQueue = createMessageQueue({
+  sendGate,
+  getLiveInstance: sessionId => instanceForSession(sessionId) || null,
+  onChange: () => broadcastInstances(),
+  log: (sessionId, line) => interactionLog.addSessionLog(sessionId, 'sys_info', line),
+});
+
 // ---- 契约路由（客户端→服务端）----
 const on = createSocketEventRegistrar();
 
@@ -2968,7 +2988,9 @@ registerSocketConnection(io, socket => {
       const stored = processedInstanceId(clientMessageId, messageDedupState);
       const live = stored ? agents.get(stored) : null;
       const instanceId = live && !live.terminating && !live.disposed ? stored : null;
-      if (typeof rawAck === 'function') rawAck({ ok: true, deduped: true, ...(instanceId ? { instanceId } : {}) }); return;
+      // 还排着的话一并告诉它：同样是首发 ack 丢了的客户端，靠 queued 才知道这条没进消息流是在排队。
+      const queued = messageQueue.hasMessage(clientMessageId) ? { queued: true } : {};
+      if (typeof rawAck === 'function') rawAck({ ok: true, deduped: true, ...(instanceId ? { instanceId } : {}), ...queued }); return;
     }
     // 并发去重：另一个请求（多半断线重连重发撞上原请求仍处理中）正处理同一条、尚未落定成败——
     // 不重复调用 a.send()，负 ack 可重试，client 既有重试机制稍后会再次命中（那时原请求已
@@ -3161,6 +3183,19 @@ registerSocketConnection(io, socket => {
         }),
       });
       if (!gate.ok) {
+        // queue:true 的含义是「如果还在跑就暂存」：回合恰好结束时闸门放行，按普通发送走，ack 不带 queued。
+        // 取回靠 clientMessageId 认条目，没有它就是一条取不回的消息，按普通发送拒收。
+        if (gate.code === 'turn_running' && payload?.queue === true && clientMessageId && typeof clientMessageId === 'string') {
+          const accepted = messageQueue.accept({ instance: gate.instance, clientMessageId, text: cleanText, model, attachments });
+          if (!accepted.ok) {
+            ack(accepted.ack);
+            return;
+          }
+          // 收下就算处理过：同 ID 重发不再存一份。释放时 deliver 那次 commit 是幂等空操作。
+          messageDedupState = commitProcessed(clientMessageId, messageDedupState, { instanceId: gate.instance.instanceId });
+          ack({ ok: true, queued: true, instanceId: gate.instance.instanceId, sessionId: gate.instance.sessionId });
+          return;
+        }
         ack(gate.ack);
         return;
       }
@@ -3555,7 +3590,29 @@ registerSocketConnection(io, socket => {
     ack(a ? a.resolveElicitation(requestId, action, content) : { ok: false, error: '会话已经关闭' });
   });
 
-  on(socket, 'user:interrupt', payload => routeInstance(payload?.instanceId)?.interrupt()); // 台阶3：按 instanceId 路由
+  on(socket, 'user:interrupt', (payload) => {
+    const a = routeInstance(payload?.instanceId); // 台阶3：按 instanceId 路由
+    if (!a) return undefined;
+    // 必须在 interrupt 之前同步转未发送：它要等控制请求回包，这期间回合可能恰好正常结束，等事件到了就晚了（MSG-03）。
+    messageQueue.hold(a.sessionId, 'stopped');
+    return a.interrupt();
+  });
+  // 取回排队消息：全文和附件回到发起这次取回的设备。统一注册器只拦 deviceApproved===false，这个 ack 带消息全文，
+  // 未定态的连接也不能给（理由同 FOLDER-02）。
+  on(socket, 'user:takeQueued', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (socket.deviceApproved !== true) {
+      ack({ ok: false, error: 'device_not_approved' });
+      return;
+    }
+    const sessionId = payload?.sessionId;
+    const clientMessageId = payload?.clientMessageId;
+    if (!isSafeSessionId(sessionId) || typeof clientMessageId !== 'string' || !clientMessageId) {
+      ack({ ok: false, error: 'invalid_payload' });
+      return;
+    }
+    ack(messageQueue.take(sessionId, clientMessageId));
+  });
   // 额度墙自动继续横幅的三个按钮：取消 / 到点自动继续 / 立即继续。相位合不合法由 auto-continue.js 的
   // act() 判，这里只校验形状——sessionId 过 SS-003 字符集守卫，action 只认三个字面量。
   on(socket, 'user:autoContinue', (payload, ack) => {
@@ -4212,7 +4269,10 @@ registerSocketConnection(io, socket => {
     const closedSessionId = agents.get(id).sessionId;
     disposeInstance(id); // 内含 viewingInstanceId 回落 + broadcastInstances
     // 用户亲手关掉的会话，到点不该在后台自己跑起来（CLI 退出进程同样作废等待）
-    if (closedSessionId) autoContinue.onSessionGone(closedSessionId, 'closed');
+    if (closedSessionId) {
+      autoContinue.onSessionGone(closedSessionId, 'closed');
+      messageQueue.hold(closedSessionId, 'closed');
+    }
     lastStatusLine = null;
     scheduleStatusRefresh();
     if (typeof ack === 'function') ack({ ok: true, viewingInstanceId });
@@ -4434,6 +4494,7 @@ registerSocketConnection(io, socket => {
     invalidateListCache(cwd);
     projectIndex.refresh(); // 子文件夹的最后一个会话被删了，这个项目就该从抽屉里消失
     autoContinue.onSessionGone(sessionId); // 会话都没了，到点不该再 resume 一个空壳去发
+    messageQueue.discard(sessionId);
     audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'success', meta: { cwd } });
     // 会话在 worktree 里时（托管的，或范围里的平级 worktree）一并报告那棵树的状态：transcript
     // 删掉了，**worktree 还在磁盘上**，不说一声用户就不知道它在哪、里面还剩什么。

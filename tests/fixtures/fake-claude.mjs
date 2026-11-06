@@ -51,6 +51,16 @@
 //             后面，次序照真 CLI 2.1.318 实测：command_lifecycle:queued →（隔 CCM_FAKE_CLAUDE_AUTOREPORT_MS）
 //             汇报轮的 message_start、正文与不带 user_message_uuid 的 result → command_lifecycle:started →
 //             system/init →（隔 CCM_FAKE_CLAUDE_RESULT_DELAY_MS）这条自己的正文与 result。
+//   turn-autoreport-tail → 通知落在回合最后一次 API 调用期间：task_notification 在 result 之前，result 之后
+//             不报 idle，紧接着 init 起汇报轮，隔 CCM_FAKE_CLAUDE_AUTOREPORT_MS 吐完汇报轮的 result 才报 idle。
+//             汇报轮的正文写 CCM_FAKE_CLAUDE_AUTOREPORT_FAIL=1 时改成 is_error + api_error。
+//   turn-autoreport-fold → 通知并进当前回合：task_notification 在 result 之前，没有下一轮，result 后直接报 idle。
+//   turn-bg-agent → 后台子 agent 占着 CLI：吐 task_started{is_backgrounded:true}，result 之后一直不报 idle，
+//             但下一条 user 照常开跑。形态照 CLI 2.1.318 实测。
+//
+// 【会话状态帧】与模式正交：真 CLI 只在设了 CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1 时才吐
+//   system/session_state_changed，这里同样按它开关。回合开始报 running，真正空闲才报 idle。
+//   CCM_FAKE_CLAUDE_NO_STATE_FRAMES=1 → 一帧不吐，模拟没有这个帧的旧 CLI。
 //
 // 【回合晚一点收尾】与模式正交，默认关：
 //   CCM_FAKE_CLAUDE_RESULT_DELAY_MS=<毫秒> → turn 系各档在 init 之后隔这么久才吐回答与 result。
@@ -80,6 +90,10 @@ import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 
 const MODE = process.env.CCM_FAKE_CLAUDE_MODE || 'init';
+const TURN_MODES = new Set([
+  'turn', 'turn-bg', 'turn-bg-agent', 'turn-autoreport', 'turn-autoreport-collide', 'turn-autoreport-tail',
+  'turn-autoreport-fold', 'turn-screenshot', 'turn-local-command',
+]);
 // 允许调用方钉死 session_id：镜像 / registry 类用例需要拿这个值去算 transcript 路径。
 const SESSION_ID = process.env.CCM_FAKE_CLAUDE_SESSION_ID || randomUUID();
 const REPLY = process.env.CCM_FAKE_CLAUDE_REPLY || '(fake-claude) 收到';
@@ -131,8 +145,19 @@ const FG_TOOL_USE_ID = 'toolu_fake_fg';
 const FG_TASK_ID = 'fake-fg-task';
 let fgPendingMsg = null; // turn-fg-task：被前台任务挡着、还没收尾的那条 user 消息
 let autoReportState = 'none'; // turn-autoreport-collide：none → waiting（汇报轮等首字节）→ done
+let autoReportDone = false;   // turn-autoreport-tail：汇报轮只起一次
 
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
+
+const STATE_FRAMES = process.env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS === '1' && process.env.CCM_FAKE_CLAUDE_NO_STATE_FRAMES !== '1';
+const AUTOREPORT_FAIL = process.env.CCM_FAKE_CLAUDE_AUTOREPORT_FAIL === '1';
+let cliState = 'idle';
+
+function emitState(state) {
+  if (!STATE_FRAMES || cliState === state) return;
+  cliState = state;
+  out({ type: 'system', subtype: 'session_state_changed', state, uuid: randomUUID(), session_id: SESSION_ID });
+}
 
 function emitInit() {
   out({
@@ -164,6 +189,19 @@ function emitBgTaskDone() {
   });
 }
 
+function emitAutoReportTurn() {
+  emitMessageStart();
+  out({
+    type: 'assistant', session_id: SESSION_ID, uuid: randomUUID(), parent_tool_use_id: null,
+    message: { role: 'assistant', content: [{ type: 'text', text: '(fake-claude) 汇报' }] },
+  });
+  out({
+    type: 'result', subtype: 'success', session_id: SESSION_ID, uuid: randomUUID(), is_error: AUTOREPORT_FAIL,
+    duration_ms: 1, duration_api_ms: 1, num_turns: 1, result: '(fake-claude) 汇报', total_cost_usd: 0,
+    terminal_reason: AUTOREPORT_FAIL ? 'api_error' : 'completed',
+  });
+}
+
 function emitMessageStart() {
   out({
     type: 'stream_event',
@@ -179,16 +217,7 @@ function queueBehindAutoReport(msg) {
   autoReportState = 'done';
   emitLifecycle('queued', msg);
   setTimeout(() => {
-    emitMessageStart();
-    out({
-      type: 'assistant', session_id: SESSION_ID, uuid: randomUUID(), parent_tool_use_id: null,
-      message: { role: 'assistant', content: [{ type: 'text', text: '(fake-claude) 汇报' }] },
-    });
-    out({
-      type: 'result', subtype: 'success', session_id: SESSION_ID, uuid: randomUUID(), is_error: false,
-      duration_ms: 1, duration_api_ms: 1, num_turns: 1, result: '(fake-claude) 汇报', total_cost_usd: 0,
-      terminal_reason: 'completed',
-    });
+    emitAutoReportTurn();
     emitLifecycle('started', msg);
     emitInit();
     setTimeout(() => {
@@ -276,6 +305,7 @@ rl.on('line', (line) => {
 
   if (autoReportState === 'waiting') { queueBehindAutoReport(msg); return; }
 
+  emitState('running');
   if (!announcedInit || INIT_EACH_TURN) {
     announcedInit = true;
     emitInit();
@@ -287,7 +317,7 @@ rl.on('line', (line) => {
     return;
   }
 
-  if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport' && MODE !== 'turn-autoreport-collide' && MODE !== 'turn-screenshot' && MODE !== 'turn-local-command') return;
+  if (!TURN_MODES.has(MODE)) return;
 
   if (RESULT_DELAY_MS > 0) setTimeout(() => finishTurn(msg), RESULT_DELAY_MS);
   else finishTurn(msg);
@@ -376,6 +406,13 @@ function finishTurn(msg, reply = REPLY) {
       tasks: [{ task_id: 'fake-bg-dev-server', task_type: 'local_bash', description: 'npm run dev' }],
     });
   }
+  if (MODE === 'turn-bg-agent') {
+    out({
+      type: 'system', subtype: 'task_started', session_id: SESSION_ID, uuid: randomUUID(),
+      task_id: 'fake-bg-agent', task_type: 'local_agent', is_backgrounded: true, description: '后台子 agent',
+    });
+  }
+  if ((MODE === 'turn-autoreport-tail' && !autoReportDone) || MODE === 'turn-autoreport-fold') emitBgTaskDone();
   // user_message_uuid 原样回传：agent.js 的 _settleOneResultTurn 优先按 uuid 精确出槽，
   // 回传得对就不必依赖 FIFO 回落。
   out({
@@ -402,6 +439,18 @@ function finishTurn(msg, reply = REPLY) {
     emitInit();
     autoReportState = 'waiting';
   }
+  if (MODE === 'turn-autoreport-tail' && !autoReportDone) {
+    autoReportDone = true;
+    emitInit();
+    setTimeout(() => {
+      emitAutoReportTurn();
+      emitState('idle');
+    }, AUTOREPORT_MS);
+    return;
+  }
+  // 汇报轮紧跟、后台子 agent 占着：CLI 没闲下来，不报 idle
+  if (MODE !== 'turn-autoreport' && MODE !== 'turn-autoreport-collide' && MODE !== 'turn-bg-agent') emitState('idle');
+  else if (MODE === 'turn-autoreport-collide' && autoReportState === 'done') emitState('idle');
 }
 
 // 读到 EOF 才退。提前退出会让 SDK 那次 write 抛 EPIPE，而它在 sdk.mjs 内部不被 catch，

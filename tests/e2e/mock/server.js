@@ -7693,6 +7693,11 @@ io.on('connection', socket => {
   // 否则「跳过此问题」只能发出 interrupt 却关不掉弹窗（前端故意不乐观关窗）。
   // 注意：agent:event 带 activeEpoch 时 seq 必须单调递增——前端 `ev.seq <= lastSeq` 会丢弃回退 seq，
   // 所以这里绝不能发 seq:0（question 已是 seq:3 时会把 resolved 整条滤掉）。
+  // 取回排队消息（真 server：app.js 的 user:takeQueued → message-queue.js 的 take()）。
+  socket.on('user:takeQueued', (payload, ack) => {
+    if (typeof ack === 'function') ack({ ok: false, error: 'not_found' });
+  });
+
   socket.on('user:interrupt', payload => {
     const { instanceId } = payload || {};
     const targetId = instanceId || viewingInstanceId;

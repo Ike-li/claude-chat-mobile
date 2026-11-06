@@ -155,12 +155,14 @@ export function createSendGate({
 
   /**
    * 把消息交给实例。只发不判，调用方必须先过 prepare。
-   * @param {{text:string, model?:string, attachments?:Array, clientMessageId?:string, startedAt?:number}} message
+   * @param {{text:string, model?:string, attachments?:Array, clientMessageId?:string, startedAt?:number, shouldSend?:Function}} message
+   *   shouldSend 传给 a.send，在入队那一刻判断还要不要发：落盘和切模型都要等，这期间用户可能取消。
    * @returns {Promise<{ok:true, ack:object} | {ok:false, reason:string, notice?:string, ack:object}>}
    *   notice 是给发送方的一句提示；reason 给无人值守调用方判去向。
    */
-  async function deliver(a, { text, model, attachments, clientMessageId, startedAt = Date.now() }) {
+  async function deliver(a, { text, model, attachments, clientMessageId, startedAt = Date.now(), shouldSend }) {
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    const cancellable = shouldSend ? { shouldSend } : {};
     // FRESH 首轮 sessionId 可能仍 null：走 agent.logKey()（provisionalKey）与 agent 内 userMessageOut/agentSend 对齐
     interactionLog.userMessageIn(a.logKey(), text, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
     let sent;
@@ -174,10 +176,11 @@ export function createSendGate({
           displayText: text,
           attachments: toEventMeta(saved),
           clientMessageId, // FE-002：离线乐观气泡对账
+          ...cancellable,
         });
       } else {
         // F1：send 改 async（setModel 需 await）；clientMessageId 供前端对账
-        sent = await a.send(text, model, { clientMessageId });
+        sent = await a.send(text, model, { clientMessageId, ...cancellable });
       }
     } catch (err) {
       // SRV-004：附件落盘失败 / 其它同步抛错 → 负 ACK；附件失败多半 permanent（权限/symlink/满盘）

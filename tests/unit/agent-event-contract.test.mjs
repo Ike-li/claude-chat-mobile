@@ -376,7 +376,7 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //      + file:open（2026-11-05，点消息里的本机文件链接：把模型写的路径定位到已连接文件夹，是文件再发一张 /f/ 票据。
   //        不并进 browse:read：那条收的是 sheet 算好的 cwd + relPath，这条收模型写的任意形态路径，要归属到根；
   //        超限的字节也不能走 socket。入向 75→76）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 76);
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 77);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('file:open'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('logs:clientPerf'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
