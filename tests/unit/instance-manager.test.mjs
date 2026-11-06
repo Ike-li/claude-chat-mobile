@@ -341,3 +341,24 @@ test('isRoutable：在表里但正在终止 / 已 dispose 的实例不算能投�
   assert.equal(manager.isRoutable(agent.instanceId), false);
   assert.equal(manager.isRoutable('inst-none'), false);
 });
+
+// session_writes_lost 只在 CLI 退出时到，这时实例要么被回收（没人看）、要么已 dispose（事件前端直接丢）。
+// 暂存到这个会话下次发消息。端到端的送达见 tests/integration/session-writes-lost.test.mjs。
+test('写丢提示按会话暂存，取走一次就没了', () => {
+  const manager = createInstanceManager();
+  manager.noteWritesLost('sess-a', '正文 A');
+  manager.noteWritesLost('sess-b', '正文 B');
+
+  assert.equal(manager.takeWritesLost('sess-a'), '正文 A');
+  assert.equal(manager.takeWritesLost('sess-a'), null, '只提示一次，否则每发一条都弹');
+  assert.equal(manager.takeWritesLost('sess-b'), '正文 B', '两个会话各管各的');
+  assert.equal(manager.takeWritesLost('sess-c'), null);
+});
+
+test('写丢提示：同一会话后报的覆盖先报的，不叠加', () => {
+  const manager = createInstanceManager();
+  manager.noteWritesLost('sess-a', '第一次');
+  manager.noteWritesLost('sess-a', '第二次');
+  assert.equal(manager.takeWritesLost('sess-a'), '第二次');
+  assert.equal(manager.takeWritesLost('sess-a'), null);
+});
