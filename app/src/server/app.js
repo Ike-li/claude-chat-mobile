@@ -29,6 +29,7 @@ import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, 
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
 import * as folderOrder from '../sessions/folder-order.js';
+import { savedEnvironments } from '../sessions/saved-environments.js';
 import { getSessionHistoryWithTotal, historyPage, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, readLastCustomTitle, isSafeSessionId } from '../sessions/history.js';
 import { createSessionRenamer, sanitizeSessionTitle } from '../sessions/session-rename.js';
 import * as diagLog from '../agent/diag-log.js';
@@ -156,6 +157,7 @@ import { createMessageQueue } from './message-queue.js';
 import { registerFileSocketHandlers, OUT_OF_SCOPE_ERROR } from './socket-files.js';
 import { registerFileTicketRoute } from './file-ticket-route.js';
 import { registerFolderSocketHandlers } from './socket-folders.js';
+import { registerEnvironmentSocketHandlers } from './socket-environments.js';
 import { CLAUDE_PROJECTS_DIR, claudeHome } from '../shared/claude-home.js';
 import { appendRegularFileSync } from '../shared/regular-file.js';
 
@@ -4590,6 +4592,15 @@ registerSocketConnection(io, socket => {
     sessionFileExists, // 历史工具卡「展开全文」：会话归属同 image:get
     readTranscriptToolResult,
   });
+  registerEnvironmentSocketHandlers({
+    socket,
+    on,
+    store: savedEnvironments,
+    // 不走 routeCwd：它会把范围外的 cwd 记成越界，而列表里的环境文件夹断开是正常情况
+    isFolderAvailable: cwd => routableAuth(cwd) !== null,
+    audit,
+    actorFromSocket,
+  });
   registerFolderSocketHandlers({
     socket,
     on,
@@ -5679,6 +5690,7 @@ function shutdown(sig) {
   audit.flushSaveSync();
   readState.flushSaveSync(); // 同上：防抖窗内的已读位点不落盘，换设备就会看到一屏假未读
   folderOrder.flushSaveSync(); // 同上：文件夹顺序
+  savedEnvironments.flushSaveSync(); // 同上：保存的环境
   io.close(() => process.exit(0)); // 主动关所有 socket 连接再关底层 http server；否则 WS 长连接把 close 回调拖到 3s 兜底才退（实测断连窗口 ~3.5s → 近乎即时）
   setTimeout(() => process.exit(0), 3000).unref(); // 兜底：io.close 万一挂起仍强退
 }

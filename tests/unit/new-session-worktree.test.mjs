@@ -14,15 +14,42 @@ import assert from 'node:assert/strict';
 import { createNewSessionWorktree } from '../../app/public/js/app/new-session-worktree.js';
 
 // 手动掌控 ack 到达顺序的假 socket。ackTimeoutMs 传 1：真 timer 会让整个文件空等 4 秒。
-function harness() {
+function harness({ ackTimeoutMs = 1 } = {}) {
   const sent = [];
   const context = { socket: { emit: (ev, payload, cb) => sent.push({ ev, payload, cb }) } };
-  return { wt: createNewSessionWorktree(context, { ackTimeoutMs: 1 }), sent };
+  return { wt: createNewSessionWorktree(context, { ackTimeoutMs }), sent };
 }
 
 const okBranches = (list, current) => ({ ok: true, branches: list, current });
 
 test.describe('ensureBranches：切工作区时的竞态', () => {
+  // 选环境要等分支到手才能勾 worktree：提前返回的话 isAvailable 还是假，环境里写的 worktree 就被静默丢掉
+  test('同一 cwd 加载途中再调一次 → 等同一次结果，不重发、不提前返回', async () => {
+    const { wt, sent } = harness({ ackTimeoutMs: 100 }); // 1ms 会被超时放行，分不清是等到了还是提前返回
+    void wt.ensureBranches('/repo/a');
+    let settled = false;
+    const second = wt.ensureBranches('/repo/a').then(() => { settled = true; });
+    assert.equal(sent.length, 1, '同一 cwd 在路上时不重发');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false, '分支还没回来就返回了，调用方会以为这里不是 git 仓库');
+
+    sent[0].cb(okBranches(['main'], 'main'));
+    await second;
+    assert.equal(wt.isAvailable(), true);
+  });
+
+  test('已加载过的 cwd 再调一次 → 不重发，拿到的是最新状态', async () => {
+    const { wt, sent } = harness();
+    const first = wt.ensureBranches('/repo/a');
+    sent[0].cb(okBranches(['main'], 'main'));
+    await first;
+    wt.setEnabled(true);
+
+    const again = await wt.ensureBranches('/repo/a');
+    assert.equal(sent.length, 1);
+    assert.equal(again.enabled, true, '返回了加载完那一刻的旧快照');
+  });
+
   test('A 的响应比 B 晚到 → 丢弃，不得盖掉 B 的列表', async () => {
     const { wt, sent } = harness();
     const pA = wt.ensureBranches('/repo/a');

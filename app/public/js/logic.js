@@ -14,6 +14,7 @@
 // public/js/app/ 下的领域模块已改为直接 import 子模块，依赖面对 import 边界守卫可见。
 
 export * from './logic/rewind.js';
+export * from './logic/saved-environments.js';
 export * from './logic/attachments.js';
 export * from './logic/bg-tasks.js';
 export * from './logic/composer.js';

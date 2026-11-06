@@ -666,6 +666,14 @@ function createMockFolderTree() {
   };
 }
 let mockFolderTree = createMockFolderTree();
+let mockEnvironments = []; // 保存的环境：/__set-environments 预置，environments:save 增改
+let mockBranchesHeld = null; // 数组＝git:branches 的回执先扣着，/__release-branches 才放行：确定性地撑开「分支还在路上」的窗口
+// /__release-branches?reply= 的三种回执，形状同真 server 的 git:branches（not_git 与失败要分开，前端判据不同）
+const MOCK_BRANCH_REPLIES = {
+  ok: { ok: true, branches: ['dev', 'main', 'feature/login'], current: 'dev' },
+  git_failed: { ok: false, code: 'git_failed', error: '读取分支失败' },
+  not_git: { ok: false, code: 'not_git', error: '读取分支失败' },
+};
 let mockAddedFolders = []; // folders:add 加进来的（绝对路径），并进 mockDirs()
 let mockFoldersAddError = null; // test:folders-readonly：模拟工作区列表来自环境变量的安装（真 server 回 source_readonly）
 let mockAutoModeDisabled = false; // /__arm-auto-mode-disabled：本区 settings 写了 disableAutoMode（#461）
@@ -688,6 +696,8 @@ let mockScenarioErrors = [];
 
 function resetMockState() {
   taskOutputPolls = 0;
+  mockEnvironments = [];
+  mockBranchesHeld = null;
   mockResetGeneration += 1;
   resetAuthCooldown();
   mockApproveLog = [];
@@ -1040,6 +1050,23 @@ app.post('/__release-device-denial', (_req, res) => {
   heldDeviceDenial = null;
   if (release) release();
   res.json({ released: !!release });
+});
+
+app.post('/__hold-branches', (_req, res) => {
+  mockBranchesHeld = [];
+  res.json({ ok: true });
+});
+
+app.post('/__release-branches', (req, res) => {
+  const held = mockBranchesHeld ?? [];
+  mockBranchesHeld = null;
+  for (const ack of held) ack(MOCK_BRANCH_REPLIES[req.query.reply] ?? MOCK_BRANCH_REPLIES.ok);
+  res.json({ released: held.length });
+});
+
+app.post('/__set-environments', (req, res) => {
+  mockEnvironments = JSON.parse(String(req.query.list));
+  res.json({ ok: true });
 });
 
 app.post('/__reset', (_req, res) => {
@@ -1898,7 +1925,8 @@ io.on('connection', socket => {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart,
           viewingInstanceId,
-          viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+          // 同 user:setEffort：新会话页没有 viewing 实例，cwd 取 pendingFreshCwd（真 server 的 instancesTo 恒带 viewingCwd）
+          viewingCwd: viewingInstanceId === null ? pendingFreshCwd : workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
           ...mockDirFields(),
           instances: mockInstances, service: mockServicePayload(),
           defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
@@ -1927,7 +1955,8 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+        // 新会话页没有 viewing 实例：cwd 得取 pendingFreshCwd，给空的话前端 currentCwd 被清掉（真 server 这条路径不广播 instances）
+        viewingCwd: viewingInstanceId === null ? pendingFreshCwd : workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
         ...mockDirFields(),
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
@@ -3315,7 +3344,32 @@ io.on('connection', socket => {
   // 让 E2E 能验"点开能选、选中回填"而不依赖宿主机有没有 git 仓库。
   socket.on('git:branches', (_payload, ack) => {
     if (typeof ack !== 'function') return;
-    ack({ ok: true, branches: ['dev', 'main', 'feature/login'], current: 'dev' });
+    if (mockBranchesHeld) mockBranchesHeld.push(ack);
+    else ack(MOCK_BRANCH_REPLIES.ok);
+  });
+  // 保存的环境（同真 server 的 socket-environments）：存在内存里，文件夹断开由预置数据的 available 声明
+  socket.on('environments:list', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({ ok: true, environments: mockEnvironments.map(e => ({ available: true, ...e })) });
+  });
+  socket.on('environments:save', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const name = String(payload?.name ?? '').trim();
+    if (!name) return ack({ ok: false, error: 'invalid_name' });
+    if (mockEnvironments.some(e => e.name === name && e.id !== payload.id)) return ack({ ok: false, error: 'duplicate_name' });
+    const environment = {
+      id: payload.id || `mock-env-${mockEnvironments.length + 1}-${Date.now()}`,
+      name, cwd: payload.cwd, model: payload.model ?? null, effort: payload.effort ?? null, worktree: payload.worktree === true,
+    };
+    mockEnvironments = payload.id
+      ? mockEnvironments.map(e => (e.id === payload.id ? environment : e))
+      : [...mockEnvironments, environment];
+    ack({ ok: true, environment });
+  });
+  socket.on('environments:delete', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    mockEnvironments = mockEnvironments.filter(e => e.id !== payload?.id);
+    ack({ ok: true });
   });
   socket.on('git:diff', (payload, ack) => {
     if (typeof ack !== 'function') return;
