@@ -621,7 +621,7 @@ test.describe('per-turn turnStartedAt / turnOutputTokens', () => {
     s.dispose();
   });
 
-  // 排队已移除：result 后账面归零、秒表清空；下一条消息发出时才重新开表。
+  // CLI 侧排队已移除：result 后账面归零、秒表清空；下一条消息发出时才重新开表。
   test('result 收轮 → 清 null/0；下一轮 send 重新开表', async () => {
     const { s } = makeSession();
     await s.send('a');

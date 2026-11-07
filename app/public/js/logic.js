@@ -30,6 +30,7 @@ export * from './logic/message-time.js';
 export * from './logic/mirror.js';
 export * from './logic/models-effort.js';
 export * from './logic/outbox-send.js';
+export * from './logic/queued-message.js';
 export * from './logic/panel-state.js';
 export * from './logic/context-panel.js';
 export * from './logic/perf.js';

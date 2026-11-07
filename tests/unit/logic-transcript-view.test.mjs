@@ -34,7 +34,7 @@ test('resolveComposerPlaceholder：turnRunning 提示不可发送；busy 单独�
   );
 });
 
-test('resolveComposerPrimaryMode: 在途轮 + 有内容 → 停止钮（排队已移除）', () => {
+test('resolveComposerPrimaryMode: 在途轮 + 有内容 → 停止钮（CLI 侧排队已移除）', () => {
   const out = resolveComposerPrimaryMode({ busy: true, turnRunning: true, hasContent: true });
   assert.equal(out.mode, 'stop');
   assert.equal(out.enabled, true);

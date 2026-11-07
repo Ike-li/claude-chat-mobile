@@ -398,6 +398,14 @@ test('aggregateStates: 认识 aborted（介于 done 与 busy 之间：比顺利�
 
 // 用户点停止后，SDK 仍吐 is_error:true + ede_diagnostic 诊断串；CLI 只当中断、不当红色错误。
 // presentTurnResult 把 interrupted 优先于 isError，决定条/通知/触感/挂起工具收尾文案。
+test('presentTurnResult: queuedNext 不响不震不发本地通知，状态条照常（下一条排队消息马上开跑）', () => {
+  const ui = presentTurnResult({ durationMs: 1200, queuedNext: true });
+  assert.equal(ui.kind, 'success');
+  assert.equal(ui.notify, null);
+  assert.equal(ui.haptic, null);
+  assert.ok(ui.statusBar.text);
+});
+
 test('presentTurnResult: interrupted=true 压过 isError/ede_diagnostic，不画红出错条', () => {
   const ui = presentTurnResult({
     interrupted: true,

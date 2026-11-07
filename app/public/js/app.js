@@ -46,6 +46,7 @@ import {
   resolveDeepLinkTarget,
   armedTakeoverStep,
   presentTurnResult,
+  mergeTakenIntoComposer,
   interruptLabel,
   isSoftKeyboardPrimaryDevice,
   userBubbleFold,
@@ -157,6 +158,7 @@ import { createTranscriptImages } from './app/transcript-images.js';
 import { createRttMonitor } from './app/connection-sync.js';
 import { createConnectionBannerController } from './app/connection-banner.js';
 import { createAutoContinueBannerController, tagAutoContinueBubble } from './app/auto-continue-banner.js';
+import { createQueuedMessageController } from './app/queued-message.js';
 import { createMessageRenderer } from './app/message-renderer.js';
 import { createMessageTimeline } from './app/message-timeline.js';
 import { createHistoryLoadGate } from './app/history-load-gate.js';
@@ -690,6 +692,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       autoContinueBanner: $('autoContinueBanner'),
       autoContinueText: $('autoContinueText'),
       autoContinueAction: $('autoContinueAction'),
+      queuedCard: $('queuedCard'),
+      queuedCardIcon: $('queuedCardIcon'),
+      queuedCardStatus: $('queuedCardStatus'),
+      queuedCardPreview: $('queuedCardPreview'),
+      queuedCardAction: $('queuedCardAction'),
       consoleModal,
       consoleLogArea,
       btnAttach,
@@ -1285,7 +1292,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     });
   }
 
-  // 撞上在途轮（排队已移除）：不再 requeue 空转，落「未发送」终态 + 一个手动「重发」按钮。
+  // 撞上在途轮（CLI 侧排队已移除）：不再 requeue 空转，落「未发送」终态 + 一个手动「重发」按钮。
   // 同一 clientMessageId 可直接复用——服务端在 busy 拒绝路径上没有 commit 去重 ID。
   // 挑落点：判据与理由全在 logic/outbox-send.js 的 outboxNoticePlacement 注释里。
   // 关键一条——querySelector 能从【已脱离 DOM】的缓存子树里找到 indicator，所以「找得到」
@@ -1744,6 +1751,35 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     onToggle: () => scrollBottom(), // 同连接横幅：占一行会改 #messages 高度，非 force 调用不贴底会自动 no-op
   });
 
+  // ---- 排队消息：卡片、提交、取回（app/queued-message.js）。依赖都走箭头函数：下面用到的输入框和附件控制器声明在后面。
+  const queuedMessage = createQueuedMessageController(appContext, {
+    socket,
+    storage: (() => { try { return localStorage; } catch { return null; } })(),
+    ackTimeoutMs: SEND_ACK_TRANSPORT_MS,
+    isResetting: () => localReset.isResetting(),
+    isSameSurface: ({ instanceId, sessionId }) => viewingInstanceId === instanceId && sendSessionId() === sessionId,
+    restoreToComposer: ({ text, attachments: taken }) => {
+      setComposerText(mergeTakenIntoComposer({ current: inputEl.value, taken: text }));
+      if (Array.isArray(taken) && taken.length) attachments.setItems([...attachments.items(), ...taken]);
+    },
+    clearComposerIfEquals: (text) => { if (inputEl.value.trim() === text) setComposerText(''); },
+    notify: (message, cls) => addBar(message, cls),
+    onLost: (copy, message) => {
+      outboxDeadLetters.park(copy, message);
+      deliverOutboxDeadLetters();
+    },
+    onSentDirectly: ({ instanceId, sessionId }) => {
+      if (viewingInstanceId !== instanceId || sendSessionId() !== sessionId) return;
+      _turnRunning = true; // 回合恰好结束，这条按普通发送走了
+      updateSendButtonState();
+    },
+    onDivergence: (divergence, { sessionId, instanceId }) => {
+      resumeDivergencePrompt.prompt({ divergence, sessionId, cwd: drivingCwdOf(instanceId) });
+    },
+    onChange: () => updateSendButtonState(),
+    onToggle: () => scrollBottom(), // 同横幅：占一行会改 #messages 高度
+  });
+
   socket.on('connect', () => {
     authGate?.classList.add('hidden');           // 鉴权通过：收起令牌输入页
     if (authToken) authToken.value = '';         // 成功后不把令牌留在本地表单状态里
@@ -1781,6 +1817,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     processOfflineQueue();
   });
   socket.on('disconnect', (reason) => {
+    updateSendButtonState(); // 断线不能排队：主位回到停止，不留一颗点了没用的排队钮
     connBanner.markDisconnected();
     updateAttentionSignal();
     setStatus(t('连接断开，自动重连中…'));
@@ -2413,7 +2450,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   }
 
   // 停止时丢弃「尚未送达 SDK」的消息（send 完成到输入泵取走之间的窄窗）：气泡落灰色终态而非删除，
-  // 与 buffer 回放、多设备视图一致。排队已移除，故这里只剩 queue_dropped 一个来源。
+  // 与 buffer 回放、多设备视图一致。CLI 侧排队已移除，故这里只剩 queue_dropped 一个来源。
   // 按 data-client-message-id 定位——顶层气泡创建时就带这个属性（离线占位与在线渲染都打）。
   function markMessageDropped(ids, label) {
     for (const id of ids) {
@@ -3016,11 +3053,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       const ui = presentTurnResult(p);
       logClientEvent('recv', `[WEB_RECV] ${ui.statusBar.text}`); // send↔recv 对账：turn 结果在客户端到达
       if (ui.failToolsMessage) failPendingToolCards(ui.failToolsMessage);
-      alertCue(ui.haptic); // success / warning / error：音+震（各自开关门控）
+      if (ui.haptic) alertCue(ui.haptic); // success / warning / error：音+震（各自开关门控）
       addBar(ui.statusBar.text, ui.statusBar.cls);
       announceTurn(ui.statusBar.text); // 读屏的回合结束端点（#379）：与状态条同一句
       if (ui.errorBar) addBar(ui.errorBar.text, ui.errorBar.cls);
-      notify(ui.notify.title, ui.notify.body, { force: alerts.preferences().foregroundComplete });
+      if (ui.notify) notify(ui.notify.title, ui.notify.body, { force: alerts.preferences().foregroundComplete });
       // P0：回合末锚定——有文件汇总卡则滚到卡（手机扫结果）；否则落底
       if (resolveTurnEndScroll({ hasFileChangesCard: Boolean(fileChangesCard) }) === 'file-changes' && fileChangesCard?.isConnected) {
         try { fileChangesCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { scrollBottom(true); }
@@ -3536,6 +3573,18 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     }
   }
 
+  function clearComposerAfterSend() {
+    inputEl.value = '';
+    // 已发出：清掉该表面缓存的草稿，避免切走切回把已发送内容当草稿恢复。
+    // 新会话首发时还没有 sessionId，槽是 `new:<cwd>`——不按同一份判据删就会残留一条
+    // 「已经发出去的话」，下次从别处回到这个工作区的新会话页时被当草稿恢复。
+    dropDraftForCurrentSurface();
+    attachments.clear();
+    hints.classList.add('hidden');
+    autosize();
+    scrollBottom(true);
+  }
+
   // ackDivergence：续接分叉面板上选了「仍然发送」时带上（确认的是哪一段，见 app/resume-divergence.js）
   function send({ ackDivergence } = {}) {
     ensureAlertAudio(); // 发送=用户手势：解锁 WebAudio，本轮完成后提示音才能响
@@ -3552,9 +3601,10 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     if (socket.connected && _sendInFlightSessionIds.has(displayedSessionId)) {
       return;
     }
-    // 在途轮拒收（排队已移除）：正常路径下按钮已是停止钮点不到这里，这道闸兜住键盘回车/竞态。
-    if (_turnRunning) {
-      addBar(t('当前任务运行中，完成后可发送'), 'text-info');
+    // 在途轮：能排队就排队（主按钮和物理键盘回车都走到这里），不能排的话正常路径下按钮已是停止钮，这道闸兜住回车/竞态。
+    const queueIntent = _turnRunning && queuedMessage.available();
+    if (_turnRunning && !queueIntent) {
+      addBar(queuedMessage.blockedHint() ?? t('当前任务运行中，完成后可发送'), 'text-info');
       return;
     }
     if (approvals.hasPending() || elicitationSheet.hasPending()) {
@@ -3679,15 +3729,18 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         ...composeArgs,
       });
 
-      inputEl.value = '';
-      // 已发出：清掉该表面缓存的草稿，避免切走切回把已发送内容当草稿恢复。
-      // 新会话首发时还没有 sessionId，槽是 `new:<cwd>`——不按同一份判据删就会残留一条
-      // 「已经发出去的话」，下次从别处回到这个工作区的新会话页时被当草稿恢复。
-      dropDraftForCurrentSurface();
-      attachments.clear();
-      hints.classList.add('hidden');
-      autosize();
-      scrollBottom(true);
+      clearComposerAfterSend();
+      return;
+    }
+
+    // 排队：话留在 server，卡片由 instances 快照画，这里不上气泡、不动 busy（这一轮还在跑）
+    if (queueIntent) {
+      haptic('tap');
+      queuedMessage.submit({
+        text, model, attachments: outgoingAttachments, clientMessageId,
+        instanceId: viewingInstanceId, sessionId: sendSessionId(), cwd: sendCwd(),
+      });
+      clearComposerAfterSend();
       return;
     }
 
@@ -3842,6 +3895,10 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     if (!viewingInstanceId) _pendingFirstSend = true;
     scrollBottom(true);
   }
+  $('btnStopInline')?.addEventListener('click', () => {
+    haptic('tap');
+    requestInterrupt();
+  });
   btnSend.onclick = () => {
     if (btnSend.dataset.mode === 'stop') {
       haptic('tap');
@@ -3960,13 +4017,13 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   }
   const SEND_ICON_HTML = `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>`;
   const STOP_ICON_HTML = `<span class="btn-send-stop-icon" aria-hidden="true"></span>`;
+  const QUEUE_ICON_HTML = `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path stroke-linecap="round" stroke-linejoin="round" d="M12 7.5V12l3 2" /></svg>`;
   let _btnSendMode = null; // 仅 mode 变化时换图标，避免按键 thrash
 
   function updateSendButtonState() {
     if (!btnSend) return;
     const hasContent = inputEl.value.trim().length > 0 || attachments.items().length > 0;
     const mirrorArmed = Boolean(mirrorReadonlySid && armedTakeoverSid === mirrorReadonlySid);
-    // 排队已移除：在途轮期间主按钮恒为停止钮（有无草稿都一样），发送位不再承担「排队发送」。
     // turnRunning 与 busy 都要传：前者是发送闸的权威判据，后者只在空输入时兜底（见 resolveComposerPrimaryMode 注释）。
     // CLI 镜像：mirrorReadonly 优先 → mode resume/cancel-resume，发送位变成「续接 CLI 会话」。
     const state = resolveComposerPrimaryMode({
@@ -3979,7 +4036,14 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       blockedBySendInFlight: socket.connected && _sendInFlightSessionIds.has(displayedSessionId),
       mirrorReadonly: Boolean(mirrorReadonlySid),
       mirrorArmed,
+      queueAvailable: queuedMessage.available(),
     });
+    const stopInline = $('btnStopInline');
+    if (stopInline) {
+      stopInline.classList.toggle('hidden', !state.inlineStop);
+      stopInline.title = t('停止');
+      stopInline.setAttribute('aria-label', t('停止'));
+    }
     const modeChanged = _btnSendMode !== state.mode;
     _btnSendMode = state.mode;
     btnSend.dataset.mode = state.mode;
@@ -4008,9 +4072,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
           : ' opacity-55 cursor-not-allowed');
       if (modeChanged) btnSend.innerHTML = STOP_ICON_HTML;
     } else if (state.enabled) {
-      // UI-002：激活态品牌 cta 底白箭头（与回形针同级 40px）
+      // UI-002：激活态品牌 cta 底白箭头（与回形针同级 40px）；排队同底色换时钟
       btnSend.className = 'flex items-center justify-center w-10 h-10 rounded-full bg-cta text-white hover:brightness-95 active:scale-95 shadow-sm transition-all duration-200 shrink-0';
-      if (modeChanged) btnSend.innerHTML = SEND_ICON_HTML;
+      if (modeChanged) btnSend.innerHTML = state.mode === 'queue' ? QUEUE_ICON_HTML : SEND_ICON_HTML;
     } else {
       btnSend.className = 'flex items-center justify-center w-10 h-10 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0';
       if (modeChanged) btnSend.innerHTML = SEND_ICON_HTML;
@@ -4032,6 +4096,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       turnRunning: _turnRunning,
       mirrorReadonly: false,
       idleText: t('给 Claude 发消息...'),
+      queueAvailable: queuedMessage.available(),
     });
   }
 
@@ -4455,6 +4520,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     _turnRunning = viewedInst?.turnRunning === true;
     // 额度墙自动继续横幅：按当前查看会话的 sessionId 取条目。字段缺失（mock 的旧式内联载荷）时模块内保留上一份。
     autoContinueBanner.update({ entries: p?.autoContinue, sessionId: viewedInst?.sessionId || null });
+    // 排队卡片同一个路子。字段缺失 = 后端不支持或 mock 的旧式载荷，见模块头注。
+    queuedMessage.update({ entries: p?.queuedMessages, sessionId: viewedInst?.sessionId || null, startedAt: p?.service?.startedAt ?? null });
 
     // 顶栏主 pill：标题优先 / 无则工作区；title 挂 cwd 供长按辨认
     syncTopContextLabel();

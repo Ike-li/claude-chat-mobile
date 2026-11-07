@@ -8,6 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveComposerPrimaryMode,
+  resolveComposerPlaceholder,
   shouldHideComposerSendButton,
   pillPermTone,
   shouldShowComposerDiscoverHint,
@@ -95,13 +96,57 @@ test('resolveComposerPrimaryMode: 忙碌空输入 → 停止启用', () => {
   assert.equal(out.ariaLabel, '停止');
 });
 
-// 排队已移除：在途轮期间不接受新消息，主按钮恒为停止钮（不管输入框有没有草稿）——
+// 后端不支持排队或这个会话已占位时，在途轮期间发不出去，主按钮是停止钮（不管输入框有没有草稿）——
 // 否则「想插队 → 先清空输入框才能看到停止钮」这步极反直觉。草稿保留在输入框里。
-test('resolveComposerPrimaryMode: 在途轮 + 有内容 → 停止（不再排队发送）', () => {
+test('resolveComposerPrimaryMode: 在途轮 + 有内容 + 不能排队 → 停止', () => {
   const out = resolveComposerPrimaryMode({ busy: true, turnRunning: true, hasContent: true });
   assert.equal(out.mode, 'stop');
   assert.equal(out.enabled, true);
   assert.equal(out.ariaLabel, '停止');
+  assert.equal(out.inlineStop, undefined);
+});
+
+// 机主决定：运行中有草稿时主位变排队，打完字点老位置和空闲时点发送是同一个动作，停止退到旁边小钮，一直看得见。
+test('resolveComposerPrimaryMode: 在途轮 + 有内容 + 能排队 → 主位排队，停止退到小钮', () => {
+  const out = resolveComposerPrimaryMode({ busy: true, turnRunning: true, hasContent: true, queueAvailable: true });
+  assert.equal(out.mode, 'queue');
+  assert.equal(out.enabled, true);
+  assert.equal(out.title, '本轮结束后自动发送');
+  assert.equal(out.ariaLabel, '排队发送');
+  assert.equal(out.inlineStop, true);
+});
+
+test('resolveComposerPrimaryMode: 在途轮 + 空输入 + 能排队 → 还是停止，没有草稿就没有东西可排', () => {
+  const out = resolveComposerPrimaryMode({ busy: true, turnRunning: true, hasContent: false, queueAvailable: true });
+  assert.equal(out.mode, 'stop');
+  assert.equal(out.inlineStop, undefined);
+});
+
+test('resolveComposerPrimaryMode: 正在停止时不给排队：这一轮要结束了，排了也是转未发送', () => {
+  const out = resolveComposerPrimaryMode({ busy: true, turnRunning: true, hasContent: true, queueAvailable: true, interruptPending: true });
+  assert.equal(out.mode, 'stop');
+  assert.equal(out.enabled, false);
+});
+
+test('resolveComposerPrimaryMode: 纯后台任务不算在途轮，能排队也走普通发送', () => {
+  const out = resolveComposerPrimaryMode({ busy: true, turnRunning: false, hasContent: true, queueAvailable: true });
+  assert.equal(out.mode, 'send');
+});
+
+test('resolveComposerPrimaryMode: 镜像只读、待审批优先于排队', () => {
+  assert.equal(resolveComposerPrimaryMode({ turnRunning: true, hasContent: true, queueAvailable: true, mirrorReadonly: true }).mode, 'resume');
+  const blocked = resolveComposerPrimaryMode({ turnRunning: true, hasContent: true, queueAvailable: true, blockedByUserRequest: true });
+  assert.equal(blocked.mode, 'send');
+  assert.equal(blocked.enabled, false);
+});
+
+test('排队钮不隐藏', () => {
+  assert.equal(shouldHideComposerSendButton({ mode: 'queue', enabled: true, hasContent: true }), false);
+});
+
+test('resolveComposerPlaceholder: 在途轮能排队时说可以排，不能时说完成后可发送', () => {
+  assert.equal(resolveComposerPlaceholder({ turnRunning: true, queueAvailable: true }), '当前任务运行中，可排队一条');
+  assert.equal(resolveComposerPlaceholder({ turnRunning: true }), '当前任务运行中，完成后可发送');
 });
 
 // ★决策②「后台任务挂着不锁」：busy 是粗粒度的（stateOf 把 hasBgTasks 也折进 'busy'，

@@ -1032,7 +1032,7 @@ export class AgentSession {
   // F1：model 变化时调 setModel()（SDKUserMessage.model 被 CLI 忽略，此为唯一有效切换路径）
   // E17：opts.displayText/attachments——附件场景下 text=注入路径后的 promptText（送 SDK），
   // displayText=原文（气泡 + 会话标题，不含路径），attachments=去完整 data 的元数据（含小 thumb）。
-  // 排队已移除（2026-07-30）：一轮跑完才收下一条。三层各一道闸——前端提示 / 服务端拒绝 / 这里兜底。
+  // CLI 侧排队已移除（2026-07-30）：一轮跑完才收下一条。三层各一道闸——前端提示 / 服务端拒绝 / 这里兜底。
   async send(text, model, opts = {}) {
     if (this.pendingTurns >= 1) {
       this.emit('system', { message: '当前任务运行中，请等待完成' });

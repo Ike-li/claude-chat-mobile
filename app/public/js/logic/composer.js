@@ -9,11 +9,12 @@
 
 import { t } from '../i18n.js';
 
-// 输入区主按钮：CLI 镜像只读 → 续接/取消续接；否则 busy → 停止（不论输入框有无草稿）；空闲有内容 → 发送。
+// 输入区主按钮：CLI 镜像只读 → 续接/取消续接；否则 busy → 停止；在途轮有草稿且能排队 → 排队；空闲有内容 → 发送。
 // 审批/提问 sheet、输入禁用、sendInFlight 仍按原闸挡发送；sheet 打开时不 morph 停止（中止走 sheet 逃生口）。
 // mirrorReadonly 优先于 blockedByDisabledInput：镜像时 input 仍 disabled，但主按钮要可点「续接」。
-// 2026-07-30 移除消息排队：在途轮期间不再接受新消息，此时主按钮恒为停止钮——若只在空输入时给停止钮，
+// 不能排队时（后端不支持、这个会话已占位）在途轮期间发不出去，主按钮是停止钮——若只在空输入时给停止钮，
 // 「想插队 → 先清空输入框才看得到停止钮」这步极反直觉。草稿留在输入框里不动，运行中仍可继续打字。
+// 能排队时主位让给排队（机主决定）：打完字点老位置和空闲时点发送是同一个动作，停止退到旁边小钮，一直看得见。
 // ★停止态判据必须是 turnRunning 而非 busy：busy 是粗粒度的（stateOf 把 hasBgTasks 也折进 'busy'，
 // 且 bindView/loadHistory 用 shouldSeedBusyFromInstanceState 播种时并不排除 bgActive）。若用 busy，
 // 纯后台任务挂着时主按钮会恒为停止钮，而移动端回车不发送、只能点这个钮 —— 用户彻底发不出消息，
@@ -29,6 +30,7 @@ export function resolveComposerPrimaryMode({
   blockedBySendInFlight = false,
   mirrorReadonly = false,
   mirrorArmed = false,
+  queueAvailable = false,
 } = {}) {
   if (mirrorReadonly) {
     if (mirrorArmed) {
@@ -65,7 +67,7 @@ export function resolveComposerPrimaryMode({
       ariaLabel: t('发送'),
     };
   }
-  // 在途轮 → 停止（有无草稿都一样：这期间发不出去，把主位让给唯一有用的操作）；
+  // 在途轮 → 停止，有草稿且能排队时主位给排队；
   // busy 但无在途轮（纯后台任务）→ 仅空输入时兜底给停止，有草稿则放行发送。
   if (turnRunning || (busy && !hasContent)) {
     if (interruptPending) {
@@ -74,6 +76,15 @@ export function resolveComposerPrimaryMode({
         enabled: false,
         title: t('正在停止…'),
         ariaLabel: t('正在停止'),
+      };
+    }
+    if (hasContent && queueAvailable) { // 有草稿走到这里一定是在途轮：纯后台任务时外层条件进不来
+      return {
+        mode: 'queue',
+        enabled: true,
+        title: t('本轮结束后自动发送'),
+        ariaLabel: t('排队发送'),
+        inlineStop: true,
       };
     }
     return {
@@ -143,9 +154,10 @@ export function resolveComposerPlaceholder({
   mirrorReadonly = false,
   mirrorText = '',
   idleText = '给 Claude 发消息...',
+  queueAvailable = false,
 } = {}) {
   if (mirrorReadonly) return mirrorText || idleText;
-  if (turnRunning) return t('当前任务运行中，完成后可发送');
+  if (turnRunning) return queueAvailable ? t('当前任务运行中，可排队一条') : t('当前任务运行中，完成后可发送');
   return idleText;
 }
 
