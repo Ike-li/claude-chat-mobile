@@ -1,6 +1,7 @@
 // 上下文面板的数据：context:usage。形状取自真 CLI 探针（2026-11-07，假 Messages API + 隔离 HOME）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { homedir } from 'node:os';
 import { contextUsageView, registerContextSocketHandlers } from '../../app/src/server/socket-context.js';
 
 const SDK_USAGE = {
@@ -13,7 +14,12 @@ const SDK_USAGE = {
   ],
   totalTokens: 11391, maxTokens: 200000, rawMaxTokens: 200000, percentage: 6,
   autoCompactThreshold: 167000, isAutoCompactEnabled: true,
-  gridRows: [[{ color: 'x' }]], model: 'claude-haiku-4-5', memoryFiles: [{ path: '/secret/CLAUDE.md' }],
+  gridRows: [[{ color: 'x' }]], model: 'claude-haiku-4-5',
+  memoryFiles: [
+    { path: `${homedir()}/.claude/CLAUDE.md`, type: 'User', tokens: 92 },
+    { path: '/work/proj/CLAUDE.md', type: 'Project', tokens: 172 },
+  ],
+  mcpTools: [{ name: 'mcp__demo__alpha', serverName: 'demo', tokens: 201, isLoaded: false }],
 };
 
 function register(agent) {
@@ -23,15 +29,25 @@ function register(agent) {
 }
 const agentWith = getContextUsage => ({ q: { getContextUsage } });
 
-test('只回面板要的字段：不占窗口的和 0 token 的行不显示，gridRows 和文件路径不下发', () => {
+test('只回面板要的字段：0 token 的行不显示，不占窗口的留着（面板写 —），gridRows 不下发', () => {
   assert.deepEqual(contextUsageView(SDK_USAGE), {
     totalTokens: 11391, maxTokens: 200000, percentage: 6, autoCompactThreshold: 167000, isAutoCompactEnabled: true,
     categories: [
       { id: 'system_tools', name: 'System tools', tokens: 9866, kind: 'used' },
+      { id: 'system_tools_deferred', name: 'System tools (deferred)', tokens: 4373, kind: 'deferred' },
       { id: 'messages', name: 'Messages', tokens: 1500, kind: 'used' },
       { id: 'free_space', name: 'Free space', tokens: 188609, kind: 'free' },
     ],
+    mcpTools: [{ name: 'mcp__demo__alpha', serverName: 'demo', tokens: 201 }],
+    memoryFiles: [{ path: '~/.claude/CLAUDE.md', tokens: 92 }, { path: '/work/proj/CLAUDE.md', tokens: 172 }],
   });
+});
+
+test('旧 CLI 没有这两个列表：回空列表，不抛错', () => {
+  const { mcpTools, memoryFiles, ...rest } = SDK_USAGE;
+  const view = contextUsageView(rest);
+  assert.deepEqual([view.mcpTools, view.memoryFiles], [[], []]);
+  assert.equal(mcpTools.length + memoryFiles.length, 3, '对照：夹具里确实有');
 });
 
 test('按要求的档位向 CLI 取，回包带上档位', async () => {
