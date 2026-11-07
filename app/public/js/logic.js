@@ -35,6 +35,7 @@ export * from './logic/perf.js';
 export * from './logic/projects.js';
 export * from './logic/permissions.js';
 export * from './logic/service-diag.js';
+export * from './logic/session-outputs.js';
 export * from './logic/session-search.js';
 export * from './logic/statusline.js';
 export * from './logic/tool-cards.js';

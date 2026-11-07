@@ -515,20 +515,21 @@
     </div>
   </div>
 
-  <!-- 工作区面板：文件浏览（FR-07，FileBrowseHandler）+ git 改动，两个 tab 同壳。
+  <!-- 工作区面板：文件浏览（FR-07，FileBrowseHandler）+ git 改动 + 本会话产出，三个 tab 同壳。
        原先是「顶栏 pill → chooser 二选一 sheet → 目标面板」三层，chooser 那层零信息量：用户点开
        之前无从知晓背后有什么，点开后还要再点一次；从「文件」切到「改动」得关面板重走一遍。
        合并成 tab 后点一次 pill 就同时看见两个能力，互切零成本。
-       两个 tab 各自的工具行与 body 保留原 id——file-browser.js / git-changes.js 两个控制器只操作
+       文件、改动两个 tab 的工具行与 body 保留原 id——file-browser.js / git-changes.js 两个控制器只操作
        自己的那几个节点，换壳对它们透明；开合与 tab 切换权归 createWorkspacePanel 统一持有。 -->
   <div id="workspaceModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="工作区">
     <div class="w-full h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle mt-3 shrink-0"></div>
-      <!-- tab 行：两个能力平铺可见，不再需要"先发现再选择" -->
+      <!-- tab 行：几个能力平铺可见，不再需要"先发现再选择" -->
       <div class="px-3 pb-2 flex items-center gap-2 border-b border-line shrink-0">
         <div class="flex items-center gap-1 flex-1 min-w-0" role="tablist" aria-label="工作区">
           <button id="workspaceTabFiles" type="button" role="tab" aria-controls="fileBrowseBody" data-testid="workspace-tab-files" class="workspace-tab px-3 py-1.5 rounded-lg text-xs font-semibold border border-line text-ink-soft active:scale-95 shrink-0">📁 文件</button>
           <button id="workspaceTabChanges" type="button" role="tab" aria-controls="gitChangesBody" data-testid="workspace-tab-changes" class="workspace-tab px-3 py-1.5 rounded-lg text-xs font-semibold border border-line text-ink-soft active:scale-95 shrink-0">📝 改动</button>
+          <button id="workspaceTabOutputs" type="button" role="tab" aria-controls="outputsBody" data-testid="workspace-tab-outputs" class="workspace-tab px-3 py-1.5 rounded-lg text-xs font-semibold border border-line text-ink-soft active:scale-95 shrink-0">📦 产出</button>
         </div>
         <button id="workspaceClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0" aria-label="关闭">✕</button>
       </div>
@@ -559,6 +560,7 @@
 
       <div id="fileBrowseBody" role="tabpanel" aria-labelledby="workspaceTabFiles" class="flex-1 overflow-y-auto"></div>
       <div id="gitChangesBody" role="tabpanel" aria-labelledby="workspaceTabChanges" class="hidden flex-1 overflow-y-auto" data-testid="git-changes-body"></div>
+      <div id="outputsBody" role="tabpanel" aria-labelledby="workspaceTabOutputs" class="hidden flex-1 overflow-y-auto" data-testid="outputs-body"></div>
     </div>
   </div>
 

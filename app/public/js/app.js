@@ -184,6 +184,7 @@ import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
 import { createSessionRowMenu } from './app/session-row-menu.js';
+import { createSessionOutputs } from './app/session-outputs.js';
 import { createElicitationSheet } from './app/elicitation-sheet.js';
 import { createForegroundTasks } from './app/foreground-tasks.js';
 import { createSessionRenameController } from './app/session-rename.js';
@@ -374,6 +375,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // 工作区面板外壳（文件 / 改动两 tab 同壳）
   const workspaceModal = $('workspaceModal'), workspaceClose = $('workspaceClose'),
         workspaceTabFiles = $('workspaceTabFiles'), workspaceTabChanges = $('workspaceTabChanges'),
+        workspaceTabOutputs = $('workspaceTabOutputs'), outputsBody = $('outputsBody'),
         workspaceWorktreeGone = $('workspaceWorktreeGone');
   // 项目文件只读浏览——文件 tab
   const fileBrowseTools = $('fileBrowseTools'), fileBrowseBack = $('fileBrowseBack'),
@@ -699,6 +701,8 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       workspaceClose,
       workspaceTabFiles,
       workspaceTabChanges,
+      workspaceTabOutputs,
+      outputsBody,
       workspaceWorktreeGone,
       fileBrowseTools,
       fileBrowseBack,
@@ -5218,13 +5222,20 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   });
   // 「这一个新会话页」的标识：离线重放时同一页的几条并成一个会话、另开的一页各开各的（见 compose-page.js）
   const composePage = createComposePage();
-  // 两个子控制器只管各自半边的数据；sheet 开合与 tab 切换归 workspacePanel 统一持有
+  const sessionOutputs = createSessionOutputs(appContext, {
+    el,
+    haptic,
+    getSessionId: () => displayedSessionId,
+    openFile: path => workspacePanel.openFile(panelCwd(), worktreeGoneNotice(), { path, line: null }),
+  });
+  // 子控制器只管各自半边的数据；sheet 开合与 tab 切换归 workspacePanel 统一持有
   const workspacePanel = createWorkspacePanel(appContext, {
     closeSheet,
     openSheet,
     haptic,
     fileBrowser,
     gitChanges,
+    sessionOutputs,
   });
   // #399：把手下拉走面板自己的 close（含未保存编辑丢弃确认），不要直接 closeSheet
   setGestureDismiss(workspaceModal, () => { void workspacePanel.close(); });

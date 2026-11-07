@@ -695,6 +695,7 @@ const mockFolderRelOk = rel => typeof rel === 'string' && !rel.startsWith('/') &
 let mockScenarioErrors = [];
 
 function resetMockState() {
+  mockSessionOutputs = null;
   taskOutputPolls = 0;
   mockEnvironments = [];
   mockBranchesHeld = null;
@@ -1066,6 +1067,11 @@ app.post('/__release-branches', (req, res) => {
 
 app.post('/__set-environments', (req, res) => {
   mockEnvironments = JSON.parse(String(req.query.list));
+  res.json({ ok: true });
+});
+
+app.post('/__session-outputs', (req, res) => {
+  mockSessionOutputs = JSON.parse(String(req.query.fixture));
   res.json({ ok: true });
 });
 
@@ -1757,6 +1763,17 @@ const MOCK_UPLOAD_FILES = new Map([
   ['1700000000000-abcd1234-photo.png', MOCK_ATTACH_PNG],
   ['1700000000001-deadbeef-old.png', MOCK_ATTACH_PNG],
 ]);
+
+// 「产出」tab 的夹具；null = 默认三行（视频、文本、已删除）加两个范围外。
+let mockSessionOutputs = null;
+const defaultSessionOutputs = () => ({
+  items: [
+    { path: 'media/clip.mp4', name: 'clip.mp4', dir: 'media', at: Date.now() - 120000, media: 'video', size: 4, state: 'ok' },
+    { path: 'notes.md', name: 'notes.md', dir: '', at: Date.now() - 600000, media: null, size: 4, state: 'ok' },
+    { path: 'gone.png', name: 'gone.png', dir: '', at: Date.now() - 900000, media: 'image', state: 'missing' },
+  ],
+  outsideCount: 2,
+});
 
 // 文件链接：file:open 的票据在 mock 里就是 relPath，/f/ 按它回这张表的字节。
 const MOCK_BINARY_FILES = new Map([
@@ -3426,6 +3443,14 @@ io.on('connection', socket => {
     if (relPath === 'media') return callback({ ok: true, root: cwd, relPath, kind: 'dir', name });
     const binary = MOCK_BINARY_FILES.get(relPath);
     callback({ ok: true, root: cwd, relPath, kind: 'file', name, size: binary?.bytes.length ?? 0, media: binary?.media ?? null, url: `/f/${encodeURIComponent(relPath)}` });
+  });
+
+  // 「产出」tab：回包形态同 socket-files.js 的 session:outputs，内容由 /__session-outputs 换。
+  socket.on('session:outputs', (payload, callback) => {
+    if (typeof callback !== 'function') return;
+    if (mockSessionOutputs?.silent) return; // 前端已 pull、后端没重启：旧后端不认这个事件，ack 永远不来
+    if (mockSessionOutputs?.error) return callback({ ok: false, error: mockSessionOutputs.error });
+    callback({ ok: true, ...(mockSessionOutputs ?? defaultSessionOutputs()) });
   });
 
   // 文件浏览：browse:read（契约内事件；仅实现文本 fixture——附件的 base64 分片已归 attachment:read）。

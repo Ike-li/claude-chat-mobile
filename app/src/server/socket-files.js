@@ -1,6 +1,6 @@
 import { locationError } from '../sessions/session-location.js';
 import { realpathSync, openSync, readSync, closeSync, fstatSync } from 'node:fs';
-import { basename, relative } from 'node:path';
+import { basename, dirname, relative } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { inlineTypeOf } from '../files/file-tickets.js';
 import { assertSafeRelPath } from '../files/git-workspace.js';
@@ -62,6 +62,7 @@ export function registerFileSocketHandlers({
   sessionFileExists = null,
   resolveTranscriptLocation = null,
   readTranscriptToolResult = null,
+  readSessionOutputs,
   logger = console,
 }) {
   // 越界拒绝的留痕：日志 + 审计。各路 ack 形状不同，留在调用点。
@@ -144,6 +145,40 @@ export function registerFileSocketHandlers({
     const deviceToken = socket.trustBasis === 'device-token' ? socket.handshake.auth?.deviceToken : null;
     const ticket = fileTickets.issue({ cwd: root, relPath, name, deviceToken });
     return ack({ ok: true, root, relPath, kind: 'file', name, size: opened.size, media: inlineTypeOf(name)?.media ?? null, url: `/f/${ticket}` });
+  });
+
+  // 工作区「产出」tab：这个会话产出了哪些文件。这里只回元数据，字节仍走 file:open。
+  // 范围外的只回数量：点了也打不开，逐条列出来还会把列表淹没（最近 60 个会话里最多一个有 168 条，多是 /tmp 的探针）。
+  // 目录、读不了的直接略过，不记 scope_violation：路径是模型写的，列列表也不是用户的越界尝试。
+  on(socket, 'session:outputs', async ({ cwd: requestedCwd, sessionId } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    const cwd = routeCwd(requestedCwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+    const location = resolveTranscriptLocation ? await resolveTranscriptLocation(cwd, sessionId) : null;
+    const transcriptCwd = location?.status === 'found' ? location.cwd : cwd;
+    if ((location && location.status !== 'found') || typeof sessionId !== 'string' || !(await sessionFileExists(transcriptCwd, sessionId))) {
+      return ack({ ok: false, error: location ? locationError(location) : '会话不存在' });
+    }
+    const scopeDirs = scopeDirsFor(cwd, getWorkDirs());
+    const items = [];
+    const missing = []; // 排在能打开的后面：worktree 删掉后，一个会话的列表可以全是这种
+    let outsideCount = 0;
+    for (const { path, at } of await readSessionOutputs(sessionId, transcriptCwd)) {
+      const attribution = attributePath(path, [cwd, ...scopeDirs], cwd);
+      if (!attribution) { outsideCount += 1; continue; }
+      const { workDir: root, resolved } = attribution;
+      const relPath = relative(root, resolved);
+      const opened = openInScope(root, relPath, scopeDirs);
+      const name = basename(resolved);
+      const entry = { path, name, dir: dirname(relPath).replace(/^\.$/, ''), at, media: inlineTypeOf(name)?.media ?? null };
+      if (opened?.notFound) {
+        missing.push({ ...entry, state: 'missing' });
+      } else if (opened?.fd !== undefined) {
+        closeSync(opened.fd);
+        items.push({ ...entry, size: opened.size, state: 'ok' });
+      }
+    }
+    return ack({ ok: true, items: [...items, ...missing], outsideCount });
   });
 
   // E18 附件预览专用通道（2026-09-06 附件搬家时新开）。搬进 dataDir 后 browse:read 读不到附件了：
