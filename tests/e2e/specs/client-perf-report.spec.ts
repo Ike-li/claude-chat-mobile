@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
+import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // 前端性能上报（app/public/js/app/perf-report.js）：启动 / 打开会话 / 切回前台记录连同掉帧、点击响应攒成一批，
@@ -35,7 +35,7 @@ async function setVisibility(page: Page, state: 'hidden' | 'visible') {
 
 // 控制台面板开着时实时追加 client_perf 行（localStorage 那份落盘有 2s 节流）
 async function openConsole(page: Page) {
-  await page.locator('#btnConsole').click();
+  await clickHeaderMenuItem(page, 'btnConsole');
   await expect(page.locator('#consoleModal')).toBeVisible();
   return page.locator('#consoleLogArea');
 }

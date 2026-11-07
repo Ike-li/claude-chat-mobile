@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 import {
   ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, expectSidebarOpen, openSessionMenu,
   openSessionsSidebar, sessionMenuItem, sessionRowByInstance,
@@ -236,7 +236,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectSidebarClosed(page);
 
     // 一：控制台 sheet 开着
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('body')).toHaveClass(/ccm-sheet-open/);
     await swipeRight(4, 28);
     expect(await drawerOpened(), 'sheet 开着时抽屉被拉到了 sheet 底下').toBe(false);

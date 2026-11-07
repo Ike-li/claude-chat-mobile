@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { captureBrowserErrors, expectNoBrowserErrors, waitUntilConnected } from '../../helpers/playwright';
+import { clickHeaderMenuItem, captureBrowserErrors, expectNoBrowserErrors, waitUntilConnected } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-20 安全与鉴权可观测 UI 行为', async ({ page }) => {
@@ -18,7 +18,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('body')).not.toContainText('mock-token');
 
     // 2. 日志只允许脱敏 token，不应泄露完整 token。
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toBeVisible();
     await expect(page.locator('#consoleModal')).not.toContainText('mock-token');
     expect(consoleText.join('\n')).not.toContain('mock-token');

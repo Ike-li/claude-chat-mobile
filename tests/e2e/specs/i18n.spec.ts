@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { captureBrowserErrors, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings, waitUntilConnected } from '../../helpers/playwright';
+import { clickHeaderMenuItem, captureBrowserErrors, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings, waitUntilConnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // zh 原文即词典 key 的运行时 t()，en locale 查表、未收录静默回落中文。本 spec 是唯一跑 en 的用例，
@@ -76,7 +76,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     const surface = page.locator('[data-testid="compose-surface"]');
     await expect(surface).toBeVisible();
     await expect(surface).toContainText('New session ready');
@@ -155,7 +155,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.addInitScript(() => localStorage.setItem('ccm_lang', 'en'));
     await gotoMock(page);
     await ensureComposerReady(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
     await runRewindCommand(page);
     const noSession = page.locator('#messages').getByText('No session to revert yet', { exact: false });
@@ -286,7 +286,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.request.post('/__arm-untitled-session');
     await page.goto('/');
     await waitUntilConnected(page);
-    await page.locator('#btnHome').click(); // mock 有活实例，首屏落在它的会话里
+    await clickHeaderMenuItem(page, 'btnHome'); // mock 有活实例，首屏落在它的会话里
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
   }
 

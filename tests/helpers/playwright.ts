@@ -79,17 +79,30 @@ export async function gotoMock(page: Page) {
   await page.request.post('/__reset');
   await page.goto('/');
   // 空首页枢纽默认隐藏底部输入条；就绪信号改为顶栏 + data-conn=online。
-  await expect(page.locator('#btnNew')).toBeVisible();
+  await expect(page.locator('#btnMore')).toBeVisible();
   await expect(page.locator('#btnSessions')).toBeVisible();
   await expect(page.locator('#messages')).toBeVisible();
   await waitUntilConnected(page);
+}
+
+/** 顶栏「⋯」下拉里的项：平时收着，先开下拉才点得到。 */
+export async function clickHeaderMenuItem(page: Page, id: 'btnNew' | 'btnHome' | 'btnConsole') {
+  await page.locator('#btnMore').click();
+  await page.locator(`#${id}`).click();
+}
+
+/** 会话设置里的「重新加载本会话」：点完面板收起，重载随即开始。 */
+export async function reloadSessionFromSettings(page: Page) {
+  await page.locator('#pillDefaults').click();
+  await page.locator('#settingsReloadSession').click();
+  await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
 }
 
 /** 进入可发消息态：空首页须先点 ＋（composeReady）才露出输入条；已在会话内则 no-op。 */
 export async function ensureComposerReady(page: Page) {
   const input = page.locator('#input');
   if (await input.isVisible()) return;
-  await page.locator('#btnNew').click();
+  await clickHeaderMenuItem(page, 'btnNew');
   await expect(input).toBeVisible();
   // Composer C：空闲无内容时 #btnSend 可能 hidden，附件钮始终在
   await expect(page.locator('#btnAttach')).toBeVisible();

@@ -3,7 +3,7 @@
 // 两份原是一个文件，2026-10-25 按主题拆开：同一个 spec 不跨 CI 分片，它独自撑着 105s 的地板。
 
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import {
   ANOTHER_WORKSPACE,
   MAIN_WORKSPACE,
@@ -58,7 +58,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     // 基线不追溯：冷启动首页只有默认工作区的历史会话（全在基线前）→ 零点
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('#dashRecentsList .dash-recent-item').first()).toBeVisible();
     await expect(page.locator('#dashRecentsList [data-testid="unread-mark"]')).toHaveCount(0);
@@ -68,7 +68,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
 
     // 首页最近行：基线后有活动的会话亮「未读」chip（文字，不再是说不清自己是什么的色点）
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('#dashRecentsList [data-testid="unread-mark"]').first()).toHaveText('未读');
 
@@ -191,7 +191,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:needsyou');
     await waitForIdle(page);
 
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
     const row = page.locator('#dashRecentsList .dash-recent-item[data-session-id="mock-session-another"]');
     await expect(row.locator('[data-testid="unread-mark"]')).toHaveText('未读');
@@ -224,7 +224,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.request.post(`/__arm-session-list-hold?cwd=${encodeURIComponent(ANOTHER_WORKSPACE)}`);
     await page.request.post(`/__set-connected-folders?dirs=${encodeURIComponent(`${MAIN_WORKSPACE},${ANOTHER_WORKSPACE}`)}`);
 
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
     const rows = page.locator('#dashRecentsList .dash-recent-item');
     const anotherRows = rows.filter({ has: page.locator('.dash-ws', { hasText: 'another-react-project' }) });

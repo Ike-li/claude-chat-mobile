@@ -462,6 +462,50 @@ body.ccm-sheet-open #messages {
 }
 /* 顶栏左侧延迟胶囊：比中间 project pill 更小一号，同 sunk/软边/圆角语汇；
    不做成按钮（无 hover scale），避免与工作区入口抢主操作。色阶由 JS 叠 text-*。 */
+/* 顶栏「⋯」下拉（app/header-menu.js）：锚在按钮下方、右对齐，不带遮罩。
+   隐藏靠 Tailwind 的 .hidden，所以这里别写 display。
+   它长在 header 的层叠上下文里，自身 z-index 跨不出去：待批设备卡片（z-30）会压住它，日志点不到（P0-15g）。
+   所以开着时抬一下 header，收起即回，header < cards < modal 的常态层级不变。
+   特异性刻意低于 body.nav-escape header：审批挂着时 header 要留在 45，不能被这条拉回 35。 */
+header.header-menu-open {
+  z-index: 35;
+}
+.header-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 11rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  z-index: 30;
+}
+.header-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  min-height: 46px;
+  padding: 0 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ink);
+  text-align: left;
+}
+.header-menu-item + .header-menu-item {
+  border-top: 1px solid var(--line-soft);
+}
+.header-menu-item:active {
+  background: var(--surface-sunk);
+}
+.header-menu-item svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--ink-soft);
+}
 .conn-rtt-chip {
   display: inline-flex;
   align-items: center;
@@ -636,7 +680,7 @@ header {
     gap: 0.5rem !important;
   }
   .top-context-pill {
-    max-width: min(100%, 46vw);
+    max-width: 100%;
   }
 
   #messages {
