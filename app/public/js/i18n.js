@@ -600,6 +600,7 @@ export const EN_DICT = Object.freeze({
   '这条没有发出': "This wasn't sent",
   '这条排队消息没有发出': "This queued message wasn't sent",
   '这条排队消息已取回': 'Queued message taken back',
+  '排队消息没有发出': 'Queued message not sent',
   '已被取走或已发出': 'Already taken back or sent',
   '已有一条排队消息，先处理它': 'A message is already queued. Deal with it first',
   '没有确认排上，话已放回输入框': "Couldn't confirm it was queued. Your text is back in the input box",

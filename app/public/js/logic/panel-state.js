@@ -676,6 +676,13 @@ export function shouldRestoreOptimisticBusy({
   return false;
 }
 
+// 「需要你」行的图标和说法（抽屉 needsYouRow）。未发送的排队消息单列：混进「等待输入」，人点进去会去找一个不存在的问题。
+export function describeNeedsYouItem(item = {}) {
+  if (item.reason === 'queued_held') return { icon: '⏸', label: t('排队消息没有发出') };
+  if (item.reason === 'awaiting_approval') return { icon: '⚠️', label: item.toolName ? `${t('等待审批')}（${item.toolName}）` : t('等待审批') };
+  return { icon: '❓', label: t('等待输入') };
+}
+
 // 统一判定：会话待处理 → ok | attention（顶栏会话按钮角标 / 注意力信号）。
 // 抽屉不再复述计数；状态落在需要你卡、工作区树角标、主聊天面。
 // 服务健康不在这条轴上：needsYou 是「此刻按一下就能推进」，投递失败是背景状态，归抽屉「服务」与服务状态面板。

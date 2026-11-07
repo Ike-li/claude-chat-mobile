@@ -1,6 +1,6 @@
 // tests/invariants/notifications.test.mjs —— 推送抑制矩阵、正文最小化与深链构造
 // 守护：NOTIFY-01（只有 result 会被抑制，判据是前台可见而非 socket 连着）、SEC-04（正文不进第三方明文通道，body 只留工具名，input 正文另走 previewBody）
-// 覆盖：抑制矩阵 + 发送时刻取 live/snapshot 的分流 + 前台判据的保守方向
+// 覆盖：抑制矩阵 + 发送时刻取 live/snapshot 的分流 + 前台判据的保守方向 + 排队消息转未发送
 //       + ntfy 深链不带完整 cwd + 标题身份拼接
 // 槽位：S1（纯函数，零 IO、不发网络）
 //
@@ -10,6 +10,7 @@
 //     不在本模块，属 S2 测点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { notificationForQueuedHeld } from '../../app/src/ops/notifications.js';
 import {
   notificationForEvent,
   notifyHasClientsAtSend,
@@ -469,4 +470,35 @@ test.describe('投递错误归因与订阅校验', () => {
     assert.equal(isValidPushSubscription('x'), false);
     assert.equal(isValidPushSubscription({ endpoint: 'https://x/y', keys: [] }), false);
   });
+});
+
+test('NOTIFY-01：排队消息转未发送 → 推，标题说没发出，正文写原因，带深链', () => {
+  const pn = notificationForQueuedHeld({
+    reason: 'turn_error', instanceId: 'inst-1', sessionId: 'sess-1', cwd: '/w/proj', sessionTitle: '会话标题',
+  });
+  assert.match(pn.title, /排队消息没有发出/);
+  assert.match(pn.title, /proj/, '同一台机器多个项目，要分得出是哪个');
+  assert.match(pn.body, /本轮出错/, '只说「没发出」用户不知道要不要管');
+  assert.deepEqual(pn.data, { instanceId: 'inst-1', sessionId: 'sess-1', cwd: '/w/proj' }, '点通知要能落到这个会话');
+  assert.equal(pn.ntfyType, 'queued_held');
+});
+
+test('SEC-04：未发送推送不带消息原文，ntfy 标题也不带会话标题', () => {
+  const pn = notificationForQueuedHeld({
+    reason: 'quota_wall', instanceId: 'i', sessionId: 's', cwd: '/w/proj', sessionTitle: '标题SECRET',
+    text: '用户的原话SECRET', preview: '用户的原话SECRET',
+  });
+  assert.doesNotMatch(`${pn.body} ${pn.previewBody ?? ''} ${pn.ntfyTitle}`, /SECRET/, `原文或标题进了推送：${JSON.stringify(pn)}`);
+  assert.match(pn.ntfyTitle, /proj/);
+});
+
+test('NOTIFY-01：用户自己点的停止、关闭会话 → 不推', () => {
+  assert.equal(notificationForQueuedHeld({ reason: 'stopped', instanceId: 'i', sessionId: 's', cwd: '/w/p' }), null);
+  assert.equal(notificationForQueuedHeld({ reason: 'closed', instanceId: 'i', sessionId: 's', cwd: '/w/p' }), null);
+});
+
+test('ntfy：未发送算需即时响应，高优先级并有标签', () => {
+  const meta = ntfyMetaFor('queued_held', { instanceId: 'i', sessionId: 's' });
+  assert.equal(meta.priority, 5, '用户不取回，这句话就一直停着——同审批');
+  assert.ok(meta.tags.length > 0);
 });

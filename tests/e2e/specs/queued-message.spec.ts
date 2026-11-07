@@ -316,6 +316,26 @@ test.describe('消息排队', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('QUEUE-16 未发送进「需要你」：顶栏计数，抽屉里写明是排队消息没发出，点它回到会话能取回', async ({ page }) => {
+    await openRunningTurn(page);
+    await queueOne(page, '没发出去的话');
+    await page.request.post('/__queue-hold?reason=turn_error');
+    await page.request.post('/__queue-needs-you');
+    const chip = page.locator('[data-testid="header-attention-chip"]');
+    await expect(chip).toHaveText('需要你 1');
+    await chip.click();
+    const row = page.locator('[data-testid="needs-you-row"]');
+    await expect(row).toHaveCount(1);
+    await expect(row).toContainText('⏸');
+    await expect(row).toContainText('排队消息没有发出');
+    await expect(row).not.toContainText('等待输入');
+    await row.click();
+    await expect(cardAction(page)).toHaveText('取回');
+    await expect(cardStatus(page)).toContainText('本轮出错');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('QUEUE-OLD 后端没升级：入口不出现，行为和没有这个功能时逐字相同', async ({ page }) => {
     await openRunningTurn(page, { oldBackend: true });
     await expect(input(page)).toHaveAttribute('placeholder', '当前任务运行中，完成后可发送');

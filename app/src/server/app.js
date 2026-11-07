@@ -33,7 +33,7 @@ import { savedEnvironments } from '../sessions/saved-environments.js';
 import { getSessionHistoryWithTotal, historyPage, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, readLastCustomTitle, isSafeSessionId } from '../sessions/history.js';
 import { createSessionRenamer, sanitizeSessionTitle } from '../sessions/session-rename.js';
 import * as diagLog from '../agent/diag-log.js';
-import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
+import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, notificationForQueuedHeld, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
 import { startLogTerminal, stopLogTerminalSync } from '../ops/log-terminal.js';
 import { createHooksInbox } from './hooks-inbox.js';
@@ -154,6 +154,7 @@ import { createSocketEventRegistrar, registerSocketConnection } from './socket.j
 import { createMirrorEngine } from './mirror-engine.js';
 import { createAutoContinue } from './auto-continue.js';
 import { createSendGate } from './send-gate.js';
+import { heldNeedsAttention } from '../agent/queued-message-policy.js';
 import { createMessageQueue } from './message-queue.js';
 import { registerFileSocketHandlers, OUT_OF_SCOPE_ERROR } from './socket-files.js';
 import { registerFileTicketRoute } from './file-ticket-route.js';
@@ -1285,9 +1286,14 @@ function computeNeedsYou() {
     }
     sessionViews.push({ sessionId: a.sessionId, cwd: a.cwd, title, lastActiveAt, status, awaitingSince });
   }
-  const { needsYou } = deriveAttention(sessionViews, pendingApprovals);
+  // ③未发送：实例退出后条目还在，从排队模块取，不从 agents 投影。用户自己点的停止、关闭不进（heldNeedsAttention）。
+  const queuedHeld = messageQueue.snapshot()
+    .filter(e => e.state === 'held' && heldNeedsAttention(e.reason))
+    .map(e => ({ sessionId: e.sessionId, cwd: e.cwd, title: sessions.getSession(e.sessionId)?.title ?? null, heldAt: e.heldAt, instanceId: e.instanceId }));
+  const { needsYou } = deriveAttention(sessionViews, pendingApprovals, queuedHeld);
   // instanceId 是纯函数契约之外的接线专用字段（前端深链需要，复用 applyDeepLink({instanceId,sessionId,cwd})）。
-  return needsYou.map(item => ({ ...item, instanceId: instanceIdBySessionId.get(item.sessionId) ?? null }));
+  // 未发送条目的实例可能已退出：退回排队时的实例号，深链按 sessionId 切过去（resolveDeepLinkTarget），不能给 null。
+  return needsYou.map(item => ({ ...item, instanceId: instanceIdBySessionId.get(item.sessionId) ?? item.instanceId ?? null }));
 }
 // 服务状态可见性（与上面 computeNeedsYou 的注意力不对称是不同的轴，不混入其判定）：
 // "ccm 这个服务本身有没有出过岔子"——判定化信号，全部带时效窗自动退场（不做不衰减的常驻布尔）：
@@ -2890,11 +2896,25 @@ const sendGate = createSendGate({
   diagLog,
 });
 
+// 排队消息转未发送：无条件推（同审批），用户自己点的停止、关闭除外（notificationForQueuedHeld 返回 null）。
+// 节流同「后台仍在运行」：没有「被处理」回执，只受最小间隔约束，挡住反复排队反复失败时的连推。
+function notifyQueuedHeld({ sessionId, instanceId, cwd, reason }) {
+  if (!heldNeedsAttention(reason)) return;
+  const r = throttleNotify(sessionId, 'queued', Date.now(), notifyThrottleState, notifyThrottleMs);
+  notifyThrottleState = r.next;
+  if (r.throttled) return;
+  const build = sessionTitle => notificationForQueuedHeld({ reason, instanceId, sessionId, cwd, sessionTitle });
+  void sessionTitleForNotify(cwd, sessionId)
+    .then(sessionTitle => emitNotify(build(sessionTitle), 'queued_held'))
+    .catch(() => emitNotify(build(sessions.getSession(sessionId)?.title), 'queued_held'));
+}
+
 // 消息排队（状态与时机见 src/server/message-queue.js）。此处只做装配。
 const messageQueue = createMessageQueue({
   sendGate,
   getLiveInstance: sessionId => instanceForSession(sessionId) || null,
   onChange: () => broadcastInstances(),
+  onHeld: entry => notifyQueuedHeld(entry),
   log: (sessionId, line) => interactionLog.addSessionLog(sessionId, 'sys_info', line),
 });
 

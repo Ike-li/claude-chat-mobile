@@ -277,7 +277,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 
 抑制策略按「用户是否可能看不到」分档，而不是按事件重要性：
 
-- **审批、提问、MCP 表单 / 授权（elicitation）、后台任务完成：无条件推。** 这几类都意味着有人在等一个动作，而用户此刻可能锁屏或在别的 app 里。
+- **审批、提问、MCP 表单 / 授权（elicitation）、后台任务完成、排队消息转未发送：无条件推。** 这几类都意味着有人在等一个动作，而用户此刻可能锁屏或在别的 app 里。未发送那条例外的是用户自己点的停止和关闭会话：那是他刚做的事。
 - **回合完成的 `result`、模型静默告警 `gateway_stall`：仅当 approved 房间存在前台可见连接、且那个连接正看着这条会话时才抑制。** 前台判据是客户端主动上报的 `client:presence`，**不是 socket 是否连着**——手机切后台时 socket 常常还活着，拿连接状态当判据会让用户收不到本该收到的完成通知。
 
 能产出推送的只有下面这些，其余一概不推：
@@ -293,8 +293,9 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 | 新设备握手 | 🔐 新设备请求接入 | 不走 `agent:event` |
 | CLI hooks 的 `Stop` / `Notification` | ✅ 终端会话完成一轮 / ⚠️ 终端会话需要你 | 不走 `agent:event` |
 | presence 跳变为「无前台」且此刻有实例在跑 | ⏳ 任务仍在后台运行 | 不走 `agent:event` |
+| 排队消息转未发送（用户点的停止、关闭会话除外） | ⏸ 排队消息没有发出 | 无条件，不走 `agent:event` |
 
-`agent:event` 的 type（`AGENT_EVENT_TYPES`）里只有前六种命中，其余全部落 `default → null`——工具调用、流式文本、模型切换、压缩边界、`api_retry`、普通 system notice 一条都不推。后三条不属于任何 envelope type，**刻意拆成独立函数而非塞进那个 switch**：`NOTIFY_CATEGORY` 的节流键也按 type 建，混进去会让「type 对应真实 envelope 类型」这条隐含契约失效。
+`agent:event` 的 type（`AGENT_EVENT_TYPES`）里只有前六种命中，其余全部落 `default → null`——工具调用、流式文本、模型切换、压缩边界、`api_retry`、普通 system notice 一条都不推。后四条不属于任何 envelope type，**刻意拆成独立函数而非塞进那个 switch**：`NOTIFY_CATEGORY` 的节流键也按 type 建，混进去会让「type 对应真实 envelope 类型」这条隐含契约失效。
 
 `task_notification` 只认**真后台任务**。CLI 把跑得久的前台 Bash 也建模成 task（`task_type: local_bash`、`is_backgrounded: false`），完成时走同一条通道且全程不发 `background_tasks_changed`——所以「不在 `bgTasks` 里」不能当判据，唯一可靠的是 `task_started` 上的 `is_backgrounded`（`task_notification` 自己不带这个字段）。不过滤的话，每条跑过几秒的前台命令都会被播报成「后台任务完成」并打到锁屏手机上。
 
@@ -345,7 +346,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 
 ### 服务告警与「需要你」是不同轴，绝不混判
 
-- 顶栏 chip / 角标只表达「点一下就能处理」的待办（审批、提问）。
+- 顶栏 chip / 角标只表达「点一下就能处理」的待办（审批、提问、没发出去的排队消息：点进去取回）。
 - 服务告警只活在抽屉「服务」小节与服务状态面板里。
 
 把推送投递失败混进「需要你(N)」会让那个数字失去含义：用户点进去发现无事可做，下次就不再信它。

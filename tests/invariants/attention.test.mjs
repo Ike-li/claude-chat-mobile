@@ -1,6 +1,6 @@
 // tests/invariants/attention.test.mjs —— 「需要你」跨会话聚合的读模型投影
 // 守护：ALERT-01（待办轴只收「点一下就能处理」的事）在本层的可测部分
-// 覆盖：审批/输入两维度的字段映射 + SS-005 跨维度去重 + 非法 awaitingSince 降级不丢会话
+// 覆盖：审批/输入/未发送三维度的字段映射 + SS-005 跨维度去重 + 非法 awaitingSince 降级不丢会话
 //       + needsYou 按等待时长升序（risk 不参与）+ others 的 cwd/lastActiveAt 二级排序 + 入参不可变
 // 槽位：S1（纯函数，零 IO，不需要临时目录）
 //
@@ -201,4 +201,35 @@ test.describe('纯函数性', () => {
     deriveAttention(sessions, []);
     assert.deepEqual(sessions.map(s => s.sessionId), order, '入参顺序必须原样保留');
   });
+});
+
+test('未发送的排队消息进 needsYou：reason=queued_held，waitingSince=heldAt，和审批按等待时长一起排', () => {
+  const { needsYou } = deriveAttention(
+    [],
+    [{ sessionId: 'a', cwd: '/w/a', title: 'A', createdAt: 200, toolName: 'Bash' }],
+    [{ sessionId: 'b', cwd: '/w/b', title: 'B', heldAt: 100, instanceId: 'inst-b' }],
+  );
+  assert.deepEqual(needsYou.map(x => [x.sessionId, x.reason, x.waitingSince]), [['b', 'queued_held', 100], ['a', 'awaiting_approval', 200]]);
+  assert.equal(needsYou[0].cwd, '/w/b');
+  assert.equal(needsYou[0].title, 'B');
+  assert.equal(needsYou[0].instanceId, 'inst-b', '实例退出后接线方靠它深链，丢了就点不动');
+});
+
+test('未发送：同一会话还挂着审批时两条都在——批审批和取回这句话是两件事', () => {
+  const { needsYou } = deriveAttention(
+    [{ sessionId: 'a', cwd: '/w/a', status: 'awaiting_input', awaitingSince: 50 }],
+    [{ sessionId: 'a', cwd: '/w/a', createdAt: 200 }],
+    [{ sessionId: 'a', cwd: '/w/a', heldAt: 100 }],
+  );
+  assert.deepEqual(needsYou.map(x => x.reason).sort(), ['awaiting_approval', 'queued_held']);
+});
+
+test('未发送：会话不在 live 列表里（实例已退出）也进 needsYou，不进 others', () => {
+  const { needsYou, others } = deriveAttention(
+    [{ sessionId: 'x', cwd: '/w/x', lastActiveAt: 1 }],
+    [],
+    [{ sessionId: 'gone', cwd: '/w/g', heldAt: 10 }],
+  );
+  assert.deepEqual(needsYou.map(x => x.sessionId), ['gone']);
+  assert.deepEqual(others.map(x => x.sessionId), ['x']);
 });

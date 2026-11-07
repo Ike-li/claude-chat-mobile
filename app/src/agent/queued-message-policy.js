@@ -21,3 +21,8 @@ export function classifyTurnEnd({ isError, interrupted, approvalExpired, termina
   if (terminalReason != null && terminalReason !== 'completed') return { kind: 'hold', reason: 'incomplete' };
   return { kind: 'release' };
 }
+
+// 未发送要不要推送、进「需要你」：用户自己点的停止、关闭会话是他刚做的事，再提醒就是打扰；其余原因用户多半不在，
+// 不推就没人知道这句话停在那里。认不出的原因按提醒算——漏推比多推一条代价大。
+const HELD_SILENT_REASONS = new Set(['stopped', 'closed']);
+export const heldNeedsAttention = reason => !HELD_SILENT_REASONS.has(reason);

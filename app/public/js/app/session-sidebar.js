@@ -3,7 +3,7 @@
 // #359 Step 4 从 app.js 原样迁出；只有本模块用的几份状态（显示更多档位、终端聚合态、保鲜计时器、未读跳转）随代码搬入，
 // 与 app.js 共用的可变态经 getter / setter 注入，声明在实例化点之后的依赖经惰性包装注入。
 
-import { MISSING_FOLDERS_NOTICE_ID, disconnectFolderConfirm, displaySessionTitle, esc, folderReasonText, folderRowMenuItems, formatServiceNoticeRows, formatSessionRowSubtitle, formatSessionRowTime, liveRowsForSection, mergeOrphanRowsByTime, openSessionsUnderRoot, orphanLiveRows, remainingOlderSessionCount, resolveDrawerStatus, resolveDrawerStatusChip, resolveHeaderAttentionChip, resolveHeaderConnBadge, resolveRowTerminalState, sessionRowMenuItems, shouldRerenderSessionList, summarizeOtherWorkspaces, undismissedServiceNotices, unownedLiveInstances, whatNeedsAttention } from '../logic.js';
+import { MISSING_FOLDERS_NOTICE_ID, describeNeedsYouItem, disconnectFolderConfirm, displaySessionTitle, esc, folderReasonText, folderRowMenuItems, formatServiceNoticeRows, formatSessionRowSubtitle, formatSessionRowTime, liveRowsForSection, mergeOrphanRowsByTime, openSessionsUnderRoot, orphanLiveRows, remainingOlderSessionCount, resolveDrawerStatus, resolveDrawerStatusChip, resolveHeaderAttentionChip, resolveHeaderConnBadge, resolveRowTerminalState, sessionRowMenuItems, shouldRerenderSessionList, summarizeOtherWorkspaces, undismissedServiceNotices, unownedLiveInstances, whatNeedsAttention } from '../logic.js';
 import { attachFolderDrag } from './folder-drag.js';
 import { bindSessionRowsHost, bindSessionSearchInput } from './session-search.js';
 import { createDrawerUnreadJump } from './drawer-unread-jump.js';
@@ -111,18 +111,16 @@ export function createSessionSidebar(context, {
   // 单条"需要你"行：点击深链跳转（复用 applyDeepLink，同通知点击的落地逻辑）。
   // 全程 textContent 插值动态数据（title/cwd/toolName 均可能含用户数据）→ CSP 安全，同现有行渲染惯例。
   function needsYouRow(item) {
-    const isApproval = item.reason === 'awaiting_approval';
+    const { icon: iconText, label: reasonLabel } = describeNeedsYouItem(item);
     const row = el(`<button class="w-full flex items-center gap-2 pl-3 pr-3 py-2 border-b border-line-soft border-l-2 border-warning text-left hover:bg-sunk/30 active:opacity-70 bg-surface" data-testid="needs-you-row"></button>`);
     const icon = el(`<span class="shrink-0"></span>`);
-    icon.textContent = isApproval ? '⚠️' : '❓';
+    icon.textContent = iconText;
     row.appendChild(icon);
     const body = el(`<div class="flex-1 min-w-0"></div>`);
     const head = el(`<div class="truncate text-xs font-medium text-ink"></div>`);
     head.textContent = displaySessionTitle(item.title, t('新会话'));
     const sub = el(`<div class="truncate text-[10px] text-ink-faint"></div>`);
-    const reasonLabel = isApproval ? t('等待审批') : t('等待输入');
-    const toolSuffix = isApproval && item.toolName ? `（${item.toolName}）` : '';
-    sub.textContent = `${baseName(item.cwd)} · ${reasonLabel}${toolSuffix} · ${formatWaitingDuration(item.waitingSince)}`;
+    sub.textContent = `${baseName(item.cwd)} · ${reasonLabel} · ${formatWaitingDuration(item.waitingSince)}`;
     body.appendChild(head);
     body.appendChild(sub);
     row.appendChild(body);
