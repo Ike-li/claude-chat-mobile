@@ -1,7 +1,8 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { MAIN_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // 手机端消息排队的前端（app/public/js/app/queued-message.js + logic/queued-message.js）。
 // 状态机在真 server（src/server/message-queue.js），经 instances 广播的 queuedMessages 下发。这里测前端：
@@ -262,6 +263,59 @@ test.describe('消息排队', () => {
 
   // 前端热更新先于后端重启：生产开着 ASSET_HOT_RELOAD，前端拉下来就生效，后端要重启。这段时间 instances 不带
   // queuedMessages，入口不能出现，也不能发 queue：否则草稿被清掉，旧后端再回 busy，用户白按一次。
+  test('QUEUE-13 撤回的回执到之前切走了：话不落进别的会话，回到原会话才交还', async ({ page }) => {
+    await openRunningTurn(page);
+    await queueOne(page, '切走前点的撤回');
+    await page.request.post('/__queue-ack-hold?event=take');
+    await cardAction(page).click();
+    await expect(card(page)).toBeHidden();
+
+    await clickHeaderMenuItem(page, 'btnNew');
+    await expect(input(page)).toHaveValue('');
+    await page.request.post('/__queue-ack-flush');
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('ccm-outbox-dead-letters-v1') ?? '')).toContain('切走前点的撤回');
+    await expect(input(page)).toHaveValue('');
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await expect(input(page)).toHaveValue('切走前点的撤回');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('QUEUE-14 排队的 ack 丢了但快照确认过：不放回输入框，发出后也不留在输入框', async ({ page }) => {
+    await page.clock.install();
+    await openRunningTurn(page);
+    await page.request.post('/__queue-ack-hold?event=submit');
+    await queueOne(page, '快照确认过的话');
+
+    await page.clock.runFor(31_000);
+    await expect(input(page)).toHaveValue('');
+    await expect(card(page)).toBeVisible();
+    await expect(page.getByText('没有确认排上')).toHaveCount(0);
+
+    await page.request.post('/__queue-release');
+    await expect(card(page)).toBeHidden();
+    await expect(input(page)).toHaveValue('');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('QUEUE-15 MSG-03：撤回的回执丢了、服务端已取走：话回输入框，不丢', async ({ page }) => {
+    await page.clock.install();
+    await openRunningTurn(page);
+    await queueOne(page, '回执丢了也不能丢');
+    await page.request.post('/__queue-ack-hold?event=take');
+    await cardAction(page).click();
+    await expect(card(page)).toBeHidden();
+
+    await page.clock.runFor(31_000);
+    await expect(input(page)).toHaveValue('回执丢了也不能丢');
+    await expect(page.getByText('取回失败')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('QUEUE-OLD 后端没升级：入口不出现，行为和没有这个功能时逐字相同', async ({ page }) => {
     await openRunningTurn(page, { oldBackend: true });
     await expect(input(page)).toHaveAttribute('placeholder', '当前任务运行中，完成后可发送');

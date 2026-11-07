@@ -282,6 +282,9 @@ let mockQueuedMessages = [];
 let mockQueuedFull = new Map();
 let mockQueueLog = [];
 const mockQueueField = () => (mockQueueEnabled ? { queuedMessages: mockQueuedMessages } : {});
+// 服务端照常处理、回执扣住：造「ack 丢了」和「回执到之前用户切走了」。/__queue-ack-hold 打开，/__queue-ack-flush 放行。
+let mockQueueAckHold = null;
+let mockQueueHeldAcks = [];
 // WORKDIRS 的可变状态：env:set 收到数组时更新，后续 env:get 回显——
 // 这样 E2E 验的是「提交的真是数组、且 sessionLimit 原样回来了」这条端到端语义，
 // 而不只是「点了保存按钮」。收到非数组时**不更新**，正是真 server 校验会拒的那一档。
@@ -808,6 +811,8 @@ function resetMockState() {
   mockQueuedMessages = [];
   mockQueuedFull = new Map();
   mockQueueLog = [];
+  mockQueueAckHold = null;
+  mockQueueHeldAcks = [];
   mockEnvOverridden = new Set();
   mockWorkdirsList = [
     { path: '/Users/you/code/claude-chat-mobile' },
@@ -1707,6 +1712,19 @@ app.post('/__queue-other-device', (req, res) => {
 // 别的设备刚取走：本端还没收到广播，点撤回时才撞上 not_found
 app.post('/__queue-vanish', (_req, res) => {
   mockQueuedMessages = [];
+  res.json({ ok: true });
+});
+
+app.post('/__queue-ack-hold', (req, res) => {
+  mockQueueAckHold = req.query.event ?? null;
+  res.json({ ok: true });
+});
+
+app.post('/__queue-ack-flush', (_req, res) => {
+  const held = mockQueueHeldAcks;
+  mockQueueHeldAcks = [];
+  mockQueueAckHold = null;
+  held.forEach(flush => flush());
   res.json({ ok: true });
 });
 
@@ -7104,6 +7122,7 @@ io.on('connection', socket => {
       mockQueuedMessages.push(mockQueueEntry({ inst: gateInst, text: payload.text, clientMessageId: payload.clientMessageId, attachments: payload.attachments }));
       mockQueuedFull.set(payload.clientMessageId, { text: payload.text, model: payload.model, attachments: payload.attachments });
       broadcastQueue(); // 先广播后 ack，前端靠这个顺序对账
+      if (mockQueueAckHold === 'submit') { mockQueueHeldAcks.push(() => ack?.({ ok: true, queued: true, instanceId: gateInst.instanceId, sessionId: gateInst.sessionId })); return; }
       if (typeof ack === 'function') ack({ ok: true, queued: true, instanceId: gateInst.instanceId, sessionId: gateInst.sessionId });
       return;
     }
@@ -7951,7 +7970,9 @@ io.on('connection', socket => {
     const full = mockQueuedFull.get(entry.clientMessageId);
     mockQueuedMessages = mockQueuedMessages.filter(e => e !== entry);
     broadcastQueue();
-    ack({ ok: true, text: full.text, model: full.model, attachments: full.attachments });
+    const reply = () => ack({ ok: true, text: full.text, model: full.model, attachments: full.attachments });
+    if (mockQueueAckHold === 'take') { mockQueueHeldAcks.push(reply); return; }
+    reply();
   });
 
   socket.on('user:interrupt', payload => {

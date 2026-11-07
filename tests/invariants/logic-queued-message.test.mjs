@@ -147,6 +147,12 @@ test('取回：输入框空着直接放入，有字用空行拼在后面，不�
 
 const copy = (over = {}) => ({ clientMessageId: 'c1', sessionId: SID, text: '话', startedAt: 100, acked: true, ...over });
 
+test('MSG-03：ack 超时但快照确认过收下 → 按排上算，不放回输入框，否则同一句话既在 server 又在输入框', () => {
+  const d = presentQueueSubmitAck(new Error('timeout'), undefined, { confirmed: true });
+  assert.equal(d.outcome, 'queued');
+  assert.ok(!d.restore, '放回输入框的话，再按一次发送就发了两遍');
+});
+
 test('副本：快照里还在 → 留着', () => {
   const r = reconcileQueuedCopies({ copies: [copy()], entries: [entry()], startedAt: 100, submitting: [] });
   assert.equal(r.keep.length, 1);

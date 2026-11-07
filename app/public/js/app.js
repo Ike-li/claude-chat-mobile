@@ -1758,6 +1758,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     ackTimeoutMs: SEND_ACK_TRANSPORT_MS,
     isResetting: () => localReset.isResetting(),
     isSameSurface: ({ instanceId, sessionId }) => viewingInstanceId === instanceId && sendSessionId() === sessionId,
+    isViewingSession: sessionId => sendSessionId() === sessionId,
     restoreToComposer: ({ text, attachments: taken }) => {
       setComposerText(mergeTakenIntoComposer({ current: inputEl.value, taken: text }));
       if (Array.isArray(taken) && taken.length) attachments.setItems([...attachments.items(), ...taken]);

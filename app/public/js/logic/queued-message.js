@@ -54,11 +54,12 @@ export function resolveQueuedCard(entries, sessionId) {
 
 /**
  * 排队请求的 ack。不复用 presentOnlineSendTransport：超时在普通发送里进 outbox 重试，而排队只在在线时发，
- * 进 outbox 的话一条消息可能同时活在两边。这里一律把话放回输入框。
+ * 进 outbox 的话一条消息可能同时活在两边。这里一律把话放回输入框，除非快照已经确认收下（confirmed）：
+ * ack 丢了但条目在快照里出现过，再放回去就是同一句话既在 server 又在输入框，再按一次发送就发了两遍。
  * @returns {{outcome:'queued'|'sent'|'unknown'|'rejected', restore?:boolean, message?:string, divergence?:object}}
  */
-export function presentQueueSubmitAck(err, ack) {
-  if (err) return { outcome: 'unknown', restore: true, message: t('没有确认排上，话已放回输入框') };
+export function presentQueueSubmitAck(err, ack, { confirmed = false } = {}) {
+  if (err) return confirmed ? { outcome: 'queued' } : { outcome: 'unknown', restore: true, message: t('没有确认排上，话已放回输入框') };
   if (ack?.ok === true) return { outcome: ack.queued === true ? 'queued' : 'sent' };
   const decision = presentOnlineSendAck(ack);
   return {

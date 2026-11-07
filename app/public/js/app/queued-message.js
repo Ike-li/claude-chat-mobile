@@ -24,6 +24,7 @@ export function createQueuedMessageController(context, {
   ackTimeoutMs,
   isResetting = () => false,
   isSameSurface,
+  isViewingSession,
   restoreToComposer,
   clearComposerIfEquals,
   notify,
@@ -41,6 +42,7 @@ export function createQueuedMessageController(context, {
   let unconfirmed = null; // 超时、结果不明的那一条：话已回输入框，万一服务端其实收下了要把输入框里的撤掉
   let visible = false;
   const submitting = new Set();
+  const taking = new Set();
 
   function readCopies() {
     try {
@@ -63,7 +65,7 @@ export function createQueuedMessageController(context, {
   }
 
   function reconcile() {
-    const { keep, lost } = reconcileQueuedCopies({ copies, entries, startedAt, submitting: [...submitting] });
+    const { keep, lost } = reconcileQueuedCopies({ copies, entries, startedAt, submitting: [...submitting, ...taking] });
     copies = keep;
     writeCopies();
     for (const copy of lost) onLost(copy, t('这条排队消息没有发出'));
@@ -146,21 +148,41 @@ export function createQueuedMessageController(context, {
     socket.timeout(ackTimeoutMs).emit(
       'user:message',
       { text, model, attachments, instanceId, cwd, sessionId: sid, clientMessageId, queue: true },
-      (err, ack) => settleSubmit(message, presentQueueSubmitAck(err, ack)),
+      (err, ack) => {
+        const confirmed = copies.some(c => c.clientMessageId === clientMessageId && c.acked); // 快照里见过，见 reconcileQueuedCopies
+        settleSubmit(message, presentQueueSubmitAck(err, ack, { confirmed }));
+      },
     );
+  }
+
+  // 回执丢了，服务端可能已经取走。快照里没有了就走本地副本交还，否则这句话就没了；还在就留着卡片再试。
+  function settleTakeLost(clientMessageId) {
+    const hadCopy = copies.some(c => c.clientMessageId === clientMessageId);
+    copies = copies.map(c => (c.clientMessageId === clientMessageId ? { ...c, acked: false } : c));
+    reconcile();
+    if (entries.some(e => e?.clientMessageId === clientMessageId)) notify(t('取回失败，可再试一次'), 'text-danger');
+    else if (!hadCopy) notify(t('已被取走或已发出'), 'text-info');
   }
 
   function take() {
     const view = resolveQueuedCard(entries, sessionId);
     const action = context.dom.queuedCardAction;
     if (!view?.actionLabel || !action) return;
+    const entry = queuedEntryFor(entries, sessionId);
+    const { clientMessageId } = entry;
     action.disabled = true; // 连点两下不该发两次；等回执或下一次广播重画时解锁
-    socket.timeout(ackTimeoutMs).emit('user:takeQueued', { sessionId: view.sessionId, clientMessageId: view.clientMessageId }, (err, ack) => {
+    taking.add(clientMessageId);
+    socket.timeout(ackTimeoutMs).emit('user:takeQueued', { sessionId: entry.sessionId, clientMessageId }, (err, ack) => {
+      taking.delete(clientMessageId);
       if (ack?.ok) {
-        dropCopy(view.clientMessageId);
-        restoreToComposer({ text: ack.text, attachments: ack.attachments });
+        dropCopy(clientMessageId);
+        const { text, attachments } = ack;
+        if (isViewingSession(entry.sessionId)) restoreToComposer({ text, attachments });
+        else onLost({ ...entry, text, attachments }, t('这条排队消息已取回')); // 切走了：话不能放进别的会话的输入框，同 settleSubmit
+      } else if (err) {
+        settleTakeLost(clientMessageId);
       } else {
-        notify(err ? t('取回失败，可再试一次') : t('已被取走或已发出'), err ? 'text-danger' : 'text-info');
+        notify(t('已被取走或已发出'), 'text-info');
       }
       render();
     });
