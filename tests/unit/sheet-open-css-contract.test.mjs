@@ -11,7 +11,7 @@ const html = readFileSync(join(root, 'app/public/index.html'), 'utf8');
 
 const OPEN_SHEET_MODAL_IDS = [
   'permModal', 'questionModal', 'sessionMenuModal', 'confirmModal',
-  'rewindModal', 'consoleModal', 'workspaceModal', 'folderPickerModal',
+  'rewindModal', 'consoleModal', 'workspaceModal', 'folderPickerModal', 'contextModal',
   'serviceStatusModal', 'envConfigModal',
 ];
 

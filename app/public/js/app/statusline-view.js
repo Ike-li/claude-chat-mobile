@@ -6,7 +6,7 @@ import { t } from '../i18n.js';
 
 export function createStatuslineView({
   $, addBar, copyText, messagesEl, renderLiveLine, updateWorkspaceChangeBadge, getCurrentCwd, getLiveLine,
-  getViewingInstanceId,
+  getViewingInstanceId, onOpenContext,
 } = {}) {
   const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
   const cliStatusBarEl = $('cliStatusBar'); // E16：状态栏外层（含 details + 复制按钮；揭示=去 hidden）
@@ -183,15 +183,25 @@ export function createStatuslineView({
     // ctx 段：有 usedPercent → 'ctx X% · left Y/Z'（Y=剩余 Z=窗口总量，对齐本机 CLI statusline.sh 里
     // elif 分支已用的 '/' 记法，这里扩展到有百分比的分支）；否则退回绝对 token 数（认不出 model 的窗口）。
     // left 走 formatStatuslineCtxLeft：优先 totalTokens（与 usedPercent 同源），避免 lastUsage=0 假 1.0m/1.0m。
+    // 可点：打开上下文面板。文案不变，这一段对齐 CLI statusline；距自动压缩等 CLI 这里没有的在面板里。
+    const ctxButton = (text, cls) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `${cls} py-1 -my-1 underline decoration-dotted underline-offset-2 text-left`;
+      button.dataset.testid = 'status-ctx';
+      button.textContent = `${text} ›`;
+      button.onclick = onOpenContext;
+      return button;
+    };
     let ctxSeg = null;
     if (p.ctx && Number.isFinite(p.ctx.usedPercent)) {
       let txt = `ctx ${p.ctx.usedPercent}%`;
       const left = formatStatuslineCtxLeft(p.ctx);
       if (left) txt += ` · ${left}`;
       const pc = p.ctx.usedPercent; // 蓝(健康)→橙(≥70)→红(≥90) 三段警示
-      ctxSeg = { text: txt, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-ink-soft' }; // UI-011 数据色非链接蓝
+      ctxSeg = { node: ctxButton(txt, pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-ink-soft') }; // UI-011 数据色非链接蓝
     } else if (p.ctx && Number.isFinite(p.ctx.tokens)) {
-      ctxSeg = { text: `ctx ${fmtTok(p.ctx.tokens)}`, cls: 'text-ink-soft' };
+      ctxSeg = { node: ctxButton(`ctx ${fmtTok(p.ctx.tokens)}`, 'text-ink-soft') };
     }
     // 行A（headline，对齐 CLI 首行）：model │ effort │ location │ git │ ctx │ 版本
     // location = project（cwd 末段）或 git.repo 短名；model 作标题、与 CLI 首段一致；底部 pill 仍是选择器。
@@ -291,5 +301,5 @@ export function createStatuslineView({
     }
   }
 
-  return { cliStatusBarEl, hideStatuslineWrap, renderStatusLine };
+  return { cliStatusBarEl, hideStatuslineWrap, renderStatusLine, getStatusPayload: () => lastStatusLinePayload };
 }

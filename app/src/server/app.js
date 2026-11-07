@@ -159,6 +159,7 @@ import { registerFileSocketHandlers, OUT_OF_SCOPE_ERROR } from './socket-files.j
 import { registerFileTicketRoute } from './file-ticket-route.js';
 import { registerFolderSocketHandlers } from './socket-folders.js';
 import { registerEnvironmentSocketHandlers } from './socket-environments.js';
+import { registerContextSocketHandlers } from './socket-context.js';
 import { CLAUDE_PROJECTS_DIR, claudeHome } from '../shared/claude-home.js';
 import { appendRegularFileSync } from '../shared/regular-file.js';
 
@@ -4594,6 +4595,7 @@ registerSocketConnection(io, socket => {
     readTranscriptToolResult,
     readSessionOutputs,
   });
+  registerContextSocketHandlers({ socket, on, routeInstance });
   registerEnvironmentSocketHandlers({
     socket,
     on,

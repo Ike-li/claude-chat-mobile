@@ -696,6 +696,9 @@ let mockScenarioErrors = [];
 
 function resetMockState() {
   mockSessionOutputs = null;
+  mockContextUsage = null;
+  mockContextUsageCalls = [];
+  mockHeldContextFull = null;
   taskOutputPolls = 0;
   mockEnvironments = [];
   mockBranchesHeld = null;
@@ -1072,6 +1075,18 @@ app.post('/__set-environments', (req, res) => {
 
 app.post('/__session-outputs', (req, res) => {
   mockSessionOutputs = JSON.parse(String(req.query.fixture));
+  res.json({ ok: true });
+});
+
+app.post('/__context-usage', (req, res) => {
+  mockContextUsage = JSON.parse(String(req.query.fixture));
+  mockContextUsageCalls = [];
+  res.json({ ok: true });
+});
+app.get('/__context-usage-calls', (_req, res) => res.json(mockContextUsageCalls));
+app.post('/__release-context-full', (_req, res) => {
+  mockHeldContextFull?.();
+  mockHeldContextFull = null;
   res.json({ ok: true });
 });
 
@@ -1773,6 +1788,20 @@ const defaultSessionOutputs = () => ({
     { path: 'gone.png', name: 'gone.png', dir: '', at: Date.now() - 900000, media: 'image', state: 'missing' },
   ],
   outsideCount: 2,
+});
+
+// 上下文面板的夹具，/__context-usage 换；null = summary、full 都立即回。
+let mockContextUsage = null;
+let mockContextUsageCalls = [];
+let mockHeldContextFull = null;
+const mockUsageBody = totalTokens => ({
+  totalTokens, maxTokens: 1000000, percentage: Math.round(totalTokens / 10000),
+  autoCompactThreshold: 967000, isAutoCompactEnabled: true,
+  categories: [
+    { id: 'messages', name: 'Messages', tokens: 684300, kind: 'used' },
+    { id: 'system_tools', name: 'System tools', tokens: 22100, kind: 'used' },
+    { id: 'free_space', name: 'Free space', tokens: 197000, kind: 'free' },
+  ],
 });
 
 // 文件链接：file:open 的票据在 mock 里就是 relPath，/f/ 按它回这张表的字节。
@@ -3451,6 +3480,20 @@ io.on('connection', socket => {
     if (mockSessionOutputs?.silent) return; // 前端已 pull、后端没重启：旧后端不认这个事件，ack 永远不来
     if (mockSessionOutputs?.error) return callback({ ok: false, error: mockSessionOutputs.error });
     callback({ ok: true, ...(mockSessionOutputs ?? defaultSessionOutputs()) });
+  });
+
+  // 上下文面板：回包形态同 socket-context.js。summary 故意比 full 大，用例分得清谁到了。
+  socket.on('context:usage', ({ detail } = {}, callback) => {
+    if (typeof callback !== 'function') return;
+    mockContextUsageCalls.push(detail);
+    const fixture = mockContextUsage ?? {};
+    if (fixture.silent) return; // 前端已 pull、后端没重启：旧后端不认这个事件，ack 永远不来
+    if (fixture.unavailable) return callback({ ok: false, code: 'unavailable' });
+    if (detail === 'summary') return callback({ ok: true, detail, ...mockUsageBody(910000) });
+    if (fixture.fullFails) return callback({ ok: false, code: 'failed' });
+    const reply = () => callback({ ok: true, detail, ...mockUsageBody(770000) });
+    if (fixture.holdFull) mockHeldContextFull = reply;
+    else reply();
   });
 
   // 文件浏览：browse:read（契约内事件；仅实现文本 fixture——附件的 base64 分片已归 attachment:read）。

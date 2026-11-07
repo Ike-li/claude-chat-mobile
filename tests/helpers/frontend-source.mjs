@@ -7,6 +7,7 @@ const FILES = [
   'app.js',
   'app/console-modal.js',
   'app/service-status.js',
+  'app/context-panel.js',
   'app/statusline-view.js',
   'app/empty-surfaces.js',
   'app/session-sidebar.js',
