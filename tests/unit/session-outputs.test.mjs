@@ -47,6 +47,13 @@ test('文件名带空格：尖括号和百分号编码两种写法都认', () =>
   assert.deepEqual(paths(assistant('[v](out/Python%20%E6%B5%85.mp4)')), ['/work/proj/out/Python 浅.mp4']);
 });
 
+test('文件名带括号：成对的括号和反斜杠转义都是路径的一部分（同 marked 的解析）', () => {
+  assert.deepEqual(paths(assistant('[v](out/clip(final).mp4)')), ['/work/proj/out/clip(final).mp4']);
+  assert.deepEqual(paths(assistant('[v](out/a(1)b(2).mp4) 和 [w](w.md)')), ['/work/proj/out/a(1)b(2).mp4', '/work/proj/w.md']);
+  assert.deepEqual(paths(assistant('[v](out/clip\\(1\\).mp4)')), ['/work/proj/out/clip(1).mp4']);
+  assert.deepEqual(paths(assistant('（见 [a](a.md)）')), ['/work/proj/a.md'], '链接外面的括号不算进路径');
+});
+
 test('带行号的链接是代码引用，不是产出', () => {
   for (const href of ['src/a.js:12', 'src/a.js:12-20', 'src/a.js:12:3', 'src/a.js#L12', '/work/proj/a.js:9']) {
     assert.deepEqual(paths(assistant(`[a](${href}) 成果在 [ok](ok.md)`)), ['/work/proj/ok.md'], href);

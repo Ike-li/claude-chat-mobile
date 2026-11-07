@@ -17,7 +17,8 @@ export const MAX_SESSION_OUTPUTS = 200;
 
 const FENCED_CODE = /```[\s\S]*?(?:```|$)/g;
 const INLINE_CODE = /`[^`\n]*`/g;
-const MARKDOWN_LINK = /\]\(\s*(?:<([^>\n]+)>|([^)\s]+))/g;
+// 裸写的目标可以带成对括号和反斜杠转义（clip(final).mp4），同 marked：只认一层嵌套，再深的模型也不这么写
+const MARKDOWN_LINK = /\]\(\s*(?:<([^>\n]+)>|((?:\\.|\([^()\s]*\)|[^()\s\\])+))/g;
 const LOCAL_FILE_URL = /^file:\/\/(?:localhost)?(?=\/)/i;
 // 判据与前端 logic/file-links.js 对齐（前后端互不 import，tests/unit/session-outputs.test.mjs 用同一张表防漂移）。
 // `foo.js:12` 形似 scheme，这里不用区分：它是代码引用，和外部协议一样都不算产出。
@@ -48,7 +49,7 @@ function linkedFiles(text, cwd) {
   const prose = text.replace(FENCED_CODE, '').replace(INLINE_CODE, '');
   const files = [];
   for (const [, bracketed, bare] of prose.matchAll(MARKDOWN_LINK)) {
-    const file = linkedFile(bracketed ?? bare, cwd);
+    const file = linkedFile(bracketed ?? bare.replace(/\\([()])/g, '$1'), cwd);
     if (file) files.push(file);
   }
   return files;
