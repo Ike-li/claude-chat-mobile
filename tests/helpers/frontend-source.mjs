@@ -11,6 +11,7 @@ const FILES = [
   'app/empty-surfaces.js',
   'app/session-sidebar.js',
   'app/composer-controls.js',
+  'app/session-outputs.js',
   'app/keyboard-inset.js',
   'app/header-menu.js',
 ];

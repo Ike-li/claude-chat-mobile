@@ -222,7 +222,7 @@ export function createGitChangesPanel(context, {
  * 取代了原先的 workspaceChooser（一层只负责二选一的菜单 sheet）。合并的理由见 index.html
  * #workspaceModal 处注释：chooser 那层零信息量，且互切要关面板重走一遍。
  *
- * 两个子控制器只提供 open(cwd)（＝载入自己那半边的数据），不碰 sheet；
+ * 子控制器只提供 open(cwd)（＝载入自己那半边的数据），不碰 sheet；
  * 编辑态守卫 confirmLeaveIfEditing 由 file-browser 提供，关闭与切 tab 都必须先过。
  */
 export function createWorkspacePanel(context, {
@@ -231,22 +231,31 @@ export function createWorkspacePanel(context, {
   haptic = () => {},
   fileBrowser,
   gitChanges,
+  sessionOutputs,
 } = {}) {
   const dom = context.dom;
-  let activeTab = null;   // 'files' | 'changes'
+  let activeTab = null;   // 'files' | 'changes' | 'outputs'
   let cwd = null;
 
   function paintTab(tab) {
     activeTab = tab;
-    const files = tab === 'files';
+    const files = tab === 'files', changes = tab === 'changes', outputs = tab === 'outputs';
     dom.workspaceTabFiles?.setAttribute('aria-selected', String(files));
-    dom.workspaceTabChanges?.setAttribute('aria-selected', String(!files));
+    dom.workspaceTabChanges?.setAttribute('aria-selected', String(changes));
+    dom.workspaceTabOutputs?.setAttribute('aria-selected', String(outputs));
     dom.fileBrowseTools?.classList.toggle('hidden', !files);
     dom.fileBrowseBody?.classList.toggle('hidden', !files);
-    dom.gitChangesTools?.classList.toggle('hidden', files);
-    dom.gitChangesBody?.classList.toggle('hidden', files);
-    // 保存错误条属于文件 tab：切到改动 tab 时一并收起，否则它会浮在 git 列表上方
+    dom.gitChangesTools?.classList.toggle('hidden', !changes);
+    dom.gitChangesBody?.classList.toggle('hidden', !changes);
+    dom.outputsBody?.classList.toggle('hidden', !outputs);
+    // 保存错误条属于文件 tab：切走时一并收起，否则它会浮在别的 tab 上方
     if (!files) dom.fileBrowseSaveError?.classList.add('hidden');
+  }
+
+  function loadTab(tab) {
+    if (tab === 'files') fileBrowser?.open?.(cwd);
+    else if (tab === 'changes') gitChanges?.open?.(cwd);
+    else sessionOutputs?.open?.(cwd);
   }
 
   // 离开文件 tab：音视频也要停，sheet 只是藏起来，不停会在后台继续响。
@@ -261,11 +270,10 @@ export function createWorkspacePanel(context, {
     if (tab === activeTab) return;
     if (activeTab === 'files' && !(await leaveFiles())) return;
     paintTab(tab);
-    if (tab === 'files') fileBrowser?.open?.(cwd);
-    else gitChanges?.open?.(cwd);
+    loadTab(tab);
   }
 
-  // worktree 已删除时的提示条。两个 tab 共用一条，所以挂在外壳而不是任一子控制器上。
+  // worktree 已删除时的提示条。几个 tab 共用一条，所以挂在外壳而不是任一子控制器上。
   // notice 为 { worktree, parent }（见 logic/panel-state.js 的 resolveWorktreeGoneNotice）或 null。
   function paintWorktreeGone(notice) {
     const el = dom.workspaceWorktreeGone;
@@ -285,8 +293,7 @@ export function createWorkspacePanel(context, {
 
   function open(nextCwd, tab = 'files', worktreeGoneNotice = null) {
     show(nextCwd, tab, worktreeGoneNotice);
-    if (tab === 'files') fileBrowser?.open?.(cwd);
-    else gitChanges?.open?.(cwd);
+    loadTab(tab);
   }
 
   // 从消息里的文件链接进来：直接落到那个文件或目录，target 为 { path, line }
@@ -305,6 +312,9 @@ export function createWorkspacePanel(context, {
   }
   if (dom.workspaceTabChanges) {
     dom.workspaceTabChanges.onclick = () => { haptic('tap'); selectTab('changes'); };
+  }
+  if (dom.workspaceTabOutputs) {
+    dom.workspaceTabOutputs.onclick = () => { haptic('tap'); selectTab('outputs'); };
   }
   if (dom.workspaceClose) dom.workspaceClose.onclick = () => close();
   if (dom.workspaceModal) {

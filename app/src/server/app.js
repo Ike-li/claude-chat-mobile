@@ -111,6 +111,7 @@ import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_LIVE_SESSIONS, sessionListWindow, fitSessionPage, showMoreCount, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, pickPrimaryWorkdir, createWorkdirStatus, normalizeWorkdirEntries, planRemoveMissingWorkdirEntries } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
 import { readTranscriptImage, readTranscriptToolResult } from '../sessions/transcript-image-read.js';
+import { readSessionOutputs } from '../sessions/session-outputs.js';
 import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
 import { composeProjects, createProjectIndex, discoverSubProjects, hasScratchSessions } from '../sessions/projects.js';
 import { createScratchAllocator, removeScratchWorkspace } from '../sessions/scratch-workspaces.js';
@@ -4591,6 +4592,7 @@ registerSocketConnection(io, socket => {
     resolveTranscriptLocation: transcriptLocation,
     sessionFileExists, // 历史工具卡「展开全文」：会话归属同 image:get
     readTranscriptToolResult,
+    readSessionOutputs,
   });
   registerEnvironmentSocketHandlers({
     socket,

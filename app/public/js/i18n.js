@@ -314,6 +314,14 @@ export const EN_DICT = Object.freeze({
   // 工作区面板两 tab（原 chooser 的「浏览项目文件 / 工作区改动」两张大卡已随 chooser 层一并删除）
   '📁 文件': '📁 Files',
   '📝 改动': '📝 Changes',
+  '📦 产出': '📦 Outputs',
+  '已删除': 'Deleted',
+  '另有': 'Another',
+  '个文件不在已连接的文件夹里': 'files outside the connected folders',
+  '这个会话还没有产出文件。助手新建的文件和贴出链接的文件会列在这里。': 'No output files in this session yet. Files the assistant creates or links to appear here.',
+  '发出第一条消息后，这里才会列出产出的文件。': 'Output files appear here after you send the first message.',
+  '拿不到列表：后端可能还没重启': 'Could not load the list: the backend may need a restart',
+  '拿不到列表': 'Could not load the list',
   // worktree 目录被删后面板改看父仓的提示条。前后各拼一个「名字」，故译文两端留空格。
   '已删除，下面显示的是主仓': 'was deleted — showing the main checkout',
   '（已删除）': ' (deleted)',
