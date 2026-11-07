@@ -134,4 +134,21 @@ test.describe('P0 上下文面板', () => {
     await expect(page.locator('#contextCompactHint')).toHaveText('有待发附件，发出或移除后再压缩');
     await expectNoBrowserErrors(page);
   });
+
+  // 附件是异步读进来的：打开面板时托盘还空着，确认框弹着时才落地。这时再发，文件就跟着 /compact 走了
+  test('P0-CTX-9 确认时状态变了：不发，面板留着并说明，附件还在托盘里', async ({ page }) => {
+    await openPanel(page);
+    await page.locator('#contextCompact').click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#fileInput').setInputFiles({ name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('x') });
+    await expect(page.locator('#attachTray')).toContainText('a.txt');
+    await page.locator('#confirmOk').click();
+
+    await expect(modal(page)).toBeVisible();
+    await expect(page.locator('#contextCompact')).toBeDisabled();
+    await expect(page.locator('#contextCompactHint')).toHaveText('有待发附件，发出或移除后再压缩');
+    await expect(page.locator('#messages')).not.toContainText('/compact');
+    await expect(page.locator('#attachTray')).toContainText('a.txt');
+    await expectNoBrowserErrors(page);
+  });
 });

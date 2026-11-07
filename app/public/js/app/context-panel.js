@@ -119,6 +119,11 @@ export function createContextPanel(context, {
       okText: t('压缩'),
     });
     if (!ok) return;
+    // 确认框弹着时状态可能变了：附件异步读完落进托盘、回合开跑、审批到了。附件这条 send() 不挡，会跟着 /compact 发走
+    if (compactBlockReason(getCompactState())) {
+      paintCompactState(true);
+      return;
+    }
     close();
     compactSession();
   });
