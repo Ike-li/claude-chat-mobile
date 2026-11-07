@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
+import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-01 首屏冷启动、hydration 与连接状态', async ({ page }) => {
@@ -11,9 +11,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expect(page).toHaveTitle(/Claude Chat Mobile/);
     await expect(page.locator('#btnSessions')).toBeVisible();
-    await expect(page.locator('#btnConsole')).toBeVisible();
-    await expect(page.locator('#btnNew')).toBeVisible();
-    await expect(page.locator('#btnHome')).toBeVisible();
+    await expect(page.locator('#btnMore')).toBeVisible();
     await expect(page.locator('#messages')).toBeVisible();
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#composerFooter')).toBeVisible();
@@ -31,7 +29,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillPermText')).toContainText('Manual');
 
     // 2. 回空首页枢纽：输入条隐藏；顶栏文件夹 pill 隐藏；无「当前工作区」标。
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
     await expect(page.locator('.dashboard-container')).toBeVisible();
@@ -43,7 +41,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // 3. 点 ＋ 进入 compose 干净新会话页：输入条出现；顶栏文件夹 pill 与状态栏都要在——会话是懒创建的，
     //    但工作区此刻已经定了，而文件浏览 / git 改动 / statusline 的 git 段只依赖 cwd。
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
     await expect(page.locator('.dashboard-container')).toHaveCount(0);
@@ -65,7 +63,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#cliSummary')).toContainText('main');
 
     // 4. 从 compose 回空首页：pill 收起（状态栏随 #composerFooter 整体隐藏，见步骤 2 那条断言）
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
     await expect(page.locator('#topContextPill')).toBeHidden();
     await expect(page.locator('#composerFooter')).toBeHidden();

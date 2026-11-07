@@ -13,6 +13,7 @@ const FILES = [
   'app/composer-controls.js',
   'app/session-outputs.js',
   'app/keyboard-inset.js',
+  'app/header-menu.js',
 ];
 
 export function readAppJsSource() {

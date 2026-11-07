@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
+import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, chooseSessionMenuItem, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession, sessionRowByInstance } from '../../helpers/sidebar-ui';
 
 // 修「点击在跑的会话的停止按钮时，点完会顿一下，然后直接跳到主页」：中断失败（不限时超时——任何
@@ -70,7 +70,7 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
   // instances 列表里，只是不再被查看，不该被误判为"被摧毁"。
   test('P0-DESTROY-2 反向场景：用户主动新建会话不应误判为摧毁', async ({ page }) => {
     await gotoMock(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
 
     await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('[data-testid="instance-destroyed-surface"]')).toHaveCount(0);
@@ -82,7 +82,7 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
   // （inst_1 仍存活），精确对应"曾在列表、现在仍在列表"这个不命中分支。
   test('P0-DESTROY-3 反向场景：用户主动回首页不应误判为摧毁', async ({ page }) => {
     await gotoMock(page);
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
 
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('[data-testid="instance-destroyed-surface"]')).toHaveCount(0);

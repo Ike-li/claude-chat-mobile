@@ -146,6 +146,7 @@ import { readThemePref, writeThemePref, applyThemeToDocument } from './theme.js'
 // 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
 import { askQuestionResultView } from './logic/questions.js';
 import { createAppContext } from './app/context.js';
+import { createHeaderMenu } from './app/header-menu.js';
 import { createClientLogger } from './app/client-log.js';
 import { createPerfReporter } from './app/perf-report.js';
 import { createPerfTrace } from './app/perf-trace.js';
@@ -5336,7 +5337,12 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   // 面板内三块始终展开磁贴（方案 A），onOpen 只需回填摘要 title。
   const settings = createSettingsController(appContext, {
     alerts, haptic, syncPrefs: false,
-    onOpen: () => { syncDefaultsPillTitle(); renderSideQuestionStats(); },
+    onOpen: () => {
+      syncDefaultsPillTitle();
+      renderSideQuestionStats();
+      // 判据同 reloadCurrentFromHistory 自己的守卫：没在看会话时无历史可重载
+      $('settingsReloadSession')?.classList.toggle('hidden', !displayedSessionId);
+    },
   });
   // 侧栏与 sheet 同为 z-40：不先收侧栏，弹出的面板会和左侧抽屉叠在一起。
   // 必须抢在下面 createSettingsController 的 bind() 之前注册——listener 按注册顺序触发，
@@ -6045,24 +6051,13 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     btn.addEventListener('click', reloadSessionByHand);
     bar.appendChild(btn);
   }
-  // 手动重载（提示条上的「重新加载」与顶栏「⋯」）：clearView 连审批 / 提问卡一起清，session:history 又不带待办——
+  // 手动重载（提示条上的「重新加载」与会话设置里那一行）：clearView 连审批 / 提问卡一起清，session:history 又不带待办——
   // 画完后照重连那条路补一次 sync:since，用回执里的 pending 快照重建，否则服务端还在等批、手机上却没了卡（#354 review）
   function reloadSessionByHand() { reloadCurrentFromHistory(() => requestSync({ probe: false })); }
 
-  // 顶栏「⋯」→「重新加载本会话」（#307）：原地按钮只挂在已知的两处停下的地方上，别的路径停住时靠这一项。
-  // 没在看会话时（首页等）不可点，判据同 reloadCurrentFromHistory 自己的守卫。
-  const moreModal = $('moreModal');
-  const closeMoreMenu = () => { if (moreModal?.classList.contains('sheet-open')) closeSheet(moreModal); };
-  $('btnMore')?.addEventListener('click', () => {
-    if (!moreModal) return;
-    const item = $('moreReloadSession');
-    if (item) item.disabled = !displayedSessionId;
-    openSheet(moreModal);
-  });
-  $('moreReloadSession')?.addEventListener('click', () => { closeMoreMenu(); reloadSessionByHand(); });
-  $('moreCancel')?.addEventListener('click', closeMoreMenu);
-  moreModal?.addEventListener('click', e => { if (e.target === moreModal) closeMoreMenu(); });
-  moreModal?.addEventListener('keydown', e => { if (e.key === 'Escape') closeMoreMenu(); });
+  // 会话设置里的「重新加载本会话」（#307）：原地按钮只挂在已知的两处停下的地方上，别的路径停住时靠这一项。
+  $('settingsReloadSession')?.addEventListener('click', () => { settings.close(); reloadSessionByHand(); });
+  createHeaderMenu({ $, haptic });
 
   // noticeBar：loadHistory 刚插的那条「加载了 N 条」提示条。渲染半路停下时，在它上面给「重新加载」（offerHistoryReload）。
   // superseded：loadHistory 传入，这一轮之后同实例又发起了加载时为真（见 processChunk 开头）。

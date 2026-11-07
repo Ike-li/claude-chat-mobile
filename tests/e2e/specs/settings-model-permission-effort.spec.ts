@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Page } from '@playwright/test';
-import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openSessionSettings, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
+import { clickHeaderMenuItem, closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openSessionSettings, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
 
 // 三组磁贴逐张核对「画出来的样子」与 aria-pressed 是否一致：选中 = 30% accent-wash 淡底 + accent 标题，
 // 没选中 = surface 卡片底 + ink 标题；Bypass 的标题两种状态都是 danger。返回对不上的磁贴，
@@ -216,7 +216,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await closeSettings(page);
 
     // 新会话尚未发消息（懒创建未完成）：复制胶囊收起，但标题下面必须有说明而不是空白
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     await openSessionSettings(page);
     await expect(page.locator('#settingsSessionRow')).toHaveClass(/hidden/);
@@ -394,7 +394,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await ensureComposerReady(page);
     await page.request.post('/__cli-settings-effort?level=high');
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     await expect(page.locator('#pillEffortText')).toHaveText('high');
     await expect(page.locator('#pillDefaults')).toHaveAttribute('title', /high · CLI 默认/);
@@ -423,7 +423,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09d 新会话空首页设置会应用到首条消息', async ({ page }) => {
     await gotoMock(page);
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
 
     await page.locator('#pillDefaults').click();
@@ -658,7 +658,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 断言按钮点击后经历禁用→转圈→恢复这段瞬态（mock config:refresh 加了 150ms 延迟，见 mock/server.js）。
   test('P0-09n compose 页配置刷新按钮：点击后经历禁用→转圈→恢复', async ({ page }) => {
     await gotoMock(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
 
     const refreshBtn = page.locator('[data-testid="compose-defaults-refresh"]');

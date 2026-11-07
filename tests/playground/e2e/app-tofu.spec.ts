@@ -51,7 +51,7 @@ test.describe.serial('playground app TOFU', () => {
       await page.reload();
       await expect(modal).toBeHidden();
     }
-    await expect(page.locator('#btnNew')).toBeVisible();
+    await expect(page.locator('#btnMore')).toBeVisible();
   });
 
   test('workspace is the seeded container project', async () => {

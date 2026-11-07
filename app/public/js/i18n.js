@@ -60,6 +60,7 @@ export const EN_DICT = Object.freeze({
   '可输入 / 斜杠命令或 @ 引用文件': 'Type / for slash commands or @ to mention files',
   '回首页（最近文件夹与会话）': 'Home (recent folders and sessions)',
   '回首页': 'Home',
+  '首页': 'Home',
   '查看当前会话运行日志': "View this session's run log",
   '查看会话日志': 'View session log',
   '创建新会话': 'New session',

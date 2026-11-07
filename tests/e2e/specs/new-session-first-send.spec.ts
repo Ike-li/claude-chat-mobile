@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { clickHeaderMenuItem, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, openSessionsSidebar, openWorkspaceSession, startNewSessionInWorkspace } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -9,7 +9,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     // 1. 新会话首发后 busy 不被懒开广播冲掉。
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     await sendChatMessage(page, 'test:freshbusy');
     await expect(page.locator('#streamLiveStatus')).toBeVisible();
@@ -28,7 +28,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 走 test:slow-echo：mock 先懒开广播、再延迟 2s 回显，把清屏与回显之间那段窗口撑开到可断言。
   test('P0-12c 新会话首发的乐观气泡活过懒开清屏，且不与回显重复', async ({ page }) => {
     await gotoMock(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
 
     // 「闪烁」= 气泡出现过、又消失、再回来。光靠事后断言"最终有一条"抓不到它（修复前最终也有一条，
@@ -88,7 +88,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:stale-instances-on-new');
     await waitForIdle(page);
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
 
     // 在新会话页打字——必须发生在那两条包到达【之前】，那才是缺陷窗口的形状。
@@ -198,7 +198,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitUntilDisconnected(page);
 
     // 按 ＋：本地同步重置（kept 被存进上一个会话的槽），而 currentSessionId 仍指着那个会话
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#input')).toHaveValue('');
 
     // 在新会话页发一条：离线走 outbox 入队，那条路径同样要清当前表面的草稿槽
@@ -224,7 +224,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-13 全新会话首轮点停止后不跳回主页', async ({ page }) => {
     await gotoMock(page);
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     await sendChatMessage(page, 'test:fresh-interrupt');
     await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
@@ -261,7 +261,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.clock.install();
     await gotoMock(page);
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     // mock 懒开 inst_fresh：sessionId 恒 null、state busy、不发 result，轮次一直挂着
     await sendChatMessage(page, 'test:fresh-interrupt');
@@ -280,7 +280,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       }).observe(box, { childList: true, subtree: true });
     });
 
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
 
     await page.clock.runFor(3000);

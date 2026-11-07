@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Page } from '@playwright/test';
-import { captureUserMessages, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { clickHeaderMenuItem, captureUserMessages, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession, startNewSessionInWorkspace } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -556,7 +556,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     });
     await gotoMock(page);
     await waitForIdle(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     const surface = page.locator('[data-testid="compose-surface"]');
     await expect(surface).toBeVisible();
     await surface.locator('[data-testid="compose-worktree-toggle"]').click();
@@ -628,7 +628,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await ensureComposerReady(page);
     await sendChatMessage(page, 'test:arm-outbox-turns');
     await waitForIdle(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
 
     await page.context().setOffline(true);
