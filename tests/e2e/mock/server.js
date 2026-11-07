@@ -1061,11 +1061,17 @@ app.post('/__hold-branches', (_req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/__held-branches', (_req, res) => {
+  res.json({ cwds: (mockBranchesHeld ?? []).map(({ cwd }) => cwd) });
+});
+
 app.post('/__release-branches', (req, res) => {
   const held = mockBranchesHeld ?? [];
-  mockBranchesHeld = null;
-  for (const ack of held) ack(MOCK_BRANCH_REPLIES[req.query.reply] ?? MOCK_BRANCH_REPLIES.ok);
-  res.json({ released: held.length });
+  // 按 cwd 放行：A 的旧回执到达时，B 必须仍在加载，才能验到选环境 await 后的文件夹守卫。
+  const released = req.query.cwd ? held.filter(item => item.cwd === req.query.cwd) : held;
+  mockBranchesHeld = req.query.cwd ? held.filter(item => item.cwd !== req.query.cwd) : null;
+  for (const { ack } of released) ack(MOCK_BRANCH_REPLIES[req.query.reply] ?? MOCK_BRANCH_REPLIES.ok);
+  res.json({ released: released.length });
 });
 
 app.post('/__set-environments', (req, res) => {
@@ -3394,9 +3400,9 @@ io.on('connection', socket => {
   });
   // 新会话的「源分支」选择器。真 server 走 git for-each-ref；这里给一组固定分支，
   // 让 E2E 能验"点开能选、选中回填"而不依赖宿主机有没有 git 仓库。
-  socket.on('git:branches', (_payload, ack) => {
+  socket.on('git:branches', (payload, ack) => {
     if (typeof ack !== 'function') return;
-    if (mockBranchesHeld) mockBranchesHeld.push(ack);
+    if (mockBranchesHeld) mockBranchesHeld.push({ cwd: payload?.cwd, ack });
     else ack(MOCK_BRANCH_REPLIES.ok);
   });
   // 保存的环境（同真 server 的 socket-environments）：存在内存里，文件夹断开由预置数据的 available 声明

@@ -6,7 +6,7 @@
 // 选中后开出来的会话却没带上。
 
 import { test, expect, type Page } from '@playwright/test';
-import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { captureUserMessages, clickHeaderMenuItem, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 
 const HOME_REPO = '/Users/you/code/claude-chat-mobile';
 const OTHER_REPO = '/Users/you/code/another-react-project';
@@ -121,24 +121,72 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  async function pickWorktreeEnvironmentWhileBranchesHeld(page: Page) {
-    await openCompose(page, [{ id: 'e1', name: 'React 隔离', cwd: OTHER_REPO, model: null, effort: null, worktree: true }]);
+  async function pickWorktreeEnvironmentWhileBranchesHeld(page: Page, extraEnvironments: object[] = []) {
+    await openCompose(page, [{ id: 'e1', name: 'React 隔离', cwd: OTHER_REPO, model: null, effort: null, worktree: true }, ...extraEnvironments]);
     await page.request.post('/__set-connected-folders', { params: { dirs: `${HOME_REPO},${OTHER_REPO}` } });
     await expect(page.getByTestId('compose-surface')).toBeVisible();
+    // 配置广播先把视图切到「无文件夹」；等这一处的分支加载完，别把它混进待测仓库的回执队列。
+    await expect(page.getByTestId('compose-project-pill')).toContainText('无文件夹');
+    await expect(page.getByTestId('compose-source-branch')).toContainText('dev');
     await page.request.post('/__hold-branches');
     await page.getByTestId('compose-environment-chip').click();
     await page.getByTestId('environment-row').filter({ hasText: 'React 隔离' }).getByTestId('environment-select').click();
     await expect(page.getByTestId('environment-picker')).toBeHidden();
+    await expect.poll(async () => (await (await page.request.get('/__held-branches')).json()).cwds).toEqual([OTHER_REPO]);
+  }
+
+  async function releaseBranchesAndWaitForRender(page: Page, params: Record<string, string>) {
+    const chip = await page.getByTestId('compose-environment-chip').elementHandle();
+    const { released } = await (await page.request.post('/__release-branches', { params })).json();
+    expect(released, '没有扣住目标回执，这条用例没有进入分支等待窗口').toBe(1);
+    // chip 文案在回执前就可能是正确的；等旧节点被替换，证明浏览器已处理回执并重绘，再查最终设置。
+    await expect.poll(() => chip!.evaluate(node => node.isConnected), { message: '回执尚未在页面上完成处理' }).toBe(false);
   }
 
   test('P0-ENV-2d 读分支临时失败：不算「不是 git 仓库」，worktree 意图留着，建不出来由服务端说', async ({ page }) => {
+    const sent = captureUserMessages(page);
     await pickWorktreeEnvironmentWhileBranchesHeld(page);
-    await page.request.post('/__release-branches', { params: { reply: 'git_failed' } });
+    await releaseBranchesAndWaitForRender(page, { reply: 'git_failed' });
+    await expect(page.getByTestId('compose-worktree-toggle')).toHaveCount(0); // 失败后的真实 UI：胶囊不显示
     await expect(page.getByTestId('compose-environment-chip')).toContainText('React 隔离');
 
     await page.locator('#input').fill('读分支失败也别落到主工作树');
     await page.locator('#btnSend').click();
     await expect(page.locator('#messages')).toContainText('worktree requested');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ cwd: OTHER_REPO, useWorktree: true });
+    expect(sent[0], '读不到当前分支时应交给服务端决定，不能带上另一个仓库的缓存分支').not.toHaveProperty('sourceBranch');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-ENV-2g 等分支时切文件夹并选另一个隔离环境：旧回执不能取消新文件夹的 worktree 意图', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await pickWorktreeEnvironmentWhileBranchesHeld(page, [
+      { id: 'e2', name: 'CCM 隔离', cwd: HOME_REPO, model: null, effort: null, worktree: true },
+    ]);
+    // 真正走文件夹选择器切到 B，再选 B 的环境；两个仓库的分支回执都留在路上。
+    await page.getByTestId('compose-project-pill').click();
+    await page.getByTestId('folder-picker-project').filter({ hasText: 'claude-chat-mobile' }).locator('button').first().click();
+    await expect(page.getByTestId('compose-project-pill')).toContainText('claude-chat-mobile');
+    await page.getByTestId('compose-environment-chip').click();
+    await page.getByTestId('environment-row').filter({ hasText: 'CCM 隔离' }).getByTestId('environment-select').click();
+    await expect(page.getByTestId('environment-picker')).toBeHidden();
+    await expect(page.getByTestId('compose-environment-chip')).toContainText('CCM 隔离');
+    await expect.poll(async () => (await (await page.request.get('/__held-branches')).json()).cwds).toEqual([OTHER_REPO, HOME_REPO]);
+
+    // A 回来而 B 未回：此刻 isAvailable=false，缺少 cwd 守卫就会把 B 已选的 worktree 取消。
+    await releaseBranchesAndWaitForRender(page, { cwd: OTHER_REPO });
+    await expect(page.getByTestId('compose-project-pill')).toContainText('claude-chat-mobile');
+    await expect(page.getByTestId('compose-environment-chip')).toContainText('CCM 隔离');
+    await page.locator('#input').fill('留在新选的文件夹隔离开工');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#messages')).toContainText('worktree requested');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ cwd: HOME_REPO, useWorktree: true });
+    expect(sent[0]).not.toHaveProperty('sourceBranch');
+    const { released } = await (await page.request.post('/__release-branches')).json();
+    expect(released, '发送时 B 的分支回执应仍被扣住').toBe(1);
 
     await expectNoBrowserErrors(page);
   });
