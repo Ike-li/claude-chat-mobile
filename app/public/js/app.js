@@ -146,6 +146,7 @@ import { readThemePref, writeThemePref, applyThemeToDocument } from './theme.js'
 // 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
 import { askQuestionResultView } from './logic/questions.js';
 import { createAppContext } from './app/context.js';
+import { createContextPanel } from './app/context-panel.js';
 import { createClientLogger } from './app/client-log.js';
 import { createPerfReporter } from './app/perf-report.js';
 import { createPerfTrace } from './app/perf-trace.js';
@@ -295,8 +296,9 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     $, addBar: (...args) => addBar(...args), copyText, messagesEl, renderLiveLine, updateWorkspaceChangeBadge,
     getCurrentCwd: () => currentCwd, getLiveLine: () => liveLine,
     getViewingInstanceId: () => viewingInstanceId,
+    onOpenContext: () => contextPanel.open(),
   });
-  const { cliStatusBarEl, hideStatuslineWrap, renderStatusLine } = statuslineView;
+  const { cliStatusBarEl, hideStatuslineWrap, renderStatusLine, getStatusPayload } = statuslineView;
   const permModeSelect = $('permModeSelect');  // 权限档切换器：选项/磁贴由 rebuildPermissionModeUi 按 SDK PermissionMode 填充
   const effortSelect = $('effortSelect');      // 思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
   const effortRow = $('effortRow');            // effort 整行容器：当前模型不支持 effort（如 haiku）时隐藏
@@ -4088,6 +4090,15 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     updateSendButtonState();
   }
   // 程序写输入框：input 事件的监听器会调 autosize（内含发送钮刷新），调用方不用再补。
+  // 上下文面板的「压缩会话」：走 send() 的整套闸（断线入队、发送去重），所以借一下输入框，同步发完立刻还回草稿。
+  // 附件在面板那头已经挡住了，否则会跟着 /compact 一起发出去。
+  function compactSession() {
+    const draft = inputEl.value;
+    setComposerText('/compact');
+    send();
+    setComposerText(draft);
+  }
+
   function setComposerText(text) {
     inputEl.value = text;
     inputEl.dispatchEvent(new Event('input'));
@@ -5218,6 +5229,18 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   });
   // 「这一个新会话页」的标识：离线重放时同一页的几条并成一个会话、另开的一页各开各的（见 compose-page.js）
   const composePage = createComposePage();
+  const contextPanel = createContextPanel(appContext, {
+    $, el, haptic, openSheet, closeSheet, appConfirm,
+    getInstanceId: () => viewingInstanceId,
+    getStatusPayload,
+    getCompactState: () => ({
+      mirrorReadonly: Boolean(mirrorReadonlySid),
+      turnRunning: _turnRunning,
+      pendingPrompt: approvals.hasPending() || elicitationSheet.hasPending(),
+      hasAttachments: attachments.items().length > 0,
+    }),
+    compactSession,
+  });
   // 两个子控制器只管各自半边的数据；sheet 开合与 tab 切换归 workspacePanel 统一持有
   const workspacePanel = createWorkspacePanel(appContext, {
     closeSheet,

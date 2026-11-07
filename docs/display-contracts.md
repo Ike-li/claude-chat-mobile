@@ -231,6 +231,21 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 
 **锚点**：`app/src/ops/statusline.js` `fetchAndAdoptContextUsage` / `shouldFetchContextUsage` / `readCachedCtxWindow` / `cacheCtxWindow` / `invalidateCtxOccupancy` · `tests/unit/display-contracts.test.mjs`（「ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）」） · `tests/invariants/statusline.test.mjs`（tick 不重打）
 
+### 3.5 上下文面板
+
+状态栏 ctx 段点进去的独立 sheet，对应 CLI 的 `/context`，不是 statusline 的一部分。状态栏文案不因它改变。
+
+| 项 | 契约 |
+|----|------|
+| **取数** | 打开时才取，不进 10s tick：先 `summary`（本地估算，零请求），再 `full`（校准）。CLI 2.1.x 实测 `full` 首次打一轮 `count_tokens`，之后同一进程 0 发，跨回合也是 |
+| **估算标注** | `summary` 的数字可能和 `full` 差得不小，到 `full` 回来之前必须写明是估算 |
+| **距自动压缩** | `autoCompactThreshold - totalTokens`。**禁止**拿 `kind:'free'` 那一行当答案：真 CLI 上 buffer 不一定单独成行，free 会多算预留的 3.3 万 |
+| **明细** | 只列 `kind` 不是 `deferred`、且 token 大于 0 的行。行名用 CLI 给的 `name`，不翻译 |
+| **CLI 驾驶** | 不向实例要数据，只显示 bridge 给的总量并说明 |
+| **压缩会话** | 走 `send()` 发 `/compact`，草稿还原。有待发附件、回合在途、有待答复、只读时不可点，原因写在按钮旁（`send()` 的提示在消息流里，被面板盖着） |
+| **不做** | 自动压缩阈值设置（写 CLI settings，影响超出当前会话）、MCP 工具和记忆文件的二级列表 |
+| **锚点** | `tests/unit/logic-context-panel.test.mjs` · `tests/unit/context-usage-socket.test.mjs` · E2E P0-CTX-\* |
+
 ---
 
 ## §4 改契约时怎么动
