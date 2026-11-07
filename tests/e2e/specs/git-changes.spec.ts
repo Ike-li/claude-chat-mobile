@@ -2,7 +2,7 @@
 // 顶部 pill → 工作区面板「改动」tab（git:status / git:diff mock）
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
+import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
 import { openSessionsSidebar } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -77,7 +77,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-GIT-3 compose 新会话页：pill 可点，文件与改动两个 tab 都能用', async ({ page }) => {
     await gotoMock(page);
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
     // 前提确认：确实停在「还没有 session」的那一格——否则下面测的就是普通会话页，白测
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);

@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { clickHeaderMenuItem, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 import { ANOTHER_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -9,7 +9,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     // 1. 点击顶部日志按钮打开交互日志 bottom sheet。
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toBeVisible();
     await expect(page.locator('#consoleModal')).toContainText('交互日志');
     await expect(page.locator('#consoleClose')).toBeVisible();
@@ -36,7 +36,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:statusline');
     await expect(page.locator('#messages')).toContainText('Simulated Terminal StatusLine updated successfully');
 
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toBeVisible();
     await expect(page.locator('#consoleLogArea')).toContainText('[MOCK_LOG]');
     await page.locator('#consoleClear').click();
@@ -55,7 +55,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await ensureComposerReady(page);
 
     await page.locator('#input').fill('draft before console');
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toBeVisible();
     await page.locator('#consoleClose').click();
     await expect(page.locator('#consoleModal')).toBeHidden();
@@ -74,7 +74,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:tab');
     await waitForIdle(page);
 
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toBeVisible();
     await expect(page.locator('#consoleLogArea')).toContainText('Session trace for Visual Sandbox (Main)');
     await page.locator('#consoleClose').click();
@@ -85,7 +85,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
 
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toBeVisible();
     await expect(page.locator('#consoleLogArea')).toContainText('Session trace for Another App Concurrency');
     await expect(page.locator('#consoleLogArea')).not.toContainText('Session trace for Visual Sandbox (Main)');
@@ -100,7 +100,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('#messages')).toContainText('Simulated Terminal StatusLine updated successfully');
 
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toBeVisible();
     await expect(page.locator('#consoleLogArea')).toContainText('[MOCK_LOG]');
     await page.locator('#consoleClear').click();
@@ -112,7 +112,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('#messages')).toContainText('Console log after clear completed.');
 
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toBeVisible();
     await expect(page.locator('#consoleLogArea')).toContainText('[MOCK_LOG_AFTER_CLEAR]');
     await expect(page.locator('#consoleLogArea')).toContainText('test:console-log-after-clear');
@@ -130,7 +130,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
 
     // turn 结果到达记 recv 锚点（send↔recv 对账）
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleLogArea')).toContainText('WEB_RECV');
     await page.locator('#consoleClose').click();
 
@@ -145,7 +145,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const afterReload = await page.evaluate(() => localStorage.getItem('ccm_client_logs'));
     expect(afterReload).toBeTruthy();
 
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toBeVisible();
     await expect(page.locator('#consoleLogArea')).not.toBeEmpty();
 
@@ -159,7 +159,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:statusline');
     await waitForIdle(page);
 
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleCopy')).toBeVisible();
     await page.locator('#consoleCopy').click();
     await expect(page.locator('#consoleCopy')).toHaveText(/已复制|复制失败/);
@@ -173,7 +173,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:diag-sample');
     await waitForIdle(page);
 
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toBeVisible();
 
     // 「全部」：诊断行与交互行同屏，且诊断行是判定过的人话，不是裸 {"subsystem":...} JSON

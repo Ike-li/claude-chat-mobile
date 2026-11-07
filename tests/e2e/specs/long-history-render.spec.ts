@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
+import { reloadSessionFromSettings, clickHeaderMenuItem, expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // Part B 性能优化：长会话（2000 条，触达 app/src/sessions/history.js 的 HISTORY_MAX_MESSAGES 上限）切入时
@@ -275,7 +275,7 @@ test.describe('P0 长会话切入分块渲染', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-LH8 两段之间从「⋯」重新加载：上一轮的更早那段作废，不插进新一轮，结果恰好一份', async ({ page }) => {
+  test('P0-LH8 两段之间重新加载：上一轮的更早那段作废，不插进新一轮，结果恰好一份', async ({ page }) => {
     await gotoMock(page);
     await holdIdle(page);
     await openUntilRecentInserted(page);
@@ -286,8 +286,7 @@ test.describe('P0 长会话切入分块渲染', () => {
       w.__idlePass = true;
     });
 
-    await page.locator('#btnMore').click();
-    await page.locator('#moreReloadSession').click();
+    await reloadSessionFromSettings(page);
     await expect(page.locator('#messages [data-history-pending]')).toHaveCount(0, { timeout: 15000 });
     await expect(bubbles(page)).toHaveCount(2000);
     await page.evaluate(() => {
@@ -329,7 +328,7 @@ test.describe('P0 长会话切入分块渲染', () => {
     await expect(reloadButton(page)).toBeVisible({ timeout: 15_000 });
     expect(await bubbleIndexes(page), '拿到的最近 300 条应该都留着').toEqual(Array.from({ length: 300 }, (_, k) => 1700 + k));
     await expect(page.locator('#messages [data-history-pending]'), '没补齐的不能被当成整份存进缓存（#307）').toHaveCount(1);
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     const log = page.locator('#consoleLogArea');
     await expect(log.locator(':scope > div', { hasText: /\[PERF\] 打开会话.*更早回执 \+\d+（对不上）/ }), '[PERF] 行应记下更早那段对不上').toHaveCount(1, { timeout: 10_000 });
     await page.locator('#consoleClose').click();

@@ -6,7 +6,7 @@
 // 选中后开出来的会话却没带上。
 
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 
 const HOME_REPO = '/Users/you/code/claude-chat-mobile';
 const OTHER_REPO = '/Users/you/code/another-react-project';
@@ -15,7 +15,7 @@ async function openCompose(page: Page, environments: object[] = []) {
   await gotoMock(page);
   await waitForIdle(page);
   await page.request.post('/__set-environments', { params: { list: JSON.stringify(environments) } });
-  await page.locator('#btnNew').click();
+  await clickHeaderMenuItem(page, 'btnNew');
   await expect(page.getByTestId('compose-surface')).toBeVisible();
 }
 

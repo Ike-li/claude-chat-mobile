@@ -9,7 +9,7 @@
 //   · 缓解：某条抛错停住时（根因未知），提示条上原地给「重新加载」，重新拉一次历史（不刷新整页），不重复渲染。
 
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { reloadSessionFromSettings, clickHeaderMenuItem, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 const LONG_NOTICE = '仅显示最近 2000 条历史消息（共 2100 条），更早的没有加载';
@@ -23,7 +23,7 @@ async function openLongHistory(page: Page) {
 }
 
 async function consoleLogText(page: Page) {
-  await page.locator('#btnConsole').click();
+  await clickHeaderMenuItem(page, 'btnConsole');
   await expect(page.locator('#consoleModal')).toBeVisible();
   return page.locator('#consoleLogArea');
 }
@@ -183,8 +183,7 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
     await expect.poll(() => syncs.some(p => p.instanceId === replacement.instanceId && p.sessionId === replacement.sessionId)).toBe(true);
 
     await page.evaluate(() => { (window as unknown as HistoryIdleGate).__passHistoryChunks = true; });
-    await page.locator('#btnMore').click();
-    await page.locator('#moreReloadSession').click();
+    await reloadSessionFromSettings(page);
     await expectCompleteLongHistory(page);
     await releaseHistoryChunks(page);
     await expectCompleteLongHistory(page);
@@ -346,16 +345,12 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
     expect(pageErrorsExcept(page, 'injected render failure')).toEqual([]);
   });
 
-  // 原地按钮只挂在已知的两处停下的地方上；别的路径（正文假设 3）停住时，靠顶栏「⋯」里常驻的那一项
-  test('P0-HIST-STALL-3 顶栏「⋯」→「重新加载本会话」：停住后同样能恢复、不重复；没打开会话时这一项不可点', async ({ page }) => {
+  // 原地按钮只挂在已知的两处停下的地方上；别的路径（正文假设 3）停住时，靠会话设置里常驻的那一项
+  test('P0-HIST-STALL-3 会话设置 →「重新加载本会话」：停住后同样能恢复、不重复；首页没有这个入口', async ({ page }) => {
     await gotoMock(page);
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
-    await page.locator('#btnMore').click();
-    await expect(page.locator('#moreModal')).toBeVisible();
-    await expect(page.locator('#moreReloadSession'), '首页没有会话，不该能点').toBeDisabled();
-    await page.locator('#moreCancel').click();
-    await expect(page.locator('#moreModal')).toBeHidden();
+    await expect(page.locator('#pillDefaults'), '首页没有会话，会话设置的入口不该在').toBeHidden();
 
     await page.evaluate(() => {
       const m = (window as unknown as { marked: { parse: (s: string, ...rest: unknown[]) => string } }).marked;
@@ -370,9 +365,7 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
     await expect(page.locator('#messages')).toContainText(LONG_NOTICE, { timeout: 15_000 });
     await expect(bubbles(page), '前提：注入后停在只有提示条').toHaveCount(0);
 
-    await page.locator('#btnMore').click();
-    await page.locator('#moreReloadSession').click();
-    await expect(page.locator('#moreModal')).toBeHidden();
+    await reloadSessionFromSettings(page);
     await expect(page.locator('[data-testid="assistant-message"]', { hasText: 'Long history final message marker' })).toBeVisible({ timeout: 15_000 });
     await expect(bubbles(page), '重新加载后条数不对（丢了或重复了）').toHaveCount(2000);
     await expect(page.locator('#messages').getByText(LONG_NOTICE), '提示条重复了').toHaveCount(1);
@@ -380,7 +373,7 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
   });
 
   // #354 review：手动重新加载时实例没变，上一轮还在分块渲染的话，实例守卫拦不住它——画完会把自己那份也插进来
-  test('P0-HIST-STALL-4 长历史还在分块渲染时从「⋯」重新加载：上一轮作废，不会和新一轮叠成两份', async ({ page }) => {
+  test('P0-HIST-STALL-4 长历史还在分块渲染时重新加载：上一轮作废，不会和新一轮叠成两份', async ({ page }) => {
     await gotoMock(page);
     // 三段式调度：先全部攥住（上一轮停在第 2 块）→ 放行新排的（重新加载那一轮照常画完）→ 再把攥住的放出去，
     // 数着还没跑的空闲回调，等它们清空再数气泡，不靠固定等待
@@ -402,8 +395,7 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
     await expect(bubbles(page), '前提：上一轮停在半路，还没插入').toHaveCount(0);
 
     await page.evaluate(() => { (window as unknown as { __passThrough: boolean }).__passThrough = true; });
-    await page.locator('#btnMore').click();
-    await page.locator('#moreReloadSession').click();
+    await reloadSessionFromSettings(page);
     await expect(page.locator('[data-testid="assistant-message"]', { hasText: 'Long history final message marker' })).toBeVisible({ timeout: 15_000 });
     await expect(bubbles(page)).toHaveCount(2000);
 
@@ -417,14 +409,13 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
     expect((page as unknown as { __ccmErrors?: string[] }).__ccmErrors ?? []).toEqual([]);
   });
 
-  test('P0-HIST-STALL-4b 历史回执还在路上就从「⋯」重新加载：迟到的上一份回执作废并记日志，提示条不重复', async ({ page }) => {
+  test('P0-HIST-STALL-4b 历史回执还在路上就重新加载：迟到的上一份回执作废并记日志，提示条不重复', async ({ page }) => {
     await gotoMock(page);
     await page.request.post('/__hold-next-history-ack');
     await openLongHistory(page);
-    await expect(page.locator('#moreReloadSession')).toBeAttached();
+    await expect(page.locator('#settingsReloadSession')).toBeAttached();
 
-    await page.locator('#btnMore').click();
-    await page.locator('#moreReloadSession').click();
+    await reloadSessionFromSettings(page);
     await expect(page.locator('[data-testid="assistant-message"]', { hasText: 'Long history final message marker' })).toBeVisible({ timeout: 15_000 });
     await expect(bubbles(page)).toHaveCount(2000);
 
@@ -440,7 +431,7 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
 
   // #354 review：重新加载会 clearView（连审批 / 提问卡一起清），而 session:history 不带待办——得像重连那条路一样，
   // 画完后用 sync:since 回执里的 pending 快照补回来，否则服务端还在等批、手机上却没了卡
-  test('P0-HIST-STALL-5 有待审批时从「⋯」重新加载：审批卡按服务端快照补回来，不会凭空消失', async ({ page }) => {
+  test('P0-HIST-STALL-5 有待审批时重新加载：审批卡按服务端快照补回来，不会凭空消失', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:tab');
     await waitForIdle(page);
@@ -448,10 +439,9 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
     await expect(page.locator('#permModal')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('#permInput')).toContainText('rm -rf /tmp/stale');
 
-    // 审批挂起时顶栏抬在 sheet 之上（body.nav-escape），「⋯」点得到
-    await page.locator('#btnMore').click();
-    await page.locator('#moreReloadSession').click();
-    await expect(page.locator('#moreModal')).toBeHidden();
+    // 这条守的是「重载后按快照补回待办」，不是入口：审批 sheet 盖着底栏，点不到模型 chip（只有顶栏和抽屉抬在
+    // sheet 之上），所以直接派发点击。真人走到这一步是先答复，或从抽屉切走再切回。
+    await page.locator('#settingsReloadSession').dispatchEvent('click');
     await expect(page.locator('#historyLoadingCard'), '前提：重新加载那一趟走完').toHaveCount(0, { timeout: 15_000 });
     await expect(page.locator('#permModal'), '重新加载后审批卡没了').toBeVisible({ timeout: 10_000 });
     await expect(page.locator('#permInput')).toContainText('rm -rf /tmp/stale');

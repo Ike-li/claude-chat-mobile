@@ -8,7 +8,7 @@
 // 热加载生没生效由真 server 判（tests/invariants/folder-picker.test.mjs 与 server/folders.test.mjs），
 // mock 只用一棵假家目录树回放那几种原因码。
 import { test, expect, type Page } from '@playwright/test';
-import { captureUserMessages, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { clickHeaderMenuItem, captureUserMessages, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, openSessionsSidebar, workspaceRow } from '../../helpers/sidebar-ui';
 
 const SCRATCH = '/Users/you/Library/Application Support/claude-chat-mobile/scratch-workspaces';
@@ -17,7 +17,7 @@ const pickerTitle = (page: Page) => page.locator('[data-testid="folder-picker-ti
 const entry = (page: Page, name: string) => picker(page).locator('[data-testid="folder-picker-entry"]', { has: page.locator('[data-folder-label]', { hasText: new RegExp(`^${name}$`) }) });
 
 async function openPickerFromCompose(page: Page) {
-  await page.locator('#btnNew').click();
+  await clickHeaderMenuItem(page, 'btnNew');
   await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
   await page.locator('[data-testid="compose-project-pill"]').click();
   await expect(picker(page)).toHaveClass(/sheet-open/);
@@ -217,7 +217,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.context().setOffline(true);
     await waitUntilDisconnected(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await page.locator('#input').fill('新的一页');
     await page.locator('#btnSend').click();
     await expect(page.locator('#input')).toHaveValue('');

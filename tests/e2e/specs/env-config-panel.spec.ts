@@ -3,7 +3,7 @@
 // 最重要的一条是「敏感项永远拿不到明文」——服务端只下发 { set, length }，页面上不该出现任何密钥值。
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-31 服务与配置面板：入口打开 → 分组渲染 → 敏感项遮罩 → 只读项禁用', async ({ page }) => {
@@ -222,12 +222,12 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
   // 首页 / 新会话页上点重启：addBar 会先清掉空态表面再插那一行；撤掉那一行后要把空态表面还回来，
   // 否则 viewing 仍是 null、广播不进 bindView，主区一片空白，只能手动切走或刷新。
   for (const [label, enter, surface] of [
-    ['首页', '#btnHome', '[data-testid="home-dashboard"]'],
-    ['新会话页', '#btnNew', '[data-testid="compose-surface"]'],
+    ['首页', 'btnHome', '[data-testid="home-dashboard"]'],
+    ['新会话页', 'btnNew', '[data-testid="compose-surface"]'],
   ] as const) {
     test(`P0-31o 开发者模式：在${label}重启，撤掉那一行后空态表面回来`, async ({ page }) => {
       await gotoMock(page);
-      await page.locator(enter).click();
+      await clickHeaderMenuItem(page, enter);
       await expect(page.locator(surface)).toBeVisible();
       await page.request.post('/__dev-mode?canRestart=1');
       await openGeneralPage(page, 'behavior');
