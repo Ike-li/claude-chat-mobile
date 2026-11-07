@@ -517,7 +517,7 @@
             <span id="contextUsed" class="text-sm font-semibold text-ink"></span>
             <span id="contextTokens" class="text-xs text-ink-soft tabular-nums"></span>
           </div>
-          <div class="mt-1.5 h-2 rounded-full bg-sunk overflow-hidden"><div id="contextBar" class="h-full rounded-full bg-accent"></div></div>
+          <div id="contextBar" class="context-bar mt-1.5 h-2 rounded-full overflow-hidden flex"></div>
         </div>
         <div class="flex items-center justify-between gap-3">
           <div class="min-w-0">
@@ -526,10 +526,8 @@
           </div>
           <button id="contextCompact" type="button" class="shrink-0 px-2.5 py-1.5 rounded-lg border border-line text-xs font-medium text-ink active:bg-sunk disabled:opacity-50" data-testid="context-compact">压缩会话</button>
         </div>
-        <details id="contextDetails" class="hidden border-t border-line-soft pt-2">
-          <summary class="text-xs font-semibold text-ink-soft cursor-pointer select-none">明细</summary>
-          <div id="contextRows" class="mt-2 space-y-1.5"></div>
-        </details>
+        <div id="contextRows" class="hidden border-t border-line-soft pt-2 space-y-1.5"></div>
+        <div id="contextLists" class="hidden border-t border-line-soft pt-2 space-y-1"></div>
         <div id="contextNote" class="hidden text-[11px] text-ink-faint" role="status" data-testid="context-note"></div>
       </div>
     </div>

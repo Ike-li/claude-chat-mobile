@@ -6,7 +6,8 @@ import { t } from '../i18n.js';
 import { compactBlockReason, compactLineText, contextPanelView, usageFromStatusCtx } from '../logic/context-panel.js';
 
 const ACK_MS = { summary: 10_000, full: 25_000 }; // 比服务端的 RPC 超时长：先让服务端说明白
-const BAR_TONES = { accent: 'bg-accent', warning: 'bg-warning', danger: 'bg-danger' };
+const WHOLE_BAR_TONES = { accent: 'bg-accent', warning: 'bg-warning', danger: 'bg-danger' };
+const toneClass = tone => WHOLE_BAR_TONES[tone] ?? `ctx-tone-${tone}`;
 
 export function createContextPanel(context, {
   $: byId,
@@ -27,8 +28,8 @@ export function createContextPanel(context, {
   const compactLine = byId('contextCompactLine');
   const compactHint = byId('contextCompactHint');
   const compactBtn = byId('contextCompact');
-  const details = byId('contextDetails');
   const rowsEl = byId('contextRows');
+  const listsEl = byId('contextLists');
   const noteEl = byId('contextNote');
   let loadGen = 0; // 关掉再开时，上一次迟到的回包不能盖掉这一次
 
@@ -37,25 +38,58 @@ export function createContextPanel(context, {
     noteEl.classList.toggle('hidden', !text);
   }
 
+  function rowEl(row) {
+    const line = el('<div class="flex items-center gap-2 text-xs" data-testid="context-row"></div>');
+    const swatch = el(`<span class="context-swatch ${toneClass(row.tone)}" data-tone="${row.tone}"></span>`);
+    const name = el('<span class="flex-1 min-w-0 truncate text-ink-soft"></span>');
+    name.textContent = row.name;
+    const amount = el('<span class="shrink-0 tabular-nums text-ink"></span>');
+    amount.textContent = row.tokens;
+    const percent = el('<span class="shrink-0 w-12 text-right tabular-nums text-ink-faint"></span>');
+    percent.textContent = row.percent;
+    line.append(swatch, name, amount, percent);
+    return line;
+  }
+
+  function listEl(list, open) {
+    const details = el(`<details class="context-list" data-key="${list.key}" data-testid="context-list-${list.key}"></details>`);
+    details.open = open;
+    const summary = el('<summary></summary>');
+    const label = el('<span class="flex-1 min-w-0"></span>');
+    label.textContent = list.label;
+    const count = el('<span class="shrink-0 tabular-nums text-ink-faint"></span>');
+    count.textContent = String(list.count);
+    summary.append(label, count);
+    const rows = el('<div class="mt-1 pl-3 space-y-1"></div>');
+    rows.append(...list.rows.map(row => {
+      const line = el('<div class="flex items-baseline gap-2 text-[11px]"></div>');
+      const name = el('<span class="flex-1 min-w-0 break-all text-ink-soft"></span>');
+      name.textContent = row.name;
+      const amount = el('<span class="shrink-0 tabular-nums text-ink-faint"></span>');
+      amount.textContent = row.tokens;
+      line.append(name, amount);
+      return line;
+    }));
+    details.append(summary, rows);
+    return details;
+  }
+
   function paint(usage) {
     const view = contextPanelView(usage);
     used.textContent = view.usedText;
     tokens.textContent = view.tokensText;
-    bar.style.width = `${view.barPercent}%`;
-    bar.className = `h-full rounded-full ${BAR_TONES[view.barTone]}`;
-    compactLine.textContent = compactLineText(usage);
-    details.classList.toggle('hidden', !view.rows.length);
-    rowsEl.replaceChildren(...view.rows.map(row => {
-      const line = el('<div class="flex items-baseline gap-2 text-xs"></div>');
-      const name = el('<span class="flex-1 min-w-0 truncate text-ink-soft"></span>');
-      name.textContent = row.name;
-      const amount = el('<span class="shrink-0 tabular-nums text-ink"></span>');
-      amount.textContent = row.tokens;
-      const percent = el('<span class="shrink-0 w-12 text-right tabular-nums text-ink-faint"></span>');
-      percent.textContent = row.percent;
-      line.append(name, amount, percent);
-      return line;
+    bar.replaceChildren(...view.segments.map(segment => {
+      const part = el(`<div class="h-full ${toneClass(segment.tone)}"></div>`);
+      part.style.width = `${segment.percent}%`;
+      return part;
     }));
+    compactLine.textContent = compactLineText(usage);
+    rowsEl.classList.toggle('hidden', !view.rows.length);
+    rowsEl.replaceChildren(...view.rows.map(rowEl));
+    // summary 换 full 时整段重画，用户展开的列表要留着
+    const opened = new Set([...listsEl.querySelectorAll('details[open]')].map(node => node.dataset.key));
+    listsEl.classList.toggle('hidden', !view.lists.length);
+    listsEl.replaceChildren(...view.lists.map(list => listEl(list, opened.has(list.key))));
   }
 
   function paintCompactState(canCompact) {
@@ -95,7 +129,7 @@ export function createContextPanel(context, {
     const gen = ++loadGen;
     const payload = getStatusPayload();
     const cliDriven = payload?.source?.kind === 'cli';
-    details.open = false;
+    listsEl.replaceChildren();
     paint(usageFromStatusCtx(payload?.ctx));
     paintCompactState(!cliDriven);
     openSheet(modal);

@@ -506,6 +506,43 @@ header.header-menu-open {
   flex-shrink: 0;
   color: var(--ink-soft);
 }
+/* 上下文面板的分段色（app/context-panel.js）。按占用排名给：0 是占得最多的那一类，不代表某个固定类别。
+   轨道底色就是空闲，所以 free 的色块和轨道同色。 */
+.context-bar,
+.ctx-tone-free { background: var(--line); }
+.ctx-tone-0 { background: #2f80d8; }
+.ctx-tone-1 { background: #e8622c; }
+.ctx-tone-2 { background: #12a58a; }
+.ctx-tone-3 { background: #f2a20c; }
+.ctx-tone-4 { background: #8f7bd8; }
+.ctx-tone-other { background: var(--ink-faint); }
+.ctx-tone-buffer,
+.ctx-tone-deferred { background: color-mix(in srgb, var(--ink-faint) 45%, transparent); }
+.context-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.context-list summary {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.context-list summary::-webkit-details-marker { display: none; }
+.context-list summary::before {
+  content: '›';
+  width: 0.625rem;
+  color: var(--ink-faint);
+  transition: transform 0.15s;
+}
+.context-list[open] summary::before { transform: rotate(90deg); }
 .conn-rtt-chip {
   display: inline-flex;
   align-items: center;

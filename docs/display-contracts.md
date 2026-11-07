@@ -240,10 +240,12 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 | **取数** | 打开时才取，不进 10s tick：先 `summary`（本地估算，零请求），再 `full`（校准）。CLI 2.1.x 实测 `full` 首次打一轮 `count_tokens`，之后同一进程 0 发，跨回合也是 |
 | **估算标注** | `summary` 的数字可能和 `full` 差得不小，到 `full` 回来之前必须写明是估算 |
 | **距自动压缩** | `autoCompactThreshold - totalTokens`。**禁止**拿 `kind:'free'` 那一行当答案：真 CLI 上 buffer 不一定单独成行，free 会多算预留的 3.3 万 |
-| **明细** | 只列 `kind` 不是 `deferred`、且 token 大于 0 的行。行名用 CLI 给的 `name`，不翻译 |
+| **明细** | 常显，它是分段条的图例。列 token 大于 0 的行：已用按 token 降序，然后 buffer、free、deferred。`deferred` 不占窗口，百分比写 `—`。行名用 CLI 给的 `name`，不翻译 |
+| **分段色** | 对齐桌面端：连 buffer 最多 5 段，放不下时前几名彩色，其余并成灰色 `other`。**颜色按占用排名给，不按类别**，同一类别在不同会话里颜色可以不同。CLI 给的 `color` 是它的主题名，不用 |
+| **列表** | MCP 工具、记忆文件各一个可展开列表，带数量，默认收起。`full` 档里延迟加载的工具 token 是 0，写 `—` |
 | **CLI 驾驶** | 不向实例要数据，只显示 bridge 给的总量并说明 |
 | **压缩会话** | 走 `send()` 发 `/compact`，草稿还原。有待发附件、回合在途、有待答复、只读时不可点，原因写在按钮旁（`send()` 的提示在消息流里，被面板盖着） |
-| **不做** | 自动压缩阈值设置（写 CLI settings，影响超出当前会话）、MCP 工具和记忆文件的二级列表 |
+| **不做** | 自动压缩阈值设置（写 CLI settings，影响超出当前会话） |
 | **锚点** | `tests/unit/logic-context-panel.test.mjs` · `tests/unit/context-usage-socket.test.mjs` · E2E P0-CTX-\* |
 
 ---

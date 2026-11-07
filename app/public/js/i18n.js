@@ -314,6 +314,8 @@ export const EN_DICT = Object.freeze({
   // 工作区面板两 tab（原 chooser 的「浏览项目文件 / 工作区改动」两张大卡已随 chooser 层一并删除）
   '📁 文件': '📁 Files',
   '📝 改动': '📝 Changes',
+  'MCP 工具': 'MCP tools',
+  '记忆文件': 'Memory files',
   '📦 产出': '📦 Outputs',
   '已删除': 'Deleted',
   '另有': 'Another',
@@ -324,7 +326,6 @@ export const EN_DICT = Object.freeze({
   '拿不到列表': 'Could not load the list',
   '上下文': 'Context',
   '已用': 'Used',
-  '明细': 'Details',
   '压缩会话': 'Compact session',
   '压缩': 'Compact',
   '压缩会话？': 'Compact this session?',

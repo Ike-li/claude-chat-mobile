@@ -17,20 +17,62 @@ async function openPanel(page: Page, scenario = 'test:statusline') {
 }
 
 test.describe('P0 上下文面板', () => {
-  test('P0-CTX-1 点 ctx 打开：用量、距自动压缩，明细默认折叠，展开看到类别', async ({ page }) => {
+  test('P0-CTX-1 点 ctx 打开：用量、距自动压缩、彩色分段和图例，deferred 写 —', async ({ page }) => {
     await openPanel(page);
     await expect(page.locator('#contextUsed')).toHaveText('已用 77%');
     await expect(page.locator('#contextTokens')).toHaveText('770k / 1.0m');
     await expect(page.locator('#contextCompactLine')).toHaveText('距自动压缩还剩 197k');
-    await expect(page.locator('#contextRows')).toBeHidden();
-    await page.locator('#contextDetails summary').click();
-    await expect(page.locator('#contextRows')).toContainText('Messages');
-    await expect(page.locator('#contextRows')).toContainText('684k');
-    await expect(page.locator('#contextRows')).not.toContainText('deferred');
+
+    const rows = page.locator('#contextRows [data-testid="context-row"]');
+    await expect(rows.nth(0)).toContainText('Messages');
+    await expect(rows.nth(0)).toContainText('684k');
+    await expect(rows.nth(0).locator('[data-tone="0"]')).toHaveCount(1);
+    await expect(rows.nth(1).locator('[data-tone="1"]')).toHaveCount(1);
+    await expect(rows.last()).toContainText('MCP tools (deferred)');
+    await expect(rows.last()).toContainText('—');
+    await expect(rows.last().locator('[data-tone="deferred"]')).toHaveCount(1);
     await expect(note(page)).toBeHidden();
+
+    const bar = page.locator('#contextBar > *');
+    await expect(bar).toHaveCount(2); // Messages、System tools；空闲是底色，deferred 不占窗口
+    const colors = await bar.evaluateAll(els => els.map(el => getComputedStyle(el).backgroundColor));
+    expect(new Set(colors).size, '两段颜色一样：CSS 没生效').toBe(2);
 
     await page.locator('#contextClose').click();
     await expect(modal(page)).toBeHidden();
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-CTX-1b MCP 工具和记忆文件：带数量，默认收起，展开看到每一项', async ({ page }) => {
+    await openPanel(page);
+    const mcp = page.locator('[data-testid="context-list-mcp"]');
+    await expect(mcp.locator('summary')).toContainText('MCP 工具');
+    await expect(mcp.locator('summary')).toContainText('2');
+    await expect(mcp.getByText('chrome · read_page')).toBeHidden();
+    await mcp.locator('summary').click();
+    await expect(mcp.getByText('chrome · read_page')).toBeVisible();
+    await expect(mcp).toContainText('2k');
+    await expect(mcp.getByText('chrome · navigate').locator('..')).toContainText('—');
+
+    const memory = page.locator('[data-testid="context-list-memory"]');
+    await memory.locator('summary').click();
+    await expect(memory).toContainText('~/.claude/CLAUDE.md');
+    await expect(memory).toContainText('7k');
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-CTX-1c summary 换成 full 时，已展开的列表不收回去', async ({ page }) => {
+    await gotoMock(page);
+    await setFixture(page, { holdFull: true });
+    await sendChatMessage(page, 'test:statusline');
+    await waitForIdle(page);
+    await page.locator('#cliStatusWrap summary').click();
+    await page.locator('[data-testid="status-ctx"]').click();
+    const mcp = page.locator('[data-testid="context-list-mcp"]');
+    await mcp.locator('summary').click();
+    await page.request.post('/__release-context-full');
+    await expect(page.locator('#contextUsed')).toHaveText('已用 77%');
+    await expect(mcp.getByText('chrome · read_page')).toBeVisible();
     await expectNoBrowserErrors(page);
   });
 
@@ -60,7 +102,8 @@ test.describe('P0 上下文面板', () => {
     await expect(modal(page)).toBeVisible();
     await expect(note(page)).toContainText('电脑终端');
     await expect(page.locator('#contextUsed')).toContainText('已用');
-    await expect(page.locator('#contextDetails')).toBeHidden();
+    await expect(page.locator('#contextRows')).toBeHidden();
+    await expect(page.locator('#contextLists')).toBeHidden();
     const calls = await (await page.request.get('/__context-usage-calls')).json();
     expect(calls).toEqual([]);
     await expectNoBrowserErrors(page);

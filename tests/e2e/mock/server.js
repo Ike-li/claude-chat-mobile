@@ -1801,7 +1801,13 @@ const mockUsageBody = totalTokens => ({
     { id: 'messages', name: 'Messages', tokens: 684300, kind: 'used' },
     { id: 'system_tools', name: 'System tools', tokens: 22100, kind: 'used' },
     { id: 'free_space', name: 'Free space', tokens: 197000, kind: 'free' },
+    { id: 'mcp_tools_deferred', name: 'MCP tools (deferred)', tokens: 68700, kind: 'deferred' },
   ],
+  mcpTools: [
+    { name: 'mcp__chrome__read_page', serverName: 'chrome', tokens: 2100 },
+    { name: 'mcp__chrome__navigate', serverName: 'chrome', tokens: 0 },
+  ],
+  memoryFiles: [{ path: '~/.claude/CLAUDE.md', tokens: 6800 }],
 });
 
 // 文件链接：file:open 的票据在 mock 里就是 relPath，/f/ 按它回这张表的字节。

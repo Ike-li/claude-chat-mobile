@@ -3,15 +3,21 @@
 // 实测（CLI 真进程 + 假 Messages API，2026-11-07）：summary 走本地估算，零 count_tokens；full 首次 18 发，
 // 之后同一进程里 0 发，跨回合也是。所以面板先要 summary 出数，再要 full 校准，开合多少次都不会放大请求。
 // CLI 驾驶的会话没有 q，这里回 unavailable，面板只显示 bridge 给的总量。
+import { homedir } from 'node:os';
+
 const RPC_TIMEOUT_MS = { summary: 3000, full: 20_000 }; // full 的冷路径实测 7.6s
+const collapseHome = path => (path.startsWith(`${homedir()}/`) ? `~${path.slice(homedir().length)}` : path);
 
 export function contextUsageView(usage) {
   const { totalTokens, maxTokens, percentage, autoCompactThreshold, isAutoCompactEnabled } = usage;
   return {
     totalTokens, maxTokens, percentage, autoCompactThreshold, isAutoCompactEnabled,
     categories: usage.categories
-      .filter(c => c.kind !== 'deferred' && c.tokens > 0)
+      .filter(c => c.tokens > 0)
       .map(({ id, name, tokens, kind }) => ({ id, name, tokens, kind })),
+    // full 档里延迟加载的工具 tokens 是 0（实测），工具本身还在，不能按 0 过滤
+    mcpTools: (usage.mcpTools ?? []).map(({ name, serverName, tokens }) => ({ name, serverName, tokens })),
+    memoryFiles: (usage.memoryFiles ?? []).map(({ path, tokens }) => ({ path: collapseHome(path), tokens })),
   };
 }
 

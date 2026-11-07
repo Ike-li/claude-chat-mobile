@@ -26,19 +26,63 @@ export function compactLineText({ totalTokens, autoCompactThreshold, isAutoCompa
   return `${t('距自动压缩还剩')} ${statuslineFmtTok(left)}`;
 }
 
-export function contextPanelView({ percentage, totalTokens, maxTokens, categories = [] }) {
+// 分段条连 buffer 最多 5 段，放不下的并成灰色 other（同桌面端）。
+// 颜色按占用排名给，不按类别：同一类别在不同会话里颜色可以不同，桌面端也是这样，别写成类别到颜色的映射。
+const MAX_SEGMENTS = 5;
+
+function coloredCount(usedCount, bufferCount) {
+  return usedCount + bufferCount > MAX_SEGMENTS ? MAX_SEGMENTS - bufferCount : usedCount;
+}
+
+const byTokensDesc = (a, b) => b.tokens - a.tokens;
+const sumTokens = rows => rows.reduce((sum, row) => sum + row.tokens, 0);
+const tokensOrDash = tokens => (tokens > 0 ? statuslineFmtTok(tokens) : '—');
+
+function segmentsFor({ used, buffers, free, colored, maxTokens }) {
+  const total = Math.max(maxTokens || 0, sumTokens([...used, ...buffers, ...free])) || 1;
+  const percentOf = tokens => Math.round(tokens / total * 10000) / 100;
+  const segments = used.slice(0, colored).map((row, index) => ({ tone: String(index), percent: percentOf(row.tokens) }));
+  if (colored < used.length) segments.push({ tone: 'other', percent: percentOf(sumTokens(used.slice(colored))) });
+  if (buffers.length) segments.push({ tone: 'buffer', percent: percentOf(sumTokens(buffers)) });
+  return segments; // 空闲是轨道底色，deferred 不占窗口，都不成段
+}
+
+// mcp__server__tool：只去前缀，工具名里的 __ 留着
+function mcpToolName({ name, serverName }) {
+  const [, , ...tool] = name.split('__');
+  return tool.length ? `${serverName} · ${tool.join('__')}` : name;
+}
+
+export function contextPanelView({ percentage, totalTokens, maxTokens, categories = [], mcpTools = [], memoryFiles = [] }) {
   const hasPercent = Number.isFinite(percentage);
-  const tone = !hasPercent || percentage < 70 ? 'accent' : percentage < 90 ? 'warning' : 'danger';
+  const ofKind = kind => categories.filter(c => c.kind === kind).sort(byTokensDesc);
+  const used = ofKind('used'), buffers = ofKind('buffer'), free = ofKind('free'), deferred = ofKind('deferred');
+  const colored = coloredCount(used.length, buffers.length);
+  const row = (category, tone) => ({
+    name: category.name,
+    tokens: statuslineFmtTok(category.tokens),
+    percent: maxTokens > 0 ? `${(category.tokens / maxTokens * 100).toFixed(1)}%` : '',
+    tone,
+  });
+  // 类别到手之前只有总量，画一段单色，阈值同状态栏
+  const wholeBar = hasPercent
+    ? [{ tone: percentage < 70 ? 'accent' : percentage < 90 ? 'warning' : 'danger', percent: Math.min(100, Math.max(0, percentage)) }]
+    : [];
+  const lists = [
+    { key: 'mcp', label: t('MCP 工具'), rows: mcpTools.map(tool => ({ name: mcpToolName(tool), tokens: tokensOrDash(tool.tokens) })) },
+    { key: 'memory', label: t('记忆文件'), rows: memoryFiles.map(file => ({ name: file.path, tokens: tokensOrDash(file.tokens) })) },
+  ];
   return {
     usedText: hasPercent ? `${t('已用')} ${percentage}%` : '',
     tokensText: [totalTokens, maxTokens].filter(Number.isFinite).map(statuslineFmtTok).join(' / '),
-    barPercent: hasPercent ? Math.min(100, Math.max(0, percentage)) : 0,
-    barTone: tone,
-    rows: categories.map(({ name, tokens }) => ({
-      name,
-      tokens: statuslineFmtTok(tokens),
-      percent: maxTokens > 0 ? `${(tokens / maxTokens * 100).toFixed(1)}%` : '',
-    })),
+    segments: categories.length ? segmentsFor({ used, buffers, free, colored, maxTokens }) : wholeBar,
+    rows: [
+      ...used.map((category, index) => row(category, index < colored ? String(index) : 'other')),
+      ...buffers.map(category => row(category, 'buffer')),
+      ...free.map(category => row(category, 'free')),
+      ...deferred.map(category => ({ ...row(category, 'deferred'), percent: '—' })), // 不占窗口，算百分比是误导
+    ],
+    lists: lists.filter(list => list.rows.length).map(list => ({ ...list, count: list.rows.length })),
   };
 }
 
