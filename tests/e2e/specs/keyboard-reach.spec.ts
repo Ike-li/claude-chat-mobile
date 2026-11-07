@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
+import { clickHeaderMenuItem, ensureComposerReady, expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
 
 // 验收 O11 / O13（AC-21-06、AC-21-07）：首页「最近会话」的行和模型磁贴原来都是带点击处理的 div，
 // 没有 role、没有 tabindex——键盘走不到、按键点不动，读屏不认得是控件。通往模型磁贴的唯一入口——底栏
@@ -12,7 +12,7 @@ import { ensureComposerReady, expectNoBrowserErrors, gotoMock } from '../../help
 test.describe('键盘可达：首页最近会话与模型磁贴', () => {
   test('P0-A11Y-KEY-1 首页最近会话行是按钮：键盘聚焦后按 Enter 进入该会话', async ({ page }) => {
     await gotoMock(page);
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
 
     const row = page.locator('#dashRecentsList').getByRole('button', { name: /Archived Planning Session/ });

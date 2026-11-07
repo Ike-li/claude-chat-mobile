@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { clickHeaderMenuItem, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-15 设备信赖 TOFU、pending device request 与访问帮助', async ({ page }) => {
@@ -58,11 +58,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
     await page.locator('#sidebarClose').click();
 
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toBeVisible();
     await page.locator('#consoleClose').click();
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#input')).toBeVisible();
 
     // 卡片是页面级提示，不能压过模态层——否则弹窗的关闭钮被盖住就出不来了

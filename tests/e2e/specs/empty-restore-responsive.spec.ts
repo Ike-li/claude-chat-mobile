@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { clickHeaderMenuItem, closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 async function expectWithinViewport(page: Page, locator: Locator) {
   await expect(locator).toBeVisible();
@@ -49,11 +49,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 验收 O76（AC-21-08）：手机宽度下顶栏「回首页」「会话日志」「新建会话」与抽屉按钮的可点范围只有 36×36，
+  // 验收 O76（AC-21-08）：手机宽度下顶栏按钮的可点范围只有 36×36，
   // 而输入区的按钮都扩到了 44 以上。每个按钮的可点范围要到 44×44（视觉不变），且相邻按钮的热区不能互相压住。
   test('P0-19e 手机顶栏按钮的可点范围到 44×44，且不压住相邻按钮', async ({ page }) => {
     await gotoMock(page);
-    const ids = ['btnSessions', 'btnHome', 'btnConsole', 'btnNew'];
+    const ids = ['btnSessions', 'btnMore'];
     const report = await page.evaluate((list) => list.map(id => {
       const btn = document.getElementById(id);
       if (!btn || btn.offsetParent === null) return { id, visible: false };
@@ -73,7 +73,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       expect([r.id, null], `${r.id} 左边外 3px 落到了别的按钮上`).toContain(r.left);
       expect([r.id, null], `${r.id} 右边外 3px 落到了别的按钮上`).toContain(r.right);
     }
-    expect(report.filter(x => x.visible).length, '顶栏按钮一个都没找到').toBeGreaterThanOrEqual(3);
+    expect(report.filter(x => x.visible).length, '顶栏按钮缺了').toBe(ids.length);
     await expectNoBrowserErrors(page);
   });
 
@@ -197,6 +197,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       // 内容区内部滚动；标题栏固定在 sheet 顶部，背后主页面被 ccm-sheet-open 锁住
       await page.locator('#settingsSheetBody').evaluate(el => { el.scrollTop = el.scrollHeight; });
       await expectWithinViewport(page, page.locator('#settingsSheetTitle'));
+      await expectWithinViewport(page, page.locator('#settingsReloadSession'));
+      await page.locator('#permSection').scrollIntoViewIfNeeded();
       await expectWithinViewport(page, page.locator('#permSection'));
       await closeSettings(page);
       await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
@@ -210,7 +212,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       await closeGeneralSettings(page);
       await expect(page.locator('#generalSheet')).toHaveClass(/translate-y-full/);
 
-      await page.locator('#btnConsole').click();
+      await clickHeaderMenuItem(page, 'btnConsole');
       await expect(page.locator('#consoleModal')).toBeVisible();
       await page.locator('#consoleLogArea').evaluate(el => { el.scrollTop = el.scrollHeight; });
       await expectWithinViewport(page, page.locator('#consoleClose'));

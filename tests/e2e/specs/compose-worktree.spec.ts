@@ -12,14 +12,14 @@
 // mock 侧固定返回 branches=['dev','main','feature/login'] / current='dev'。
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-40 新会话 worktree：勾选不发请求、勾上后源分支可换、意图随第一条消息发出', async ({ page }) => {
     await gotoMock(page);
     await waitForIdle(page);
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     const surface = page.locator('[data-testid="compose-surface"]');
     await expect(surface).toBeVisible();
 
@@ -65,7 +65,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await sendChatMessage(page, 'test:arm-send-transient-fail');
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     const surface = page.locator('[data-testid="compose-surface"]');
     await expect(surface).toBeVisible();
     const wtToggle = surface.locator('[data-testid="compose-worktree-toggle"]');
@@ -85,12 +85,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await waitForIdle(page);
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     const surface = page.locator('[data-testid="compose-surface"]');
     await surface.locator('[data-testid="compose-worktree-toggle"]').click();
     await expect(surface.locator('[data-testid="compose-worktree-toggle"]')).toHaveAttribute('aria-pressed', 'true');
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(surface).toBeVisible();
     await expect(surface.locator('[data-testid="compose-worktree-toggle"]')).toHaveAttribute('aria-pressed', 'false');
     // 源分支也回到缺省（跟随仓库当前分支），不保留上一轮选的
@@ -112,7 +112,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-40e 没勾 worktree 时点分支胶囊：当场说清为什么选不了', async ({ page }) => {
     await gotoMock(page);
     await waitForIdle(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     const surface = page.locator('[data-testid="compose-surface"]');
     const branchChip = surface.locator('[data-testid="compose-source-branch"]');
     await expect(branchChip).toBeDisabled();
@@ -126,7 +126,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await waitForIdle(page);
 
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     const surface = page.locator('[data-testid="compose-surface"]');
     await expect(surface).toBeVisible();
     const branchChip = surface.locator('[data-testid="compose-source-branch"]');
@@ -154,7 +154,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await wtToggle.click();
     await branchChip.click();
     await expect(list).toBeVisible();
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(wtToggle).toHaveAttribute('aria-pressed', 'false');
     await expect(list).toHaveCount(0);
 

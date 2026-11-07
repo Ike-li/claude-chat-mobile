@@ -4,12 +4,12 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, gotoMock, expectNoBrowserErrors, sendChatMessage } from '../../helpers/playwright';
+import { clickHeaderMenuItem, ensureComposerReady, gotoMock, expectNoBrowserErrors, sendChatMessage } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-28 首页无会话时通用设置仍可达（会话设置 chip 随 composer 隐藏，侧栏入口不受影响）', async ({ page }) => {
     await gotoMock(page);
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
 
     // 前提：首页确实没有会话设置入口（chip 随 composer 隐藏）——这正是本用例存在的理由，
     // 若哪天 composer 常驻了此断言会提醒重新评估
@@ -431,7 +431,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     //   不该被"退回来源页"的逻辑顺手掀开一张设置面板。
     await page.keyboard.press('Escape');
     await expect(page.locator('#generalSheet')).toHaveClass(/translate-y-full/);
-    await page.locator('#btnConsole').click();
+    await clickHeaderMenuItem(page, 'btnConsole');
     await expect(page.locator('#consoleModal')).toHaveClass(/sheet-open/);
     await page.locator('#consoleClose').click();
     await expect(page.locator('#consoleModal')).not.toHaveClass(/sheet-open/);

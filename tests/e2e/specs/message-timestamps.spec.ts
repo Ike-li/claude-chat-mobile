@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
+import { clickHeaderMenuItem, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // 消息流时间戳（稀疏式）：跨天插日期分隔行，用户发言间隔 ≥5 分钟插一次 HH:mm。
@@ -81,7 +81,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 之前唯一会在单个 test 内反复开侧栏切会话的，实测那种走法会在 100+ 用例的长序列里让后面的
     // P0-13 翻车（P0-13 依赖「停止→立刻再发」的时序窗口）。回首页同样走 bindView 存取缓存，
     // 验证目标不变，但不往 mock 的实例表里反复折腾。
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
 
     await openTimelineSession(page);

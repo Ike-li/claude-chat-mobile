@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
+import { clickHeaderMenuItem, expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // 性能改造 Stage 3b：点开非活会话时，session:history 在点击那一刻和 session:switch 并行发出
@@ -38,7 +38,7 @@ function captureHistoryLoads(page: Page) {
 // 打开会话的 [PERF] 行（client_perf），机主「复制全部」导出的就是这些。读控制台面板（内存缓冲、开着时实时追加）：
 // localStorage 那份落盘有 2s 节流，刚写的一行可能还没落
 async function openConsole(page: Page) {
-  await page.locator('#btnConsole').click();
+  await clickHeaderMenuItem(page, 'btnConsole');
   await expect(page.locator('#consoleModal')).toBeVisible();
   return page.locator('#consoleLogArea');
 }
@@ -99,7 +99,7 @@ test.describe('Stage 3b 点开非活会话时并行预取历史', () => {
     const loads = captureHistoryLoads(page);
     await gotoMock(page);
     await page.request.post('/__arm-uncapped-long-history');
-    await page.locator('#btnHome').click();
+    await clickHeaderMenuItem(page, 'btnHome');
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
     const row = page.locator(`#dashRecentsList .dash-recent-item[data-session-id="${LONG}"]`);
     await expect(row, '前提：长会话在首页最近列表里').toBeVisible();

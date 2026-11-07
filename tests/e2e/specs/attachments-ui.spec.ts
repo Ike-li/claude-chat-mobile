@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { clickHeaderMenuItem, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 const tinyPng = Buffer.from(
@@ -45,7 +45,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-18j 新会话页上点非图片附件、加超限附件：提示落在托盘旁且会消失，新会话面板不被冲掉', async ({ page }) => {
     await page.clock.install();
     await gotoMock(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     const surface = page.locator('[data-testid="compose-surface"]');
     await expect(surface).toBeVisible();
     const toggle = surface.locator('[data-testid="compose-worktree-toggle"]');
@@ -74,7 +74,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-18m 托盘旁的提示随托盘清空撤掉：发出去之后不留到下一个界面', async ({ page }) => {
     await page.clock.install();
     await gotoMock(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
     await page.locator('#fileInput').setInputFiles([{ name: 'acc-18k.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }]);
     await page.locator('#attachTray > div').first().click();
@@ -96,7 +96,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-18n 手动移除最后一个附件：托盘收起时提示一起撤掉', async ({ page }) => {
     await page.clock.install();
     await gotoMock(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
     await page.locator('#fileInput').setInputFiles([{ name: 'acc-18n.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }]);
     await page.locator('#attachTray > div').first().click();
@@ -117,7 +117,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-18o 新会话页的提示随换面撤掉：从抽屉切到别的会话不带过去', async ({ page }) => {
     await page.clock.install();
     await gotoMock(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
     await page.locator('#fileInput').setInputFiles([{ name: 'acc-18o.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }]);
     await page.locator('#attachTray > div').first().click();

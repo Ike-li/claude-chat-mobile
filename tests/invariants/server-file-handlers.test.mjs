@@ -3,7 +3,7 @@
 //   进 handler 的路径有没有真的被送进那道门」，以及越界时 fail-closed 且【记审计】；审计的
 //   target 记真实落点所属 workdir 而非请求声明的 cwd，R10，2026-08-06：记错归属会让事后追责
 //   指向错误的项目）
-// 覆盖：browse/read/write/search/git/tool:preview/attachment:read/file:open 各自的范围门 · 越界审计的
+// 覆盖：browse/read/write/search/git/tool:preview/attachment:read/file:open/session:outputs 各自的范围门 · 越界审计的
 //   via 标注与归属 · 无 ack 时的静默路径
 // 槽位：S1（全部依赖可注入的桩，零 I/O、不起 server、不 spawn claude）
 // 不测什么 + 为什么：不测范围判据本身（realpath 后的前缀比较属纯函数侧，在
@@ -647,6 +647,115 @@ test.describe('file:open：点消息里的文件链接', () => {
   test('没有 ack：忽略', async () => {
     const { handlers, reads } = registerOpen();
     await handlers.get('file:open')({ cwd: '/repo', path: 'a.txt' });
+    assert.deepEqual(reads, []);
+  });
+});
+
+test.describe('session:outputs：工作区「产出」tab 的列表', () => {
+  const AT = 1793990000000;
+  const OPENED = () => ({ fd: openSync('/dev/null', 'r'), size: 2048 });
+
+  function registerOutputs({ outputs = [], ...extra } = {}) {
+    const reads = [];
+    const registered = register({
+      attributePath: realAttributePath,
+      openInScope: OPENED,
+      sessionFileExists: async () => true,
+      readSessionOutputs: async (sessionId, cwd) => { reads.push([sessionId, cwd]); return outputs; },
+      ...extra,
+    });
+    const list = async (payload = { cwd: '/repo', sessionId: 'sid-1' }) => {
+      let response;
+      await registered.handlers.get('session:outputs')(payload, value => { response = value; });
+      return response;
+    };
+    return { ...registered, list, reads };
+  }
+
+  test('范围内的文件：回文件名、所在目录、时间和大小', async () => {
+    const { list } = registerOutputs({ outputs: [{ path: '/repo/out/final/a.mp4', at: AT }, { path: '/repo/b.md', at: AT - 1 }] });
+    assert.deepEqual(await list(), {
+      ok: true,
+      items: [
+        { path: '/repo/out/final/a.mp4', name: 'a.mp4', dir: 'out/final', at: AT, media: 'video', size: 2048, state: 'ok' },
+        { path: '/repo/b.md', name: 'b.md', dir: '', at: AT - 1, media: null, size: 2048, state: 'ok' },
+      ],
+      outsideCount: 0,
+    });
+  });
+
+  test('已经不在的文件留在列表里并标出来：用户记得有这个文件，悄悄消失更糟', async () => {
+    const { list } = registerOutputs({ outputs: [{ path: '/repo/gone.png', at: AT }], openInScope: () => ({ notFound: true }) });
+    assert.deepEqual((await list()).items, [{ path: '/repo/gone.png', name: 'gone.png', dir: '', at: AT, media: 'image', state: 'missing' }]);
+  });
+
+  test('能打开的排在前面，已删除的沉到后面，各自保持时间倒序', async () => {
+    const { list } = registerOutputs({
+      outputs: [{ path: '/repo/gone-new.md', at: AT }, { path: '/repo/ok-new.md', at: AT - 1 }, { path: '/repo/gone-old.md', at: AT - 2 }, { path: '/repo/ok-old.md', at: AT - 3 }],
+      openInScope: (root, relPath) => (relPath.startsWith('gone') ? { notFound: true } : OPENED()),
+    });
+    assert.deepEqual((await list()).items.map(i => i.name), ['ok-new.md', 'ok-old.md', 'gone-new.md', 'gone-old.md']);
+  });
+
+  test('范围外的只回数量，响应里绝不出现路径', async () => {
+    const opened = [];
+    const { list } = registerOutputs({
+      outputs: [{ path: '/tmp/probe.mjs', at: AT }, { path: '/etc/secret-name', at: AT }, { path: '/repo/in.md', at: AT }],
+      openInScope: (root, relPath) => { opened.push(relPath); return OPENED(); },
+    });
+    const response = await list();
+    assert.equal(response.outsideCount, 2);
+    assert.deepEqual(response.items.map(i => i.path), ['/repo/in.md']);
+    assert.doesNotMatch(JSON.stringify(response), /probe|secret-name/);
+    assert.deepEqual(opened, ['in.md'], '范围外的连探测都不该探测');
+  });
+
+  test('目录和读不了的不进列表，也不算越界：列列表不是越界尝试，记了服务面板就红', async () => {
+    for (const result of [null, { blockedSymlink: true }, { notOpenable: true }]) {
+      const { list, audits } = registerOutputs({
+        outputs: [{ path: '/repo/x', at: AT }, { path: '/repo/ok.md', at: AT }],
+        openInScope: (root, relPath) => (relPath === 'x' ? result : OPENED()),
+      });
+      const response = await list();
+      assert.deepEqual(response.items.map(i => i.name), ['ok.md'], JSON.stringify(result));
+      assert.equal(response.outsideCount, 0, JSON.stringify(result));
+      assert.deepEqual(audits, [], JSON.stringify(result));
+    }
+  });
+
+  test('cwd 越界：拒绝，不读 transcript', async () => {
+    const { list, reads } = registerOutputs({ routeCwd: () => null });
+    assert.deepEqual(await list({ cwd: '/elsewhere', sessionId: 'sid-1' }), { ok: false, error: OUT_OF_SCOPE_ERROR });
+    assert.deepEqual(reads, []);
+  });
+
+  test('会话不属于这个 cwd：拒绝，不读 transcript；对照：属于时读得到', async () => {
+    const { list, reads } = registerOutputs({ sessionFileExists: async () => false });
+    assert.equal((await list()).ok, false);
+    assert.deepEqual(reads, []);
+    const allowed = registerOutputs();
+    assert.equal((await allowed.list()).ok, true);
+    assert.deepEqual(allowed.reads, [['sid-1', '/repo']]);
+  });
+
+  test('会话 id 不是字符串：拒绝', async () => {
+    const { list, reads } = registerOutputs();
+    assert.equal((await list({ cwd: '/repo', sessionId: 42 })).ok, false);
+    assert.deepEqual(reads, []);
+  });
+
+  test('transcript 被定位到别的 cwd 时按新位置读，范围仍按请求的 cwd 判', async () => {
+    const { list, reads } = registerOutputs({
+      resolveTranscriptLocation: async () => ({ status: 'found', cwd: '/repo/.wt/x' }),
+      outputs: [{ path: '/repo/a.md', at: AT }],
+    });
+    assert.deepEqual((await list()).items.map(i => i.path), ['/repo/a.md']);
+    assert.deepEqual(reads, [['sid-1', '/repo/.wt/x']]);
+  });
+
+  test('定位失败：回定位的说法，不读 transcript', async () => {
+    const { list, reads } = registerOutputs({ resolveTranscriptLocation: async () => ({ status: 'ambiguous' }) });
+    assert.deepEqual(await list(), { ok: false, error: '这个会话存在多份记录，请从会话列表明确选择所在目录后重试' });
     assert.deepEqual(reads, []);
   });
 });

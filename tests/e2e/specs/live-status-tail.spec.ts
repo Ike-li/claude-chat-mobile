@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { clickHeaderMenuItem, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 import { ANOTHER_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // 流内 live 活动行（✻ Perusing… (14s)）语义上是「流的最后一行」——CLI 里 spinner 就跟在输出末尾。
@@ -17,7 +17,7 @@ test.describe('P0 流内 live 活动行恒在消息流末尾', () => {
   // 未修时最后那步直插 messagesEl，气泡落在 live 【下面】。
   test('P0-33 新会话首发且回显未到时 live 行仍在末尾', async ({ page }) => {
     await gotoMock(page);
-    await page.locator('#btnNew').click();
+    await clickHeaderMenuItem(page, 'btnNew');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
 
     // test:slow-echo 把「已发出、服务端回显还没到」的窗口撑到 2s，可稳定断言。
