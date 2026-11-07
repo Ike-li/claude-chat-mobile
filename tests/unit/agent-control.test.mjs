@@ -34,7 +34,7 @@ test.describe('logMeta()', () => {
 
 // ---- send() ----
 test.describe('send()', () => {
-  // 排队已移除（2026-07-30）：在途轮期间不再接受新消息，闸门从「封顶 2」收紧到「有轮就拒」。
+  // CLI 侧排队已移除（2026-07-30）：在途轮期间不再接受新消息，闸门从「封顶 2」收紧到「有轮就拒」。
   test('pendingTurns >= 1 → reject + emit system', async () => {
     const { s, events } = makeSession();
     s.pendingTurns = 1;
@@ -201,7 +201,7 @@ test.describe('send()', () => {
     s.q = { setModel() { setModelCalls++; return new Promise(() => {}); } }; // 永不 resolve
     await s.send('hi', 'opus');
     assert.equal(setModelCalls, 1, '第一次 send 尝试下发');
-    s.pendingTurns = 0; // 排队已移除：须先结算上一轮才收得下第二条
+    s.pendingTurns = 0; // CLI 侧排队已移除：须先结算上一轮才收得下第二条
     await s.send('hi again', 'opus');
     assert.equal(setModelCalls, 1, '同一目标已尝试过 → 不再重复下发');
     assert.equal(events.filter(e => e.type === 'error').length, 1, '错误只提示一次，不每轮刷屏');
@@ -213,7 +213,7 @@ test.describe('send()', () => {
     const calls = [];
     s.q = { setModel(m) { calls.push(m); return Promise.reject(new Error('model not found')); } };
     await s.send('hi', 'bad-model');
-    s.pendingTurns = 0; // 排队已移除：须先结算上一轮才收得下第二条
+    s.pendingTurns = 0; // CLI 侧排队已移除：须先结算上一轮才收得下第二条
     await s.send('hi again', 'other-model');
     assert.deepEqual(calls, ['bad-model', 'other-model'], '目标变了就该重新下发，不因上次失败被永久锁死');
     s.dispose();

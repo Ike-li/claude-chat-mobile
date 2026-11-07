@@ -2,7 +2,7 @@ import { findOutboxTargetInstance, pickAfterTurnResend, sameOutboxTarget } from 
 
 // 离线重放撞上在途轮的条目：排队，本轮结束按序自动续发，一轮一条（O66）。终端里忙时打的话也是排队、
 // 回合结束再发；此前这里落「⏸ 未发送」终态，得逐条点「重发」。
-// 只管「离线时已经按过发送」的条目，不是在线排队——在线发送仍是一轮一条、运行中禁发（6f544058）。
+// 只管「离线时已经按过发送」的条目，不是在线排队：那条消息留在 server，见 app/queued-message.js。
 // 续发走的就是那颗气泡上的「重发」（resend），手动点与自动续发是同一条路径；本模块只决定什么时候替用户点。
 // 判据在 logic/outbox-send.js 的 pickAfterTurnResend。
 export function createOutboxAfterTurn({ getInstances = () => [] } = {}) {

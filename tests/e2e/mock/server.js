@@ -275,6 +275,16 @@ let mockServerLogMissing = false;
 // 按 sessionId 归键的额度墙「到点自动继续」横幅数据）。只由 broadcastAutoContinue 带出——其余十几处内联
 // instances 载荷不带这个字段，前端对「缺字段」的约定正是保留上一份，所以不必逐处补。
 let mockAutoContinue = [];
+// 消息排队（真 server：src/server/message-queue.js）。默认不下发 queuedMessages：等于一台没升级的后端，现有用例全程走这条路。
+// /__queue-arm 之后才带，前端才给排队入口。真全文放另一张表，快照只有预览，同真 server。
+let mockQueueEnabled = false;
+let mockQueuedMessages = [];
+let mockQueuedFull = new Map();
+let mockQueueLog = [];
+const mockQueueField = () => (mockQueueEnabled ? { queuedMessages: mockQueuedMessages } : {});
+// 服务端照常处理、回执扣住：造「ack 丢了」和「回执到之前用户切走了」。/__queue-ack-hold 打开，/__queue-ack-flush 放行。
+let mockQueueAckHold = null;
+let mockQueueHeldAcks = [];
 // WORKDIRS 的可变状态：env:set 收到数组时更新，后续 env:get 回显——
 // 这样 E2E 验的是「提交的真是数组、且 sessionLimit 原样回来了」这条端到端语义，
 // 而不只是「点了保存按钮」。收到非数组时**不更新**，正是真 server 校验会拒的那一档。
@@ -797,6 +807,12 @@ function resetMockState() {
   mockAccessProtected = false;
   mockServerLogMissing = false;
   mockAutoContinue = [];
+  mockQueueEnabled = false;
+  mockQueuedMessages = [];
+  mockQueuedFull = new Map();
+  mockQueueLog = [];
+  mockQueueAckHold = null;
+  mockQueueHeldAcks = [];
   mockEnvOverridden = new Set();
   mockWorkdirsList = [
     { path: '/Users/you/code/claude-chat-mobile' },
@@ -1607,6 +1623,112 @@ function broadcastAutoContinue() {
     },
   });
 }
+
+function broadcastQueue() {
+  const inst = mockInstances.find(i => i.instanceId === viewingInstanceId) || mockInstances[0];
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId,
+      viewingCwd: workspaceCwdOf(inst.cwd),
+      ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload(),
+      ...mockQueueField(),
+    },
+  });
+}
+
+function mockQueueEntry({ inst, text, clientMessageId, attachments, state = 'waiting', reason = null }) {
+  return {
+    sessionId: inst.sessionId, instanceId: inst.instanceId, cwd: inst.cwd, clientMessageId, state, reason,
+    preview: String(text ?? '').slice(0, 140), textLength: String(text ?? '').length,
+    attachments: (attachments ?? []).map(({ name, mimeType }) => ({ name, mimeType })),
+    acceptedAt: Date.now(), heldAt: state === 'held' ? Date.now() : null,
+  };
+}
+
+// 排队用例的开场：这个实例有一轮在跑、后端支持排队。这一轮不自己收尾，由下面几个入口驱动。
+// oldBackend=1：同样一轮在跑，但不下发 queuedMessages，等于没升级的后端。
+app.post('/__queue-arm', (req, res) => {
+  const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+  mockQueueEnabled = req.query.oldBackend !== '1';
+  inst.state = 'busy';
+  inst.turnRunning = true;
+  broadcastQueue();
+  res.json({ ok: true });
+});
+
+// 回合正常结束，排队的那条发出：result 带 queuedNext，普通 user_message 上屏，再跑完一轮。
+app.post('/__queue-release', (_req, res) => {
+  const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+  const entry = mockQueuedMessages.find(e => e.sessionId === inst.sessionId && e.state === 'waiting');
+  const base = { seq: 0, epoch: 'server', sessionId: inst.sessionId, instanceId: inst.instanceId, ts: Date.now() };
+  io.emit('agent:event', { ...base, type: 'result', payload: { messageId: 'msg_q1', durationMs: 100, costUsd: 0, isError: false, models: [], ...(entry ? { queuedNext: true } : {}) } });
+  if (entry) {
+    const full = mockQueuedFull.get(entry.clientMessageId);
+    mockQueuedMessages = mockQueuedMessages.filter(e => e !== entry);
+    io.emit('agent:event', { ...base, type: 'user_message', payload: { text: full.text, uuid: `u-${entry.clientMessageId}`, clientMessageId: entry.clientMessageId } });
+    io.emit('agent:event', { ...base, type: 'result', payload: { messageId: 'msg_q2', durationMs: 100, costUsd: 0, isError: false, models: [] } });
+  }
+  inst.state = 'idle';
+  inst.turnRunning = false;
+  broadcastQueue();
+  res.json({ ok: true });
+});
+
+// 转未发送（额度墙、终端在驾驶这类 mock 造不出来的结局）
+app.post('/__queue-hold', (req, res) => {
+  const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+  for (const e of mockQueuedMessages) {
+    if (e.sessionId === inst.sessionId) Object.assign(e, { state: 'held', reason: req.query.reason ?? 'turn_error', heldAt: Date.now() });
+  }
+  inst.state = 'idle';
+  inst.turnRunning = false;
+  broadcastQueue();
+  res.json({ ok: true });
+});
+
+// server 重启：内存里的排队消息作废，startedAt 变了
+app.post('/__queue-restart', (_req, res) => {
+  mockServiceStartedAtOverride = Date.now() + 1000;
+  mockQueuedMessages = [];
+  mockQueuedFull = new Map();
+  const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+  if (inst) { inst.state = 'idle'; inst.turnRunning = false; }
+  broadcastQueue();
+  res.json({ ok: true });
+});
+
+// 别的设备排了一条。silent：本端还没收到广播，提交时才撞上 queueFull
+app.post('/__queue-other-device', (req, res) => {
+  const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+  const entry = mockQueueEntry({ inst, text: '别的设备排的', clientMessageId: 'other-device' });
+  mockQueuedMessages.push(entry);
+  mockQueuedFull.set(entry.clientMessageId, { text: '别的设备排的这句话的全文' });
+  if (req.query.silent === undefined) broadcastQueue();
+  res.json({ ok: true });
+});
+
+// 别的设备刚取走：本端还没收到广播，点撤回时才撞上 not_found
+app.post('/__queue-vanish', (_req, res) => {
+  mockQueuedMessages = [];
+  res.json({ ok: true });
+});
+
+app.post('/__queue-ack-hold', (req, res) => {
+  mockQueueAckHold = req.query.event ?? null;
+  res.json({ ok: true });
+});
+
+app.post('/__queue-ack-flush', (_req, res) => {
+  const held = mockQueueHeldAcks;
+  mockQueueHeldAcks = [];
+  mockQueueAckHold = null;
+  held.forEach(flush => flush());
+  res.json({ ok: true });
+});
+
+app.get('/__queue-log', (_req, res) => res.json(mockQueueLog));
 
 // Helper to delay executions to simulate streaming behavior
 const delay = ms => new Promise(res => setTimeout(res, ms));
@@ -5731,7 +5853,7 @@ io.on('connection', socket => {
       },
     },
     {
-      // 排队已移除：模拟「一轮在跑」——发送闸关上（turnRunning）、主按钮变停止钮、常驻提示行出现。
+      // CLI 侧排队已移除：模拟「一轮在跑」——发送闸关上（turnRunning）、主按钮变停止钮、常驻提示行出现。
       // 1.2s 后轮次结束自动解锁，供 spec 断言恢复可发送。
       command: 'test:turn-running',
       run: async ({ activeInst }) => {
@@ -6977,7 +7099,7 @@ io.on('connection', socket => {
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(replaySwapInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
       });
     }
-    // 在途轮拒收（排队已移除）：镜像真 server 的 busy 负 ack。判据用 turnRunning 而非 state==='busy'——
+    // 在途轮拒收（CLI 侧排队已移除）：镜像真 server 的 busy 负 ack。判据用 turnRunning 而非 state==='busy'——
     // 只有显式模拟在途轮的场景（test:turn-running）才置它，别的 busy 场景仍走 mock 的"总是成功"语义。
     // 闸按这条消息的目标实例判（同真 server）：带了还活着的 instanceId 就是它，不是眼下查看的那个——
     // 后台会话排着的离线条目（O66 review ②）要撞上的是它自己那个会话的在途轮。实例号已不在（置换换了号）
@@ -6989,6 +7111,19 @@ io.on('connection', socket => {
     }
     if (outboxAckHold && payload?.fromOutbox === true) {
       outboxAckHold.push(() => { if (typeof ack === 'function') ack({ ok: true, instanceId: payload?.instanceId || viewingInstanceId || 'inst_fresh' }); });
+      return;
+    }
+    if (gateInst?.turnRunning === true && payload?.queue === true && mockQueueEnabled) {
+      mockQueueLog.push({ text: payload.text, instanceId: payload.instanceId, sessionId: payload.sessionId, queue: true, attachments: payload.attachments ?? null });
+      if (mockQueuedMessages.some(e => e.sessionId === gateInst.sessionId)) {
+        if (typeof ack === 'function') ack({ ok: false, error: '已有一条排队消息，先处理它', busy: true, retryable: false, queueFull: true });
+        return;
+      }
+      mockQueuedMessages.push(mockQueueEntry({ inst: gateInst, text: payload.text, clientMessageId: payload.clientMessageId, attachments: payload.attachments }));
+      mockQueuedFull.set(payload.clientMessageId, { text: payload.text, model: payload.model, attachments: payload.attachments });
+      broadcastQueue(); // 先广播后 ack，前端靠这个顺序对账
+      if (mockQueueAckHold === 'submit') { mockQueueHeldAcks.push(() => ack?.({ ok: true, queued: true, instanceId: gateInst.instanceId, sessionId: gateInst.sessionId })); return; }
+      if (typeof ack === 'function') ack({ ok: true, queued: true, instanceId: gateInst.instanceId, sessionId: gateInst.sessionId });
       return;
     }
     if (gateInst?.turnRunning === true) {
@@ -7829,7 +7964,15 @@ io.on('connection', socket => {
   // 所以这里绝不能发 seq:0（question 已是 seq:3 时会把 resolved 整条滤掉）。
   // 取回排队消息（真 server：app.js 的 user:takeQueued → message-queue.js 的 take()）。
   socket.on('user:takeQueued', (payload, ack) => {
-    if (typeof ack === 'function') ack({ ok: false, error: 'not_found' });
+    if (typeof ack !== 'function') return;
+    const entry = mockQueuedMessages.find(e => e.sessionId === payload?.sessionId && e.clientMessageId === payload?.clientMessageId);
+    if (!entry) { ack({ ok: false, error: 'not_found' }); return; }
+    const full = mockQueuedFull.get(entry.clientMessageId);
+    mockQueuedMessages = mockQueuedMessages.filter(e => e !== entry);
+    broadcastQueue();
+    const reply = () => ack({ ok: true, text: full.text, model: full.model, attachments: full.attachments });
+    if (mockQueueAckHold === 'take') { mockQueueHeldAcks.push(reply); return; }
+    reply();
   });
 
   socket.on('user:interrupt', payload => {
@@ -7840,6 +7983,13 @@ io.on('connection', socket => {
     if (activeInst) {
       activeInst.aborted = true; // WS-008：令仍在跑的流式场景（如 test:stream-long）下个 delay 后提前退出，不再后台续发事件
       activeInst.state = 'idle';
+      if (mockQueueEnabled) {
+        activeInst.turnRunning = false;
+        for (const e of mockQueuedMessages) {
+          if (e.sessionId === activeInst.sessionId && e.state !== 'held') Object.assign(e, { state: 'held', reason: 'stopped', heldAt: Date.now() });
+        }
+        broadcastQueue();
+      }
       // O66：test:arm-outbox-turns 挂住的那一轮随停止结束（同真 server：中断后在途轮清零）
       if (outboxTurnOpen?.instanceId === targetId) {
         activeInst.turnRunning = false;

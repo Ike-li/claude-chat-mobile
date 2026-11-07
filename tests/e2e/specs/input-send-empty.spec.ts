@@ -61,7 +61,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 排队已移除（2026-07-30）：在途轮期间不收新消息。输入框仍可打字存草稿，主按钮恒为停止钮，
+  // CLI 侧排队已移除（2026-07-30）：在途轮期间不收新消息。输入框仍可打字存草稿，主按钮恒为停止钮，
   // placeholder 说明为什么发不出去（唯一提示点，不再另起一行小字）；轮次结束后自动解锁，草稿原样还在、可直接发出。
   test('P0-02c 任务运行中保留草稿、禁止发送并由 placeholder 提示', async ({ page }) => {
     await gotoMock(page);

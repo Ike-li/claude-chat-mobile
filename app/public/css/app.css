@@ -978,6 +978,29 @@ header {
     border-radius: 0.12rem;
     background: currentColor;
   }
+  /* 排队时停止退到这里：视觉 26px，描边不实心，和实心的主位分得开（两颗同色实心圆挨着容易误触）。
+     左右各留 6px，热区只扩到间隙里：叠到回形针上的话，点附件边缘会停掉这一轮（同 O98）。高度够 44px。 */
+  #btnStopInline {
+    width: 1.625rem;
+    height: 1.625rem;
+    margin-inline: 0.375rem;
+    border: 1.5px solid var(--activity);
+    background: transparent;
+    color: var(--activity);
+  }
+  .chat-input-pill #btnStopInline::after {
+    top: -0.625rem;
+    bottom: -0.625rem;
+    left: -0.375rem;
+    right: -0.375rem;
+  }
+  #btnStopInline .btn-send-stop-icon {
+    display: block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 0.1rem;
+    background: currentColor;
+  }
 
   /* ── 44px 物理触控热区扩充 ── */
   .chat-input-pill button {

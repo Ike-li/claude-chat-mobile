@@ -232,7 +232,7 @@ test('回合进行中切【模型】：够不着——模型随消息捎带，�
   try {
     // 模型没有独立控制事件：前端把选择塞进 user:message，server 在 send() 里差分调 setModel()。
     // 于是「回合进行中切模型」这个动作在协议上根本不存在——它等价于「再发一条消息」，
-    // 而排队已移除（2026-07-30）后在途轮闸会直接拒收。这条用例钉的就是这个结构性事实：
+    // 而CLI 侧排队已移除（2026-07-30）后在途轮闸会直接拒收。这条用例钉的就是这个结构性事实：
     // 不是某个守卫拦了模型，是那条路径压根到不了 setModel。
     const ack = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('第二条 user:message 的 ack 超时')), 15000);

@@ -1459,7 +1459,7 @@ function instancesPayload() {
       // 是否有活的后台任务（≠ busy：前台轮 busy 但无后台任务时为 false）——前端据此收敛进度横幅可见性：
       // 当前查看实例 bgActive=false 即隐藏横幅，统一覆盖「切会话/TTL 清/完成/前台轮残留」所有隐藏场景（权威状态驱动，非零散事件）。
       bgActive: a.hasBgTasks?.() || false,
-      // 排队已移除（2026-07-30）：有在途轮就不收新消息，前端据此禁发送按钮 + 出「运行中」提示。
+      // CLI 侧排队已移除（2026-07-30）：有在途轮就不收新消息，前端据此禁发送按钮 + 出「运行中」提示。
       // 判据刻意只认在途轮而非 isBusy()——后台任务挂着时仍可发送，否则长任务会让人永远发不出字。
       turnRunning: a.pendingTurns > 0,
       // 切 tab 面板同步：携带各实例当前档，前端 setInstances 据此静默刷新顶部 permMode/effort/model select。

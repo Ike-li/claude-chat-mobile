@@ -143,7 +143,7 @@ export function createSendGate({
       return { ok: false, code: 'diverged', instance: a, ack: divergenceGate.ack };
     }
     if (divergenceGate.clear) a.resumeDivergence = null;
-    // 在途轮拒收（排队已移除 2026-07-30）：判据只认在途轮，不用 isBusy()——后台任务挂着仍可发送。
+    // 在途轮拒收（CLI 侧排队已移除 2026-07-30）：判据只认在途轮，不用 isBusy()——后台任务挂着仍可发送。
     // 放在 send() 之前而非依赖其返回值，是为了让拒绝理由精确：send() 返回 false 还covers disposed
     // 与窄竞态，那些是可重试的，而"任务运行中"要的是【不】自动重试（否则等于把排队搬到客户端）。
     // 不 commit 去重 ID、不记 userMessageIn：同一 clientMessageId 稍后重发必须还能成功。

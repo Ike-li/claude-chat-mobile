@@ -279,7 +279,7 @@ export function createComposerControls(context, {
       e.preventDefault();
       send();
     }
-    // ESC 关候选浮层（排队撤回已随排队功能一并移除，ESC 不再有第三个语义）
+    // ESC 关候选浮层（排队的撤回在卡片按钮上，ESC 没有第三个语义）
     if (e.key === 'Escape') {
       if (atMentionList && !atMentionList.classList.contains('hidden')) { hideAtMentionList(); return; }
       const cmdHintsEl = document.getElementById('cmdHints');

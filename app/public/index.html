@@ -734,6 +734,17 @@
         <button type="button" id="autoContinueAction" class="hit-44 shrink-0 px-2 py-1 rounded-lg border border-accent text-accent font-semibold active:scale-95" data-testid="auto-continue-action"></button>
       </div>
 
+      <!-- 排队消息卡片（app/queued-message.js）：排队中的话不进消息流，放在这里，发出那一刻才由 user_message 上屏。
+           数据来自 instances 广播的 queuedMessages（按 sessionId 归键）。class 由模块整条改写（含 hidden）。 -->
+      <div id="queuedCard" class="hidden px-3 py-2 bg-surface border border-accent rounded-xl text-xs mb-1 shrink-0 flex items-center gap-2" role="status" data-testid="queued-card">
+        <span id="queuedCardIcon" aria-hidden="true">⏳</span>
+        <div class="flex-1 min-w-0">
+          <div id="queuedCardStatus" class="text-ink-soft" data-testid="queued-card-status"></div>
+          <div id="queuedCardPreview" class="text-ink-faint truncate" data-testid="queued-card-preview"></div>
+        </div>
+        <button type="button" id="queuedCardAction" class="hit-44 shrink-0 px-2 py-1 rounded-lg border border-accent text-accent font-semibold active:scale-95" data-testid="queued-card-action"></button>
+      </div>
+
       <!-- 下一步建议：每轮收尾后由模型预测的下一句（CCM_PROMPT_SUGGESTION 开关）。点一下【填进输入框、
            不自动发送】——手机上照着灰字手打这句话的成本比它省下的思考更高，只读提示在这里等于没有。
            放在 pill 之上而非 chips 区：建议是整句话，塞进那条横向滚动的 chip 行会被截得读不出来。
@@ -761,7 +772,7 @@
       </div>
 
       <!-- Unified Premium Input Pill Container
-           busy 态：发送钮恒为停止钮（草稿保留在输入框，发送闸由 textarea placeholder 说明——
+           busy 态：发送钮是停止钮，能排队且有草稿时主位变排队、停止退到 #btnStopInline（发送闸由 textarea placeholder 说明——
            同一句提示只出现一处，别再另起一行小字）；
            live 状态迁到消息流 #streamLiveStatus，不再占 pill 顶行。
            CLI 镜像：placeholder 显示「终端运行中 · 只读追平」等，发送位变「续接 CLI 会话」。-->
@@ -811,7 +822,10 @@
             <!-- 转后台（#459，终端 Ctrl+B）：有前台命令 / 子代理挡着本轮时才出现，见 app/foreground-tasks.js -->
             <button id="btnBackgroundTasks" type="button" class="hidden shrink-0 h-8 px-2.5 rounded-full border border-line text-xs font-medium text-ink-soft bg-surface active:bg-sunk disabled:opacity-50" title="把正在跑的前台命令 / 子代理转到后台，本轮继续（终端 Ctrl+B）" data-testid="btn-background-tasks">转后台</button>
 
-            <!-- 空闲无内容时 JS 加 .hidden（C）；busy 停止 / 有内容发送 / 续接 均显示；无语音 -->
+            <!-- 运行中有草稿时主位变排队，停止退到这里，一直看得见（resolveComposerPrimaryMode 的 inlineStop） -->
+            <button id="btnStopInline" type="button" class="hidden flex items-center justify-center rounded-full shrink-0 active:scale-95" data-testid="btn-stop-inline"><span class="btn-send-stop-icon" aria-hidden="true"></span></button>
+
+            <!-- 空闲无内容时 JS 加 .hidden（C）；busy 停止 / 排队 / 有内容发送 / 续接 均显示；无语音 -->
             <button id="btnSend" class="hidden flex items-center justify-center w-10 h-10 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0" title="发送" disabled>
               <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />

@@ -50,7 +50,7 @@ export function presentOnlineSendAck(ack) {
       divergence: ack.divergence,
     };
   }
-  // 在途轮拒收（排队已移除）：被拒的是【这条新消息】，不是正在跑的那轮——
+  // 在途轮拒收（CLI 侧排队已移除）：被拒的是【这条新消息】，不是正在跑的那轮——
   // clearBusy 必须 false，否则会把在跑那轮的状态行/停止钮一起清掉；也不 requeue，
   // 自动重发等于把排队搬到客户端。文字回填输入框（send 已清空它）。
   if (ack?.busy === true) {
@@ -218,7 +218,7 @@ export function dumpDurableOutbox(queue, inFlight = []) {
 // 离线队列单条重发 ack 决策（FE-NEW-001）。与在线不同：不恢复草稿（气泡已在消息流）、
 // permanent 必停重试；timeout/err 与非 permanent 负 ack 一律 requeue。
 // outcome: 'ok' | 'permanent' | 'requeue' | 'blocked'
-// blocked = 撞上在途轮（排队已移除）：队列首条发出去就开跑，其后各条必被拒。继续 requeue 会空转成
+// blocked = 撞上在途轮（CLI 侧排队已移除）：队列首条发出去就开跑，其后各条必被拒。继续 requeue 会空转成
 // 客户端排队，故落终态由用户手动重发。与 permanent 的区别：blocked 稍后重发能成功，不是死信。
 export function presentOfflineResendAck(err, ack) {
   if (!err && ack && ack.ok === true) {
@@ -598,13 +598,14 @@ export function presentTurnResult(payload = {}, opts = {}) {
   }
   // 成功轮收尾对齐 CLI turn_duration 行：✻ <过去式动词> for <时长>。
   // 累计 cost 不再挂后缀（状态栏 #cliStatus 随时可看），保终端等价的收敛观感。
+  // queuedNext：排队的消息马上开跑，这时响「完成」是假的（同服务端推送）。状态条照常，这一轮确实结束了。
   return {
     kind: 'success',
     statusBar: { text: `✻ ${pickTurnDoneVerb(opts.rand)} for ${formatCliDuration(durationMs)}`, cls: 'text-ink-faint' },
     errorBar: null,
-    notify: { title: t('✅ 任务完成'), body: `${t('用时')} ${secs}s` },
+    notify: p.queuedNext ? null : { title: t('✅ 任务完成'), body: `${t('用时')} ${secs}s` },
     failToolsMessage: null,
-    haptic: 'success',
+    haptic: p.queuedNext ? null : 'success',
   };
 }
 
