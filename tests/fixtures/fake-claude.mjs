@@ -67,6 +67,10 @@
 //             不设时回合几乎瞬间收尾，「上一条刚开跑、下一条就到」这个窗口在 S2 里造不出来；
 //             真模型的回合以秒计，离线队列逐条重放时第 2 条撞上第 1 条的在途轮才是常态。
 //
+// 【回合中途进程退出】与模式正交，默认关：
+//   CCM_FAKE_CLAUDE_EXIT_MID_TURN=1 → 本该吐回答与 result 的那一刻直接 exit(1)，不收尾。模拟进程崩溃，
+//             server 走 onExit。要配 CCM_FAKE_CLAUDE_RESULT_DELAY_MS，否则回合还没开就退了。
+//
 // 【退出前的收尾写入】与模式正交，默认关：
 //   CCM_FAKE_CLAUDE_EXIT_APPEND=<transcript 路径> → 读到 stdin EOF 后隔 500ms 往该文件追加一行
 //             收尾元数据再退；CCM_FAKE_CLAUDE_EXIT_MARKER=<路径> 在追加之后落一个标记文件，
@@ -139,6 +143,7 @@ const EXIT_MARKER = process.env.CCM_FAKE_CLAUDE_EXIT_MARKER || '';
 const EXIT_WRITES_LOST = process.env.CCM_FAKE_CLAUDE_EXIT_WRITES_LOST || '';
 const EXIT_TITLE = process.env.CCM_FAKE_CLAUDE_EXIT_TITLE || '';
 const RESULT_DELAY_MS = Number(process.env.CCM_FAKE_CLAUDE_RESULT_DELAY_MS) || 0;
+const EXIT_MID_TURN = process.env.CCM_FAKE_CLAUDE_EXIT_MID_TURN === '1';
 const AUTOREPORT_MS = Number(process.env.CCM_FAKE_CLAUDE_AUTOREPORT_MS) || 0;
 const BG_DISABLED = process.env.CCM_FAKE_CLAUDE_BG_DISABLED === '1';
 const FG_TOOL_USE_ID = 'toolu_fake_fg';
@@ -319,7 +324,7 @@ rl.on('line', (line) => {
 
   if (!TURN_MODES.has(MODE)) return;
 
-  if (RESULT_DELAY_MS > 0) setTimeout(() => finishTurn(msg), RESULT_DELAY_MS);
+  if (RESULT_DELAY_MS > 0) setTimeout(() => (EXIT_MID_TURN ? process.exit(1) : finishTurn(msg)), RESULT_DELAY_MS);
   else finishTurn(msg);
 });
 

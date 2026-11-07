@@ -1,5 +1,6 @@
 // notifications.js —— 事件 → 通知的纯逻辑层（渠道无关文案 + 渠道元数据），从组装根 src/server/app.js 抽出便于单测。
 // 传输层在 src/ops/notify-channels.js：createNotifyChannels 返回的 pushNotify（Web Push）与 ntfyNotify（ntfy）。
+import { heldNeedsAttention } from '../agent/queued-message-policy.js';
 import { setCapped } from '../shared/bounded-map.js';
 
 // notificationForEvent 返回 { title, body, data? }：
@@ -194,6 +195,34 @@ export function notificationForBackgroundRunning({ instanceId, sessionId, cwd, s
   return instanceId ? { title, ntfyTitle, body, data: { instanceId, sessionId, cwd } } : { title, ntfyTitle, body };
 }
 
+// 排队消息转未发送：同 notificationForBackgroundRunning 分列为独立函数，触发源是 message-queue 的状态转换，不是 agent:event。
+// 和审批同档无条件推：有一句话在等用户取回，用户多半不在。body 只写原因（SEC-04）：不带消息原文，也不给 previewBody。
+const QUEUED_HELD_REASON_TEXT = {
+  interrupted: '本轮被中断',
+  turn_error: '本轮出错',
+  quota_wall: '撞上额度墙',
+  approval_expired: '审批过期，本轮没做完',
+  incomplete: '本轮没有正常结束',
+  instance_exit: '会话进程退出了',
+  session_changed: '会话已经换了',
+  other_driver: '终端或桌面端正在用这个会话',
+  unverified: '无法确认这个会话的状态',
+  diverged: '续接会丢掉一段对话',
+  location: '找不到这个会话的记录了',
+  attachment_failed: '附件保存失败',
+  send_failed: '发送失败',
+};
+export function notificationForQueuedHeld({ reason, instanceId, sessionId, cwd, sessionTitle } = {}) {
+  if (!heldNeedsAttention(reason)) return null;
+  const title = formatNotifyIdentity('⏸ 排队消息没有发出', { cwd, sessionTitle });
+  const ntfyTitle = formatNotifyIdentity('⏸ 排队消息没有发出', { cwd });
+  const why = QUEUED_HELD_REASON_TEXT[reason];
+  const body = why ? `${why}，回到会话取回` : '回到会话取回';
+  const base = { title, ntfyTitle, body, ntfyType: 'queued_held' };
+  // kind：Service Worker 据此单独给一个 tag。回合出错时这条先推、「任务出错」后到，同 tag 就把「去取回」顶掉了
+  return instanceId ? { ...base, data: { instanceId, sessionId, cwd, kind: 'queued_held' } } : base;
+}
+
 // 终端直跑会话（CLI hooks 桥）的通知：与 notificationForEvent 分开，因为它按 envelope type 键控，
 // 而 hook 事件不是 agent:event。body 同样最小化（SEC-04）：不含正文，只说发生了什么。
 // data（深链）仅在该会话恰好有 live 实例时带——纯外部终端会话没有 instanceId，如实降级为无深链
@@ -300,6 +329,7 @@ const NTFY_TAGS = {
   result_interrupted: ['stop_button'],
   task_notification: ['robot'],
   background_running: ['hourglass_flowing_sand'],
+  queued_held: ['pause_button'],
   // CLI hooks 桥：Stop=完成；Notification=需要你（不得误用 result 的 checkmark + priority 3，J3）
   cli_hook_stop: ['white_check_mark'],
   cli_hook_notification: ['warning', 'bell'],
@@ -315,6 +345,7 @@ export function ntfyMetaFor(type, data = {}, publicUrl = '') {
     || type === 'elicitation'
     || type === 'cli_hook_notification'
     || type === 'device_request' // 用户不处理，那台新设备就一直用不了——同属"需即时响应"
+    || type === 'queued_held' // 用户不取回，这句话就一直停着
   ) ? 5 : 3;
   const tags = NTFY_TAGS[type] || [];
   let click;

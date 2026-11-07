@@ -2,7 +2,9 @@
 // 读模型投影：把已有派生状态 + 持久化 pending 审批投影成"需要你"聚合视图，不新增数据源、即时派生不落盘。
 // 两条数据源互不重叠：
 //   ①审批维度——直接来自调用方传入的 pendingApprovals（每项即一条 needsYou，waitingSince=createdAt）；
-//   ②输入维度——来自 sessions 里 status==='awaiting_input' 的项（waitingSince=awaitingSince）。
+//   ②输入维度——来自 sessions 里 status==='awaiting_input' 的项（waitingSince=awaitingSince）；
+//   ③未发送维度——调用方传入的 queuedHeld（排队消息转未发送，waitingSince=heldAt）。实例退出后条目还在，
+//     所以不从 sessions 里取；同一会话还挂着审批时两条都算：批审批和取回这句话是两件事。
 // 边界（已知盲区，如实登记非缺陷）：纯终端会话的输入等待在后端不可见，其审批也仅在经后端拦截时才出现在
 // pendingApprovals 里——两条数据源天然只覆盖 web 后端拦截/驱动过的会话，不假装全知。
 //
@@ -14,7 +16,7 @@
 
 // risk 字段仅展示标签（已决：不自建风险分类，判定权完全归上游 SDK），当前无上游提供的分级来源时保持
 // undefined，不臆造分类；不参与排序（已决）。
-export function deriveAttention(sessions, pendingApprovals) {
+export function deriveAttention(sessions, pendingApprovals, queuedHeld = []) {
   const needsYou = [];
   for (const ap of pendingApprovals) {
     needsYou.push({
@@ -42,6 +44,19 @@ export function deriveAttention(sessions, pendingApprovals) {
       waitingSince: s.awaitingSince
     });
     needsYouSessionIds.add(s.sessionId);
+  }
+
+  for (const h of queuedHeld) {
+    if (typeof h.heldAt !== 'number') continue;
+    needsYou.push({
+      sessionId: h.sessionId,
+      cwd: h.cwd,
+      title: h.title ?? null,
+      reason: 'queued_held',
+      waitingSince: h.heldAt,
+      instanceId: h.instanceId ?? null,
+    });
+    needsYouSessionIds.add(h.sessionId);
   }
 
   // 已决：纯按 waitingSince 升序（值越小=开始等待越早=等得越久，排越前）；risk/cwd 只是展示标签不参与排序。

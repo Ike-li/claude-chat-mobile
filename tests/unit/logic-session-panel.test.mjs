@@ -1,9 +1,9 @@
 // tests/unit/logic-session-panel.test.mjs —— 工作区抽屉 SWR 保鲜 + 按目录局部重建的纯逻辑单测。
-// 覆盖 shouldRerenderSessionList / buildDirInstanceSignatures / diffDirSignatures / dirPanelStructuralKey
+// 覆盖 shouldRerenderSessionList / buildDirInstanceSignatures / diffDirSignatures / dirPanelStructuralKey / describeNeedsYouItem
 // （见 app/public/js/logic.js 对应函数注释）。同域拆分惯例：新行为域另起文件，不往 logic-session.test.mjs 里塞。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, dirPanelStructuralKey } from '../../app/public/js/logic.js';
+import { shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, dirPanelStructuralKey, describeNeedsYouItem } from '../../app/public/js/logic.js';
 
 test('shouldRerenderSessionList: 首次拿到数据（此前无缓存/正显示骨架屏）恒需要渲染', () => {
   assert.equal(shouldRerenderSessionList({ hasPrevEntry: false, nextSessions: [] }), true);
@@ -207,3 +207,14 @@ test('dirPanelStructuralKey: 当前查看 cwd 变了指纹必须变', () => {
   const b = dirPanelStructuralKey({ dirs: ['/root/a', '/root/b'], viewingInstanceId: 'i1', currentCwd: '/root/b' });
   assert.notEqual(a, b);
 });
+
+test('「需要你」条目：未发送的排队消息有自己的图标和说法，不冒充「等待输入」', () => {
+  assert.deepEqual(describeNeedsYouItem({ reason: 'queued_held' }), { icon: '⏸', label: '排队消息没有发出' });
+});
+
+test('「需要你」条目：审批带工具名，输入不带', () => {
+  assert.deepEqual(describeNeedsYouItem({ reason: 'awaiting_approval', toolName: 'Bash' }), { icon: '⚠️', label: '等待审批（Bash）' });
+  assert.deepEqual(describeNeedsYouItem({ reason: 'awaiting_approval' }), { icon: '⚠️', label: '等待审批' });
+  assert.deepEqual(describeNeedsYouItem({ reason: 'awaiting_input', toolName: 'Bash' }), { icon: '❓', label: '等待输入' });
+});
+

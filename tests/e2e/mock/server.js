@@ -284,6 +284,9 @@ let mockQueueLog = [];
 const mockQueueField = () => (mockQueueEnabled ? { queuedMessages: mockQueuedMessages } : {});
 // 服务端照常处理、回执扣住：造「ack 丢了」和「回执到之前用户切走了」。/__queue-ack-hold 打开，/__queue-ack-flush 放行。
 let mockQueueAckHold = null;
+// 未发送条目进「需要你」：mock 全程不带 needsYou（见 transport.js），用例要验这一行才用 /__queue-needs-you 打开。
+// 只把转未发送的条目原样投出去，哪些原因该进由真 server 的 heldNeedsAttention 决定，这里不复刻。
+let mockQueueNeedsYou = false;
 let mockQueueHeldAcks = [];
 // WORKDIRS 的可变状态：env:set 收到数组时更新，后续 env:get 回显——
 // 这样 E2E 验的是「提交的真是数组、且 sessionLimit 原样回来了」这条端到端语义，
@@ -813,6 +816,7 @@ function resetMockState() {
   mockQueueLog = [];
   mockQueueAckHold = null;
   mockQueueHeldAcks = [];
+  mockQueueNeedsYou = false;
   mockEnvOverridden = new Set();
   mockWorkdirsList = [
     { path: '/Users/you/code/claude-chat-mobile' },
@@ -1634,6 +1638,9 @@ function broadcastQueue() {
       ...mockDirFields(),
       instances: mockInstances, service: mockServicePayload(),
       ...mockQueueField(),
+      ...(mockQueueNeedsYou ? { needsYou: mockQueuedMessages.filter(e => e.state === 'held').map(e => ({
+        sessionId: e.sessionId, cwd: e.cwd, title: null, reason: 'queued_held', waitingSince: e.heldAt, instanceId: e.instanceId,
+      })) } : {}),
     },
   });
 }
@@ -1712,6 +1719,12 @@ app.post('/__queue-other-device', (req, res) => {
 // 别的设备刚取走：本端还没收到广播，点撤回时才撞上 not_found
 app.post('/__queue-vanish', (_req, res) => {
   mockQueuedMessages = [];
+  res.json({ ok: true });
+});
+
+app.post('/__queue-needs-you', (_req, res) => {
+  mockQueueNeedsYou = true;
+  broadcastQueue();
   res.json({ ok: true });
 });
 

@@ -94,6 +94,27 @@ test.describe('sw.js — push 事件', () => {
     assert.notEqual(shown[0].options.tag, shown[1].options.tag, '不同会话必须占不同 tag');
   });
 
+  // 同会话同 tag 会被替换：回合出错时「排队消息没有发出」先推、「任务出错」后到，提醒取回的那条就没了（#542 review）
+  test('push 事件：data.kind 单独占 tag——未发送的提醒不被同会话的回合结局替换，同类仍互相替换', async () => {
+    const shown = [];
+    const mockSelf = {
+      addEventListener(type, handler) { if (type === 'push') this._pushHandler = handler; },
+      registration: {
+        showNotification(title, options) { shown.push({ title, options }); return Promise.resolve(); },
+      },
+    };
+    runInMock(swSrc, { self: mockSelf });
+    const push = data => mockSelf._pushHandler({ data: { json: () => data }, waitUntil: p => p });
+
+    await push({ title: '⏸ 排队消息没有发出', body: 'x', data: { sessionId: 'sess-a', instanceId: 'i', kind: 'queued_held' } });
+    await push({ title: '⚠️ 任务出错', body: 'y', data: { sessionId: 'sess-a', instanceId: 'i' } });
+    await push({ title: '⏸ 排队消息没有发出', body: 'z', data: { sessionId: 'sess-a', instanceId: 'i', kind: 'queued_held' } });
+
+    assert.notEqual(shown[0].options.tag, shown[1].options.tag, '回合结局把「去取回」的提醒顶掉了');
+    assert.equal(shown[1].options.tag, 'ccm-sess-a', '没有 kind 的通知 tag 不变，同会话照旧替换');
+    assert.equal(shown[0].options.tag, shown[2].options.tag, '同一类提醒仍要互相替换，不堆积');
+  });
+
   test('push 事件：空 data → 兜底标题 "Claude"、空正文', async () => {
     let shownTitle = null;
     let shownBody = null;

@@ -1,9 +1,9 @@
 // tests/invariants/server/message-queue.test.mjs —— 消息排队的接线：真 server 上收下、等回合结束、发出或转未发送
-// 守护：MSG-03（排队消息只在回合正常结束后发出；任何一道闸不过都不得发，也不得丢）/ MSG-01（同一条至多发一次）/ SESSION-01（释放时终端在驾驶不得发）/ NOTIFY-01（带 queuedNext 的 result 不是「任务完成」）
+// 守护：MSG-03（排队消息只在回合正常结束后发出；任何一道闸不过都不得发，也不得丢）/ MSG-01（同一条至多发一次）/ SESSION-01（释放时终端在驾驶不得发）/ NOTIFY-01（带 queuedNext 的 result 不是「任务完成」；转未发送无条件推，用户点的停止、关闭除外）/ ALERT-01（未发送进「需要你」，取回后退出）
 // 测什么：真 app/server.js + 假 CLI。外部能观察到的只有 ack、user_message 事件（数气泡就是数 send）、result 和 instances 快照：
 //   ① 一条走完：ack 键集、快照、queuedNext、发出后快照清空 ② 同 ID 重发不重复 ③ 取回后不再发 ④ 停止、关标签转未发送
 //   ⑤ 汇报轮帧序：tail 档等汇报轮跑完才发，汇报轮出错不发；fold 档靠 idle 立刻发；后台子 agent、旧 CLI 走 1.5 秒兜底
-//   ⑥ 终端在驾驶时转未发送 ⑦ 未批准设备取不到全文
+//   ⑥ 终端在驾驶时转未发送 ⑦ 未批准设备取不到全文 ⑧ 转未发送的推送（本机 ntfy 截获）与 needsYou
 // 不测什么 + 为什么：① 判定规则与竞态表在 tests/invariants/message-queue.test.mjs（S1，能卡住 await）
 //   ② 释放时 externalDirty：要在 result 到 idle 那 2ms 里标脏，S2 造不出，S1 覆盖 ③ 额度墙：假 CLI 造不出，S1 覆盖
 //   ④ 真帧序：假 CLI 照 2.1.318 探针写，真帧序靠零 token 真链路 ⑤ FRESH 首轮没有 sessionId 时拒收：窗口取决于 ack 和 init
@@ -15,6 +15,7 @@ import '../../setup/require-disposable-env.mjs';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
@@ -53,6 +54,7 @@ async function withServer(env, run) {
   const ctx = {
     root, events, send, take, sock,
     queued: () => lastInstances?.queuedMessages,
+    needsYou: () => lastInstances?.needsYou,
     bubbles: text => events.filter(e => e.type === 'user_message' && e.payload?.text === text),
     results: () => events.filter(e => e.type === 'result'),
   };
@@ -276,3 +278,79 @@ test('待审批的设备取不到全文', async () => {
     assert.equal(res.error, 'device_not_approved', `待审批设备不得走到取回，实际 ${JSON.stringify(res)}`);
   });
 });
+
+// 本机 ntfy 截获：推送走真 emitNotify → ntfyNotify，这里只收请求体
+async function withNtfy(run) {
+  const hits = [];
+  const ntfy = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => { try { hits.push(JSON.parse(body)); } catch { hits.push({ raw: body }); } res.end('{"id":"mock"}'); });
+  });
+  await new Promise(resolve => ntfy.listen(0, '127.0.0.1', resolve));
+  try {
+    await run({ NTFY_URL: `http://127.0.0.1:${ntfy.address().port}`, NTFY_TOPIC: 'ccm-inv-queue' }, hits);
+  } finally {
+    await new Promise(resolve => ntfy.close(resolve));
+  }
+}
+const heldItems = ctx => (ctx.needsYou() ?? []).filter(n => n.reason === 'queued_held');
+const heldPushes = hits => hits.filter(h => /排队消息没有发出/.test(h.title ?? ''));
+
+test('NOTIFY-01 / ALERT-01：汇报轮出错转未发送 → 推一条、进「需要你」，取回后退出', async () => {
+  await withNtfy(async (ntfyEnv, hits) => {
+    await withServer({
+      CCM_FAKE_CLAUDE_MODE: 'turn-autoreport-tail', CCM_FAKE_CLAUDE_RESULT_DELAY_MS: '400',
+      CCM_FAKE_CLAUDE_AUTOREPORT_MS: '300', CCM_FAKE_CLAUDE_AUTOREPORT_FAIL: '1', ...ntfyEnv,
+    }, async (ctx) => {
+      await queueOne(ctx);
+      await waitForCondition(() => ctx.queued()?.[0]?.state === 'held', { timeoutMs: 8000, label: '转未发送' });
+      assert.equal(ctx.queued()[0].reason, 'turn_error');
+      await waitForCondition(() => heldItems(ctx).length === 1, { timeoutMs: 3000, label: '进「需要你」' });
+      const [item] = heldItems(ctx);
+      assert.equal(item.sessionId, SESSION_ID);
+      assert.equal(typeof item.instanceId, 'string', '没有实例号的话点这一条深链不过去');
+      assert.equal(typeof item.waitingSince, 'number');
+      await waitForCondition(() => heldPushes(hits).length === 1, { timeoutMs: 8000, label: 'ntfy 收到未发送推送' });
+      const [push] = heldPushes(hits);
+      assert.match(push.message ?? '', /本轮出错/, `正文要说原因：${JSON.stringify(push)}`);
+      assert.doesNotMatch(JSON.stringify(push), /排队的话/, 'SEC-04：消息原文进了 ntfy 明文通道');
+      assert.equal(push.priority, 5);
+
+      const taken = await ctx.take({ sessionId: SESSION_ID, clientMessageId: 'q1' });
+      assert.equal(taken.ok, true);
+      await waitForCondition(() => heldItems(ctx).length === 0, { timeoutMs: 3000, label: '取回后退出「需要你」' });
+      assert.equal(heldPushes(hits).length, 1, '一次转未发送只推一条');
+    });
+  });
+});
+
+test('NOTIFY-01 / ALERT-01：用户自己点停止转未发送 → 不推、不进「需要你」，卡片照样在', async () => {
+  await withNtfy(async (ntfyEnv, hits) => {
+    await withServer({ CCM_FAKE_CLAUDE_MODE: 'turn', CCM_FAKE_CLAUDE_RESULT_DELAY_MS: '800', ...ntfyEnv }, async (ctx) => {
+      const { first } = await queueOne(ctx);
+      ctx.sock.emit('user:interrupt', { instanceId: first.instanceId });
+      await waitForCondition(() => ctx.queued()?.[0]?.state === 'held', { timeoutMs: 3000, label: '转未发送' });
+      assert.equal(ctx.queued()[0].reason, 'stopped');
+      await new Promise(r => setTimeout(r, 1500));
+      assert.equal(heldItems(ctx).length, 0, '用户刚点的停止，再把它列成待办是打扰');
+      assert.equal(heldPushes(hits).length, 0, `用户刚点的停止不该推：${JSON.stringify(hits)}`);
+      assert.equal(ctx.queued()[0].state, 'held', '不提醒不等于丢掉');
+    });
+  });
+});
+
+test('NOTIFY-01 / ALERT-01：回合中途进程退出转未发送 → 推一条带深链，「需要你」那条实例号不为空', async () => {
+  await withNtfy(async (ntfyEnv, hits) => {
+    await withServer({ CCM_FAKE_CLAUDE_MODE: 'turn', CCM_FAKE_CLAUDE_RESULT_DELAY_MS: '600', CCM_FAKE_CLAUDE_EXIT_MID_TURN: '1', ...ntfyEnv }, async (ctx) => {
+      const { first } = await queueOne(ctx);
+      await waitForCondition(() => ctx.queued()?.[0]?.state === 'held', { timeoutMs: 8000, label: '转未发送' });
+      assert.equal(ctx.queued()[0].reason, 'instance_exit');
+      await waitForCondition(() => heldItems(ctx).length === 1, { timeoutMs: 3000, label: '进「需要你」' });
+      assert.equal(heldItems(ctx)[0].instanceId, first.instanceId, '实例没了也要给排队时的实例号，前端按 sessionId 切过去；给 null 就点不动');
+      await waitForCondition(() => heldPushes(hits).length === 1, { timeoutMs: 8000, label: 'ntfy 收到未发送推送' });
+      assert.match(heldPushes(hits)[0].message ?? '', /会话进程退出了/);
+    });
+  });
+});
+

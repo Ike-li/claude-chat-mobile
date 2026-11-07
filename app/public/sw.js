@@ -42,7 +42,8 @@ self.addEventListener('push', e => {
       // 按会话分组：固定字面量会让「同 tag 替换」语义跨会话生效——锁屏时项目 B 的「✅ 任务完成」
       // 静默吃掉项目 A 的「⚠️ 请求许可」，审批一直卡到 TTL 过期。同会话内替换是有意设计
       // （跑完把「运行中」换成「已完成」），按 sessionId 分组恰好保留它，同时让不同会话各占一条。
-      tag:      data.data?.sessionId ? `ccm-${data.data.sessionId}` : 'ccm-push',
+      // data.kind 再细分一层：同会话里要和回合结局并存的提醒（排队消息没有发出）不被「任务出错」替换
+      tag:      data.data?.sessionId ? `ccm-${data.data.sessionId}${data.data.kind ? `-${data.data.kind}` : ''}` : 'ccm-push',
       renotify: true,
       data:     data.data || null,   // ②2c：深链锚点 {instanceId, sessionId, cwd}，供 notificationclick 定位会话
     }),

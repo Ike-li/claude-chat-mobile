@@ -35,6 +35,7 @@ export function createMessageQueue({
   sendGate,
   getLiveInstance,
   onChange = () => {},
+  onHeld = () => {}, // 转未发送：推送由接线方按 heldNeedsAttention 决定
   log = () => {},
 } = {}) {
   const entries = new Map(); // sessionId → 条目
@@ -71,6 +72,7 @@ export function createMessageQueue({
     if (live) entry.cwd = live.cwd;
     log(entry.sessionId, `[SYS] 排队消息：未发送（${reason}）`);
     onChange();
+    onHeld({ sessionId: entry.sessionId, instanceId: live?.instanceId ?? entry.instanceId, cwd: entry.cwd, reason });
   }
 
   function accept({ instance, clientMessageId, text, model, attachments }) {
