@@ -219,7 +219,8 @@ export function notificationForQueuedHeld({ reason, instanceId, sessionId, cwd, 
   const why = QUEUED_HELD_REASON_TEXT[reason];
   const body = why ? `${why}，回到会话取回` : '回到会话取回';
   const base = { title, ntfyTitle, body, ntfyType: 'queued_held' };
-  return instanceId ? { ...base, data: { instanceId, sessionId, cwd } } : base;
+  // kind：Service Worker 据此单独给一个 tag。回合出错时这条先推、「任务出错」后到，同 tag 就把「去取回」顶掉了
+  return instanceId ? { ...base, data: { instanceId, sessionId, cwd, kind: 'queued_held' } } : base;
 }
 
 // 终端直跑会话（CLI hooks 桥）的通知：与 notificationForEvent 分开，因为它按 envelope type 键控，

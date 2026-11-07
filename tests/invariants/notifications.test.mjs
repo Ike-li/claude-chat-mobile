@@ -479,7 +479,8 @@ test('NOTIFY-01：排队消息转未发送 → 推，标题说没发出，正文
   assert.match(pn.title, /排队消息没有发出/);
   assert.match(pn.title, /proj/, '同一台机器多个项目，要分得出是哪个');
   assert.match(pn.body, /本轮出错/, '只说「没发出」用户不知道要不要管');
-  assert.deepEqual(pn.data, { instanceId: 'inst-1', sessionId: 'sess-1', cwd: '/w/proj' }, '点通知要能落到这个会话');
+  assert.deepEqual(pn.data, { instanceId: 'inst-1', sessionId: 'sess-1', cwd: '/w/proj', kind: 'queued_held' },
+    '点通知要能落到这个会话；kind 让 Service Worker 单独给它一个 tag，不被同会话的「任务出错」替换');
   assert.equal(pn.ntfyType, 'queued_held');
 });
 
