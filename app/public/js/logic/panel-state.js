@@ -157,7 +157,15 @@ const DRAWER_STATUS_LABELS = {
 // terminalSource（2026-09-06）：外部驾驶员不只有终端了。桌面端 Code 模式（Claude.app 的 Code
 // 标签，entrypoint=claude-desktop）驾驶时说"终端运行中"是在说错话——用户会去翻终端标签页，
 // 而那个回合其实跑在桌面 app 的窗口里。状态轴不变（都是 busy），只换措辞。
-// 未知/缺失 source 回落"终端"：与本字段引入之前完全同形，老服务端的行不会塌成无 chip。
+// 缺失 source 回落"终端"：与本字段引入之前完全同形，老服务端的行、只靠镜像锁补出来的行不会塌成无 chip。
+// 2026-11-08 起服务端不再只放行已登记的来源（VS Code 扩展的会话此前在抽屉里毫无标识），
+// 认不得的来源说「电脑上」：对所有本机外部驾驶员都成立，冒充"终端"则对大多数新来源是错的。
+const EXTERNAL_BUSY_LABELS = { cli: tk('终端运行中'), 'claude-desktop': tk('桌面端运行中'), 'claude-vscode': tk('VS Code 运行中') };
+const EXTERNAL_OPEN_LABELS = { cli: tk('终端已打开'), 'claude-desktop': tk('桌面端已打开'), 'claude-vscode': tk('VS Code 已打开') };
+function externalDriverLabel(labels, source, unknownLabel) {
+  if (!source) return labels.cli;
+  return Object.hasOwn(labels, source) ? labels[source] : unknownLabel;
+}
 export function resolveDrawerStatusChip({ liveState, terminalState, terminalSource = null, bgLocked = false } = {}) {
   const status = resolveDrawerStatus({ liveState, terminalState, bgLocked });
   if (!status) return null;
@@ -166,7 +174,7 @@ export function resolveDrawerStatusChip({ liveState, terminalState, terminalSour
   // 打开终端也看不到它。
   const label = (status === 'busy' && bgLocked) ? tk('后台任务运行中')
     : (status === 'busy' && terminalState === 'busy')
-      ? (terminalSource === 'claude-desktop' ? tk('桌面端运行中') : tk('终端运行中'))
+      ? externalDriverLabel(EXTERNAL_BUSY_LABELS, terminalSource, tk('电脑上运行中'))
       : (DRAWER_STATUS_LABELS[status] || tk('运行中'));
   return { status, label };
 }
@@ -216,7 +224,7 @@ export function formatSessionRowSubtitle({
   if (typeof worktree === 'string' && worktree.trim()) {
     parts.push(`worktree ${worktree.trim()}${worktreeGone ? t('（已删除）') : ''}`);
   }
-  if (terminalState === 'alive') parts.push(terminalSource === 'claude-desktop' ? t('桌面端已打开') : t('终端已打开'));
+  if (terminalState === 'alive') parts.push(t(externalDriverLabel(EXTERNAL_OPEN_LABELS, terminalSource, tk('电脑上已打开'))));
   if (whenText) parts.push(whenText);
   if (liveOpen) parts.push(t('已打开'));
   if (shortId) parts.push(String(shortId));
