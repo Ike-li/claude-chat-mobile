@@ -185,12 +185,34 @@ test('resolveDrawerStatusChip: 桌面端 Code 模式驾驶 → 桌面端运行�
     resolveDrawerStatusChip({ liveState: 'busy', terminalState: 'busy', terminalSource: 'claude-desktop' }),
     { status: 'busy', label: '桌面端运行中' },
   );
-  // 来源明确是 cli / 缺失 / 未知取值：一律回落"终端运行中"（= 引入本字段之前的行为）
+  // 来源明确是 cli / 缺失：回落"终端运行中"（= 引入本字段之前的行为）
   assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy', terminalSource: 'cli' }), { status: 'busy', label: '终端运行中' });
   assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
-  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy', terminalSource: 'brand-new' }), { status: 'busy', label: '终端运行中' });
   // 纯 Web 回合不受来源影响：terminalState 不是 busy 时来源无意义
   assert.deepEqual(resolveDrawerStatusChip({ liveState: 'busy', terminalSource: 'claude-desktop' }), { status: 'busy', label: '运行中' });
+});
+
+// 2026-11-08：VS Code 扩展驾驶的会话（真机 f8c96499）同理，说成"终端"会让人去翻终端。
+// 服务端从这天起把没登记的来源也原样带过来；前端认不得的来源说「电脑上」——
+// 那是唯一对所有本机外部驾驶员都成立的说法，冒充成"终端"则对大多数新来源是错的。
+test('resolveDrawerStatusChip: VS Code 驾驶 → VS Code 运行中；认不得的来源 → 电脑上运行中', () => {
+  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy', terminalSource: 'claude-vscode' }),
+    { status: 'busy', label: 'VS Code 运行中' });
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'idle', terminalState: 'busy', terminalSource: 'claude-vscode' }),
+    { status: 'busy', label: 'VS Code 运行中' }, '截图那一幕：web 实例开着但闲着，VS Code 在跑');
+  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy', terminalSource: 'brand-new' }),
+    { status: 'busy', label: '电脑上运行中' });
+});
+
+test('formatSessionRowSubtitle: VS Code 已打开；认不得的来源 → 电脑上已打开', () => {
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '11/8', terminalState: 'alive', terminalSource: 'claude-vscode', shortId: 'f8c96499' }),
+    'VS Code 已打开 · 11/8 · f8c96499',
+  );
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '11/8', terminalState: 'alive', terminalSource: 'brand-new', shortId: 'f8c96499' }),
+    '电脑上已打开 · 11/8 · f8c96499',
+  );
 });
 
 test('formatSessionRowSubtitle: 桌面端已打开与终端已打开分开说', () => {

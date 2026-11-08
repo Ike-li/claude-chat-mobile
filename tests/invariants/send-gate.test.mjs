@@ -309,6 +309,10 @@ for (const [name, entry] of [
   ['终端在跑', { entrypoint: 'cli', status: 'busy' }],
   ['终端等审批', { entrypoint: 'cli', status: 'waiting' }],
   ['桌面端在跑（新版自报）', { entrypoint: 'claude-desktop', status: 'busy' }],
+  // 2026-11-08：VS Code 扩展此前不在外部驾驶员名单上，排队消息会被代发进它正在跑的会话
+  ['VS Code 在跑', { entrypoint: 'claude-vscode', status: 'busy' }],
+  ['VS Code 等审批', { entrypoint: 'claude-vscode', status: 'waiting' }],
+  ['上游新加的运行形式在跑', { entrypoint: 'brand-new-frontend', status: 'busy' }],
   ['后台 agent 占用', { entrypoint: 'sdk-cli', kind: 'bg' }],
   ['别的目录下的进程开着同一会话', { entrypoint: 'cli', status: 'busy', cwd: `${CWD}/.claude/worktrees/x` }],
 ]) {

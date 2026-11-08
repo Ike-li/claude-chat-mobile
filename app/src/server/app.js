@@ -83,7 +83,7 @@ import { PREAUTH_MAX_BUFFER_BYTES, grantAuthedBufferLimit } from '../auth/preaut
 import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
-import { listTerminalSessionStates, listTerminalSessionStatesOrNull, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, hasTerminalSessionOverlapping, findBlockingLiveAgent, readSessionRegistry } from '../sessions/session-registry.js';
+import { listTerminalSessionStates, listTerminalSessionStatesOrNull, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, hasTerminalSessionOverlapping, findBlockingLiveAgent, liveHolderNotice } from '../sessions/session-registry.js';
 import {
   resumeDivergence, readResumeEntries,
   snapshotResumeTranscript, startResumeDivergence,
@@ -2642,20 +2642,13 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
   return instance;
 }
 
-// 接管提醒（2026-10-16）：手机开始写的时候，电脑上开着的终端（或桌面端）还挂着这个会话。那个进程内存里停在
-// 旧叶子，之后它再写任何东西（离开摘要、Remote Control 断开提示、本地命令）或退出，下次续接就接回它那一支、
-// 手机这段不进上下文（SESSION-04 的成因）。产品管不了那个进程，只能说一声；每个实例只说一次。
-// 注册表里本实例自己的 SDK 子进程报 sdk-ts，不算。
-const LIVE_HOLDER_NOTICE = {
-  cli: '电脑上的终端还开着这个会话。手机接着聊没问题，但那个终端之后再写任何东西或退出，下次续接会接回终端那一轮。不用终端了就先在电脑上 /exit；回到电脑时用 claude -c 或 claude --resume 重新打开。',
-  'claude-desktop': '桌面端还开着这个会话。手机接着聊没问题，但桌面端之后再写任何东西或关掉它，下次续接会接回桌面端那一轮。不用了就先在桌面端关掉这个会话。',
-};
+// 接管提醒：判据与文案见 session-registry 的 liveHolderNotice。每个实例只说一次。
 function noteLiveTerminalOnTakeover(a) {
   if (a.liveHolderNoticed || !a.sessionId) return;
   a.liveHolderNoticed = true;
-  readSessionRegistry(a.sessionId, a.cwd)
-    .then(entry => {
-      const text = LIVE_HOLDER_NOTICE[entry?.entrypoint];
+  listTerminalSessionStates()
+    .then(states => {
+      const text = liveHolderNotice(states, a.sessionId);
       if (text && !a.disposed) a.emitNotice(text, 'warning');
     })
     .catch(() => { /* 注册表是加分信号，读不动就不提醒 */ });
