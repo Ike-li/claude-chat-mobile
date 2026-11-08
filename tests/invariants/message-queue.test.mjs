@@ -792,3 +792,29 @@ test('MSG-03 立即发送过闸期间点了停止、过闸又没过：保持未�
   await ctx.fireTimers();
   assert.deepEqual(ctx.a.sent, []);
 });
+
+// PR #544 Codex review P2：立即发送在途（sending）时这一轮结束了，回合结束和 idle 都跳过 sending 的条目。
+// 失败后改回 waiting 就再没有释放时机，卡片一直说「本轮结束后自动发送」。回合已结束时转未发送，交给用户。
+test('立即发送过闸不过、这期间回合已经结束 → 转未发送，不能停在没人放的排队中', async () => {
+  const ctx = setup();
+  let release;
+  ctx.location = () => new Promise(r => { release = () => r({ status: 'missing' }); });
+  ctx.accept();
+  const pending = ctx.q.sendNow(SID, 'c1');
+  await flush();
+  assert.equal(ctx.endTurn(), undefined, '前提：sending 期间回合结束被跳过');
+  ctx.q.onCliIdle(ctx.a);
+  release();
+  assert.equal((await pending).ok, false);
+  assert.equal(ctx.state(), 'held');
+  assert.equal(ctx.reason(), 'location');
+  assert.deepEqual(ctx.a.sent, []);
+});
+
+test('立即发送投递失败、这期间回合已经结束 → 转未发送，原因如实', async () => {
+  const ctx = setup({ instance: makeInstance({ async send() { ctx.endTurn(); return false; } }) });
+  ctx.accept();
+  assert.equal((await ctx.q.sendNow(SID, 'c1')).ok, false);
+  assert.equal(ctx.state(), 'held');
+  assert.equal(ctx.reason(), 'send_failed');
+});

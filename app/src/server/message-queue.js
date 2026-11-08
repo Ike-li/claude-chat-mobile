@@ -166,7 +166,7 @@ export function createMessageQueue({
 
   /**
    * 用户点「立即发送」。和 release 的差别：交互闸（人在跟前）、不等回合结束、带 priority:'now'。
-   * 过闸不过回到 waiting 报原因，话不丢，回合结束时照旧走释放；期间被撤回或停止则不发。
+   * 过闸或投递不过：回合还在跑就回到 waiting 报原因，回合结束时照旧走释放；回合已经结束则转未发送。期间被撤回或停止则不发。
    */
   async function sendNow(sessionId, clientMessageId) {
     const entry = entries.get(sessionId);
@@ -180,7 +180,7 @@ export function createMessageQueue({
     const gate = await sendGate.prepare(a, { sendNow: true });
     if (!stillMine()) return { ok: false, error: 'cancelled' }; // 过闸期间被撤回或停止
     if (!gate.ok) {
-      setPhase(entry, 'waiting');
+      settleSendNowFailure(entry, gate.code);
       return { ok: false, error: gate.code };
     }
     log(sessionId, '[SYS] 排队消息：立即发送');
@@ -193,8 +193,15 @@ export function createMessageQueue({
       return { ok: true };
     }
     if (!stillMine()) return { ok: false, error: 'cancelled' };
-    setPhase(entry, 'waiting');
+    settleSendNowFailure(entry, out.reason);
     return { ok: false, error: out.reason };
+  }
+
+  // 立即发送没成。回合还在跑：回到排队中，照常等它结束。已经结束了：sending 期间回合结束和 idle 都跳过了这一条，
+  // 改回 waiting 就再没有释放时机（PR #544 Codex review），而那一轮怎么结束的也没判过，不能替用户自动发 → 转未发送。
+  function settleSendNowFailure(entry, reason) {
+    if (getLiveInstance(entry.sessionId)?.pendingTurns > 0) setPhase(entry, 'waiting');
+    else toHeld(entry, reason);
   }
 
   /** 用户取回。后到的设备拿到 not_found，Map 删除是同步的。 */

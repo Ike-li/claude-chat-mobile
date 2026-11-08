@@ -1176,7 +1176,7 @@ export class AgentSession {
       this._deniedNoticed.clear();
     }
     const id = ++this._turnIdSeq;
-    this._openTurns.push({ id, forceSettled: false, msgUuid, cliQueued: false, sendNow, clientMessageId });
+    this._openTurns.push({ id, forceSettled: false, msgUuid, cliQueued: false, started: false, sendNow, clientMessageId });
     return id;
   }
 
@@ -1199,6 +1199,7 @@ export class AgentSession {
       return;
     }
     slot.cliQueued = msg.state === 'queued';
+    if (msg.state === 'started') slot.started = true; // 停止时据此判断它还能不能被 cancelQueued 撤下，见 interrupt
   }
 
   _forceSettleOpenTurns() {
@@ -1345,11 +1346,13 @@ export class AgentSession {
     const dropped = toDrop.length;
     this.queue = [];
     const droppedIds = toDrop.map(it => it.clientMessageId).filter(Boolean);
-    // 已交给 CLI、还排在它队列里的消息。有「立即发送」排着时要连它一起停：普通 interrupt 回 still_queued，
-    // A 停了它照跑（实测）。没有时不带 cancelQueued，汇报轮后面排着的手动消息照旧开跑（OPS-04 那条用例的语义）。
-    // 快照要在 await 之前：lifecycle 的 cancelled 可能先于应答到，那时立即发送的槽已经出了，见 _noteCommandLifecycle。
-    const cliQueuedSlots = this._openTurns.filter(t => t.cliQueued);
-    const cancelQueued = cliQueuedSlots.some(t => t.sendNow);
+    // 还没开跑的消息（排在 CLI 队列里，或输入泵已取走、queued 帧还没回来）。有「立即发送」没开跑时要连它一起停：
+    // 普通 interrupt 回 still_queued，A 停了它照跑（实测）。判据是「没报过 started」而不是 cliQueued：取走到 queued 帧
+    // 之间那几毫秒里 cliQueued 还是 false（PR #544 Codex review）。没有时不带 cancelQueued，汇报轮后面排着的手动消息
+    // 照旧开跑（OPS-04 那条用例的语义）。快照要在 await 之前：lifecycle 的 cancelled 可能先于应答到，那时立即发送的槽
+    // 已经出了，见 _noteCommandLifecycle。
+    const unstartedSlots = this._openTurns.filter(t => !t.started);
+    const cancelQueued = unstartedSlots.some(t => t.sendNow);
     // 限流重试时 q.interrupt() 的 control_request 可能永不回包 → await 永挂 → 前端「正在停止…」卡死。
     // 超时后按失败路径强制收口（见 settleForce / catch）。
     const raceInterrupt = () => this._raceControlRequest(() => this.q?.interrupt?.(cancelQueued ? { cancelQueued: true } : undefined), 'interrupt');
@@ -1400,7 +1403,7 @@ export class AgentSession {
       this._dropOpenTurnSlots(dropped);
       // CLI 取消掉的排队消息不会再有 result：出账，气泡标「已随停止取消」。槽已被 lifecycle 出过的只补标记
       const cancelled = new Set(Array.isArray(receipt?.cancelled) ? receipt.cancelled : []);
-      for (const slot of cliQueuedSlots) {
+      for (const slot of unstartedSlots) {
         if (!cancelled.has(slot.msgUuid)) continue;
         const idx = this._openTurns.indexOf(slot);
         if (idx >= 0) {

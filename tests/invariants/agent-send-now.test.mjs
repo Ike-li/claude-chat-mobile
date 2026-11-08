@@ -168,3 +168,20 @@ test('B 已并进当前轮再点停止：B 由 lifecycle 出账，A 的 result �
   assert.equal(events.some(e => e.type === 'system' && e.payload.kind === 'queue_dropped'), false, 'B 已经被模型读到，不是「未发送」');
   s.dispose();
 });
+
+// PR #544 Codex review P2：SDK 已经把 B 取走、CLI 的 queued 帧还没到时点停止。只看 cliQueued 的话这次停止不带
+// cancelQueued，B 照跑
+test('B 已交给 CLI、queued 帧还没到就点停止：照样带 cancelQueued，B 出账并标「已随停止取消」', async () => {
+  const { s, events, a } = await running();
+  assert.equal(await s.send('B', undefined, { priority: 'now', clientMessageId: 'c-b' }), true);
+  const b = s.queue.at(-1).uuid;
+  s.queue = []; // 输入泵已取走，lifecycle 还没回来
+  const calls = recordingQuery(s, () => ({ still_queued: [], cancelled: [b] }));
+  await s.interrupt();
+  assert.deepEqual(calls, [{ cancelQueued: true }], 'B 还没开跑，不连它一起停的话 A 停了它照跑');
+  assert.equal(s.pendingTurns, 1);
+  assert.deepEqual(events.find(e => e.type === 'system' && e.payload.kind === 'queue_dropped')?.payload.clientMessageIds, ['c-b']);
+  s.map(stopResult(a));
+  assert.equal(s.pendingTurns, 0);
+  s.dispose();
+});
