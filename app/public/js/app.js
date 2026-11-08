@@ -697,6 +697,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       queuedCardStatus: $('queuedCardStatus'),
       queuedCardPreview: $('queuedCardPreview'),
       queuedCardAction: $('queuedCardAction'),
+      queuedCardSendNow: $('queuedCardSendNow'),
       consoleModal,
       consoleLogArea,
       btnAttach,
@@ -3046,12 +3047,13 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       markAllSubagentCardsDone(); // 主轮结束：仍 running 的子 agent 卡标「已完成」（防 tool_result 漏标）
       // turn-end 文件变更汇总卡（对齐官方「已编辑 N 个文件」；完整 diff 仍走单卡预览）
       const fileChangesCard = flushTurnFileChangesCard();
-      clearBusyFromTurnEndEvent(ev);
-      updateSendButtonState();
       // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
       // 横幅生命周期交给 task_progress（下拍心跳 showTaskProgress 重现）与 task_notification（完成时 hideTaskProgress）自洽驱动。
       // 对齐 CLI：用户主动中止时 SDK 常带 is_error + ede_diagnostic；interrupted 优先，不当红色错误展示。
       const ui = presentTurnResult(p);
+      // 给立即发送让路（keepBusy）：那条消息正在跑，转空闲的话它的第一个流事件到来之前停止钮消失、发送闸松开
+      if (!ui.keepBusy) clearBusyFromTurnEndEvent(ev);
+      updateSendButtonState();
       logClientEvent('recv', `[WEB_RECV] ${ui.statusBar.text}`); // send↔recv 对账：turn 结果在客户端到达
       if (ui.failToolsMessage) failPendingToolCards(ui.failToolsMessage);
       if (ui.haptic) alertCue(ui.haptic); // success / warning / error：音+震（各自开关门控）
@@ -3066,9 +3068,11 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         scrollBottom(true);
       }
 
-      // 防御性清理当前 tab 的挂起提问和审批
-      approvals.clearAll();
-      elicitationSheet.clearAll();
+      // 防御性清理当前 tab 的挂起提问和审批。让路时不清：下一轮已经在跑，它的审批可能已经到了
+      if (!ui.keepBusy) {
+        approvals.clearAll();
+        elicitationSheet.clearAll();
+      }
       updateSendButtonState();
     },
     error(p, ev) {

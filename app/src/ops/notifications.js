@@ -94,6 +94,7 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
   switch (type) {
     case 'result':
       if (hasClients || p.queuedNext) return null; // queuedNext：排队的消息马上开跑，这时说「任务完成」是假的
+      if (p.interruptedBy === 'send_now') return null; // 给立即发送让路：用户刚点的，下一条正在跑，不是中断也不是完成
       // 对齐 CLI：interrupt 终态 result 即使 is_error/ede_diagnostic，也是「已中止」不是「出错」
       // 无 previewBody：result 本身只是轮次终态元数据（耗时/costUsd/isError），没有可预览的正文内容
       // ——真正的对话内容在 assistant 的 text_delta 流里，不在这个事件上。

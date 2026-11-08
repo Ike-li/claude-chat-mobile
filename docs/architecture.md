@@ -57,6 +57,8 @@ Cloudflare 不是必需组件。同一 WiFi 可直接访问本机 server；固�
 4. SDK 输出经映射层转成文本、工具、审批、提问、状态、后台任务等产品事件。
 5. 所有出向事件统一封装为 `agent:event`，前端按会话与实例分流并渲染。
 
+回合在跑时，手机上多打的一条留在 server 排队（`message-queue.js`），回合正常结束、CLI 报 idle 后才交给 CLI。排队卡片上的「立即发送」是唯一的例外：这条当场带 `priority:'now'` 交给 CLI，由 CLI 让当前这一轮让路——前台 shell 或子 agent 转后台、或停在下一次模型请求前。让路之后 CLI 报几个 `result` 不固定：被停的那一轮一个、这条单独一轮一个；或者这条并进当前这一轮、自己没有 `result`，只有 `command_lifecycle` 的 `completed`。账目两种都接（`agent.js` 的 `_noteCommandLifecycle`）。它还没开跑时点停止，`interrupt` 带 `cancelQueued` 连它一起停。只在 CLI 声明 `interrupt_send_now_v1` 与 `interrupt_cancel_queued_v1` 时放行。
+
 Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI 的登录态、项目 `CLAUDE.md`、Claude settings、MCP、skills、hooks 和受控 provider 环境。
 
 ### CLI 驾驶
@@ -288,7 +290,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 | `question` | ❓ Claude 有问题 | 无条件 |
 | `elicitation` | 🔐 MCP 需要你 | 无条件 |
 | `task_notification` | ✅ / ⚠️ 后台任务完成 / 失败 | 无条件 |
-| `result` | ✅ / ⚠️ / ⏹ 任务完成 / 出错 / 已中止；不是用户按的停止按 `interruptedBy` 显示 ⚠️ 任务超时中断 / 任务被中断 | 前台可见则抑制 |
+| `result` | ✅ / ⚠️ / ⏹ 任务完成 / 出错 / 已中止；不是用户按的停止按 `interruptedBy` 显示 ⚠️ 任务超时中断 / 任务被中断；带 `queuedNext` 或给立即发送让路（`interruptedBy:'send_now'`）的不推，下一条正在跑 | 前台可见则抑制 |
 | `system` 且 `notice=gateway_stall` | ⏳ 模型长时间无响应 | 前台可见则抑制 |
 | 新设备握手 | 🔐 新设备请求接入 | 不走 `agent:event` |
 | CLI hooks 的 `Stop` / `Notification` | ✅ 终端会话完成一轮 / ⚠️ 终端会话需要你 | 不走 `agent:event` |

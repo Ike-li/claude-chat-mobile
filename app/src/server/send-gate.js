@@ -81,12 +81,13 @@ export function createSendGate({
 
   /**
    * 判定这条消息此刻能不能写进实例。不发送、不 commit 去重 ID。
-   * @param {{unattended?:boolean, ackDivergence?:string, onResuming?:Function}} [options]
+   * @param {{unattended?:boolean, sendNow?:boolean, ackDivergence?:string, onResuming?:Function}} [options]
+   *   sendNow：排队卡片上的「立即发送」。人在跟前，只跳过在途轮那一道：消息带 priority:'now' 交给 CLI，由它让当前这一轮让路。
    * @returns {Promise<{ok:true, instance:object} | {ok:false, code:string, instance:object, ack?:object}>}
    *   instance 是判定后的实例（置换后是新实例），ack 是给客户端的负回执。
    *   code：location | external_dirty_busy | diverged | turn_running，无人值守另有 other_driver | unverified。
    */
-  async function prepare(instance, { unattended = false, ackDivergence, onResuming } = {}) {
+  async function prepare(instance, { unattended = false, sendNow = false, ackDivergence, onResuming } = {}) {
     let a = instance;
     if (unattended) {
       const code = await otherDriverCode(a);
@@ -147,7 +148,7 @@ export function createSendGate({
     // 放在 send() 之前而非依赖其返回值，是为了让拒绝理由精确：send() 返回 false 还covers disposed
     // 与窄竞态，那些是可重试的，而"任务运行中"要的是【不】自动重试（否则等于把排队搬到客户端）。
     // 不 commit 去重 ID、不记 userMessageIn：同一 clientMessageId 稍后重发必须还能成功。
-    if (a.pendingTurns > 0) {
+    if (a.pendingTurns > 0 && !sendNow) {
       return { ok: false, code: 'turn_running', instance: a, ack: { ok: false, error: '当前任务运行中，请等待完成后再发送', busy: true, retryable: false } };
     }
     return { ok: true, instance: a };
@@ -155,14 +156,15 @@ export function createSendGate({
 
   /**
    * 把消息交给实例。只发不判，调用方必须先过 prepare。
-   * @param {{text:string, model?:string, attachments?:Array, clientMessageId?:string, startedAt?:number, shouldSend?:Function}} message
+   * @param {{text:string, model?:string, attachments?:Array, clientMessageId?:string, startedAt?:number, shouldSend?:Function, priority?:'now'}} message
    *   shouldSend 传给 a.send，在入队那一刻判断还要不要发：落盘和切模型都要等，这期间用户可能取消。
+   *   priority 只有立即发送带，原样传给 a.send。
    * @returns {Promise<{ok:true, ack:object} | {ok:false, reason:string, notice?:string, ack:object}>}
    *   notice 是给发送方的一句提示；reason 给无人值守调用方判去向。
    */
-  async function deliver(a, { text, model, attachments, clientMessageId, startedAt = Date.now(), shouldSend }) {
+  async function deliver(a, { text, model, attachments, clientMessageId, startedAt = Date.now(), shouldSend, priority }) {
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
-    const cancellable = shouldSend ? { shouldSend } : {};
+    const cancellable = { ...(shouldSend ? { shouldSend } : {}), ...(priority ? { priority } : {}) };
     // FRESH 首轮 sessionId 可能仍 null：走 agent.logKey()（provisionalKey）与 agent 内 userMessageOut/agentSend 对齐
     interactionLog.userMessageIn(a.logKey(), text, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
     let sent;

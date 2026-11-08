@@ -17,6 +17,9 @@
 //
 // 【释放走发送闸的无人值守模式】判定和投递都在 send-gate.js。任何一道闸不过都转 held，held 永不自动释放，
 // 只有用户取回。条目只有三个出口：发出、用户取回、删除会话。
+//
+// 【立即发送是唯一不等回合结束的出口】用户点了，人就在跟前：过交互闸，只跳过在途轮那一道，带 priority:'now' 交出去，
+// CLI 让当前这一轮让路（转后台或停下）。能不能这样发看实例的 canSendNow()（CLI 能力位），快照里的 sendNow 给前端决定显不显示按钮。
 import { classifyTurnEnd, MAX_QUEUED_TOTAL, QUEUE_PREVIEW_CHARS, QUEUE_SETTLE_MS } from '../agent/queued-message-policy.js';
 
 const NOT_READY_ERROR = '会话还在启动，暂时不能排队';
@@ -161,6 +164,39 @@ export function createMessageQueue({
     toHeld(entry, reason);
   }
 
+  /**
+   * 用户点「立即发送」。和 release 的差别：交互闸（人在跟前）、不等回合结束、带 priority:'now'。
+   * 过闸不过回到 waiting 报原因，话不丢，回合结束时照旧走释放；期间被撤回或停止则不发。
+   */
+  async function sendNow(sessionId, clientMessageId) {
+    const entry = entries.get(sessionId);
+    if (!entry || entry.clientMessageId !== clientMessageId) return { ok: false, error: 'not_found' };
+    if (entry.phase !== 'waiting' && entry.phase !== 'settling') return { ok: false, error: 'not_waiting' };
+    const a = getLiveInstance(sessionId);
+    if (!a) return { ok: false, error: 'instance_exit' };
+    if (!a.canSendNow?.()) return { ok: false, error: 'send_now_unsupported' };
+    setPhase(entry, 'sending');
+    const stillMine = () => isCurrent(entry) && entry.phase === 'sending';
+    const gate = await sendGate.prepare(a, { sendNow: true });
+    if (!stillMine()) return { ok: false, error: 'cancelled' }; // 过闸期间被撤回或停止
+    if (!gate.ok) {
+      setPhase(entry, 'waiting');
+      return { ok: false, error: gate.code };
+    }
+    log(sessionId, '[SYS] 排队消息：立即发送');
+    const out = await sendGate.deliver(gate.instance, {
+      text: entry.text, model: entry.model, attachments: entry.attachments, clientMessageId: entry.clientMessageId,
+      priority: 'now', shouldSend: stillMine,
+    });
+    if (out.ok) {
+      remove(entry, 'sent_now');
+      return { ok: true };
+    }
+    if (!stillMine()) return { ok: false, error: 'cancelled' };
+    setPhase(entry, 'waiting');
+    return { ok: false, error: out.reason };
+  }
+
   /** 用户取回。后到的设备拿到 not_found，Map 删除是同步的。 */
   function take(sessionId, clientMessageId) {
     const entry = entries.get(sessionId);
@@ -202,8 +238,9 @@ export function createMessageQueue({
       textLength: e.text.length,
       attachments: (e.attachments ?? []).map(({ name, mimeType }) => ({ name, mimeType })),
       acceptedAt: e.acceptedAt, heldAt: e.heldAt,
+      sendNow: Boolean(getLiveInstance(e.sessionId)?.canSendNow?.()),
     }));
   }
 
-  return { accept, onTurnEnded, onTurnStarted, onCliIdle, hold, take, onSessionChanged, discard, hasMessage, snapshot };
+  return { accept, onTurnEnded, onTurnStarted, onCliIdle, hold, sendNow, take, onSessionChanged, discard, hasMessage, snapshot };
 }

@@ -46,10 +46,29 @@ export function resolveQueuedCard(entries, sessionId) {
   const base = { state: entry.state, clientMessageId: entry.clientMessageId, sessionId: entry.sessionId, preview: previewOf(entry) };
   if (entry.state === 'held') {
     const reason = HELD_REASON_TEXT[entry.reason];
-    return { ...base, icon: '⏸', status: `${t('未发送')} · ${reason ? t(reason) : t('这条没有发出')}`, actionLabel: t('取回') };
+    return { ...base, icon: '⏸', status: `${t('未发送')} · ${reason ? t(reason) : t('这条没有发出')}`, actionLabel: t('取回'), sendNowLabel: null };
   }
-  if (entry.state === 'sending') return { ...base, icon: '🕐', status: t('正在发送...'), actionLabel: null };
-  return { ...base, icon: '⏳', status: t('排队中 · 本轮结束后自动发送'), actionLabel: t('撤回') };
+  if (entry.state === 'sending') return { ...base, icon: '🕐', status: t('正在发送...'), actionLabel: null, sendNowLabel: null };
+  // 立即发送只给排队中的：server 按 CLI 能力位算好 sendNow，旧 server 的快照没有这个字段，按不支持
+  return {
+    ...base, icon: '⏳', status: t('排队中 · 本轮结束后自动发送'), actionLabel: t('撤回'),
+    sendNowLabel: entry.sendNow === true ? t('立即发送') : null,
+  };
+}
+
+const SEND_NOW_GONE = new Set(['not_found', 'not_waiting', 'cancelled']);
+
+/**
+ * 立即发送的回执。成功时不说话：B 的气泡上屏、卡片随快照消失就是回执。没发出去时条目还在 server（回到排队中），
+ * 要说清这一点；超时则不知道发没发，让用户看快照再试（再试撞上已发出的会回 not_found，不会发两遍）。
+ * @returns {null | {message:string, tone:string}}
+ */
+export function presentSendNowAck(err, ack) {
+  if (err) return { message: t('没有确认立即发送，可再试一次'), tone: 'text-danger' };
+  if (ack?.ok === true) return null;
+  if (SEND_NOW_GONE.has(ack?.error)) return { message: t('已被取走或已发出'), tone: 'text-info' };
+  if (ack?.error === 'send_now_unsupported') return { message: t('这个会话的 CLI 不支持立即发送，这条留在排队里'), tone: 'text-danger' };
+  return { message: t('没能立即发送，这条留在排队里'), tone: 'text-danger' };
 }
 
 /**
