@@ -1,4 +1,4 @@
-// 排队消息：卡片、提交、取回、本地副本。判定全在 logic/queued-message.js，状态机在 server 的 message-queue.js。
+// 排队消息：卡片、提交、取回、立即发送、本地副本。判定全在 logic/queued-message.js，状态机在 server 的 message-queue.js。
 //
 // 【卡片不进消息流】排队中的话不做气泡：气泡要应付清屏、DOM 缓存、历史重载和跨设备，而另一台设备根本没有这颗气泡。
 // 卡片由 instances 广播的 queuedMessages 驱动，是按 sessionId 归键的全量快照：断线重连、切会话、换设备都从同一份
@@ -11,7 +11,7 @@
 // reconcileQueuedCopies。副本带着提交那一刻的 service.startedAt：比较用记下来的值，页面重载后也成立。
 import { t } from '../i18n.js';
 import {
-  QUEUED_COPIES_STORAGE_KEY, isQueueAvailable, presentQueueSubmitAck, queuedEntryFor, reconcileQueuedCopies, resolveQueuedCard,
+  QUEUED_COPIES_STORAGE_KEY, isQueueAvailable, presentQueueSubmitAck, presentSendNowAck, queuedEntryFor, reconcileQueuedCopies, resolveQueuedCard,
 } from '../logic/queued-message.js';
 
 // 只用无透明度的 token，理由同 auto-continue-banner.js
@@ -72,7 +72,10 @@ export function createQueuedMessageController(context, {
   }
 
   function render() {
-    const { queuedCard: card, queuedCardIcon: icon, queuedCardStatus: status, queuedCardPreview: preview, queuedCardAction: action } = context.dom;
+    const {
+      queuedCard: card, queuedCardIcon: icon, queuedCardStatus: status, queuedCardPreview: preview, queuedCardAction: action,
+      queuedCardSendNow: sendNowBtn,
+    } = context.dom;
     if (!card) return;
     const view = resolveQueuedCard(entries, sessionId);
     if (!view) {
@@ -87,6 +90,11 @@ export function createQueuedMessageController(context, {
       action.classList.toggle('hidden', !view.actionLabel);
       action.textContent = view.actionLabel ?? '';
       action.disabled = false;
+      if (sendNowBtn) {
+        sendNowBtn.classList.toggle('hidden', !view.sendNowLabel);
+        sendNowBtn.textContent = view.sendNowLabel ?? '';
+        sendNowBtn.disabled = false;
+      }
     }
     if (Boolean(view) !== visible) {
       visible = Boolean(view);
@@ -188,7 +196,24 @@ export function createQueuedMessageController(context, {
     });
   }
 
-  if (context.dom.queuedCardAction) context.dom.queuedCardAction.onclick = take;
+  // 立即发送：带 priority:'now' 交给 CLI，当前这一轮让路。成功时 B 的气泡上屏、卡片随快照消失，本地副本由 reconcile 删；
+  // 没发出去时条目还在 server（回到排队中），只说一句。超时不知道发没发：再点一次，已发出的会回 not_found，不会发两遍。
+  function sendNow() {
+    const view = resolveQueuedCard(entries, sessionId);
+    const button = context.dom.queuedCardSendNow;
+    if (!view?.sendNowLabel || !button) return;
+    const entry = queuedEntryFor(entries, sessionId);
+    button.disabled = true; // 连点两下不该发两次；等回执或下一次广播重画时解锁
+    if (context.dom.queuedCardAction) context.dom.queuedCardAction.disabled = true;
+    socket.timeout(ackTimeoutMs).emit('user:sendQueuedNow', { sessionId: entry.sessionId, clientMessageId: entry.clientMessageId }, (err, ack) => {
+      const decision = presentSendNowAck(err, ack);
+      if (decision) notify(decision.message, decision.tone);
+      render();
+    });
+  }
 
-  return { update, available, blockedHint, submit, take };
+  if (context.dom.queuedCardAction) context.dom.queuedCardAction.onclick = take;
+  if (context.dom.queuedCardSendNow) context.dom.queuedCardSendNow.onclick = sendNow;
+
+  return { update, available, blockedHint, submit, take, sendNow };
 }

@@ -719,7 +719,9 @@ export class AgentSession {
           // 与两条 turnCompanion 注入，不带则两项皆无。这道闸只守这两处，不影响审批/权限面。
           // 取值已在 send() 归一化过（只认 auto-continuation，其余为 null）：只在入口收口一次，
           // 两层各收一次会互相兜底，任何一层单独坏掉都没有测试能发现。
-          origin: { kind: item.origin || 'human' }
+          origin: { kind: item.origin || 'human' },
+          // 立即发送：CLI 让当前这一轮让路（SDKUserMessage.priority，公开类型）。只有 send() 的 sendNow 分支会带
+          ...(item.priority ? { priority: item.priority } : {}),
           // 注：SDKUserMessage 上的 model 字段被 CLI 完全忽略（F1 根因）；模型切换走 q.setModel()
         };
       }
@@ -1033,8 +1035,11 @@ export class AgentSession {
   // E17：opts.displayText/attachments——附件场景下 text=注入路径后的 promptText（送 SDK），
   // displayText=原文（气泡 + 会话标题，不含路径），attachments=去完整 data 的元数据（含小 thumb）。
   // CLI 侧排队已移除（2026-07-30）：一轮跑完才收下一条。三层各一道闸——前端提示 / 服务端拒绝 / 这里兜底。
+  // 唯一例外是 opts.priority==='now'（排队卡片上的「立即发送」）：这条带 priority:'now' 交给 CLI，由 CLI 让当前这一轮
+  // 让路（转后台、或停在下一次模型请求前），见 canSendNow 与 _noteCommandLifecycle。
   async send(text, model, opts = {}) {
-    if (this.pendingTurns >= 1) {
+    const sendNow = opts.priority === 'now' && this.canSendNow();
+    if (this.pendingTurns >= 1 && !sendNow) {
       this.emit('system', { message: '当前任务运行中，请等待完成' });
       return false;
     }
@@ -1084,7 +1089,7 @@ export class AgentSession {
     // 从这里到入队全程同步，所以「没被取消」和「进了队列」是同一刻的事。
     if (opts.shouldSend && !opts.shouldSend()) return false;
     // 双重检查：setModel / 补发是 await 让出点，间隙内其他 send 可能已经开了一轮
-    if (this.pendingTurns >= 1) {
+    if (this.pendingTurns >= 1 && !sendNow) {
       this.emit('system', { message: '当前任务运行中，请等待完成' });
       return false;
     }
@@ -1114,14 +1119,14 @@ export class AgentSession {
     // 日志键走 logKey()：FRESH 首轮 sessionId 未到时用 provisional，init 后 rebind，避免首跳蒸发。
     const { model: metaModel, effort: effortStr, permissionMode: permStr } = this.logMeta();
     interactionLog.userMessageOut(this.logKey(), displayText, metaModel, effortStr, permStr); // 交互日志：server → client（user_message 广播）
-    this._openTurnSlot(msgUuid);
+    this._openTurnSlot(msgUuid, { sendNow, clientMessageId: opts.clientMessageId || null });
     this.pendingTurns++;
     if (this.pendingTurns === 1) { this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; } // 本轮开表
     this._markTurnStart(origin || 'human');
     this._armSlashQuietNotice(text); // slash 命令可能整轮静默（fork 上下文），到点提示一次「不是卡死」
     // model/effort/permission 各走独立 chip 字段（text 不再内联），日志逐条显示「那一刻」的具体模型 + 档位
     interactionLog.agentSend(this.logKey(), text, metaModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
-    this.queue.push({ text, clientMessageId: opts.clientMessageId || null, uuid: msgUuid, displayText, origin });
+    this.queue.push({ text, clientMessageId: opts.clientMessageId || null, uuid: msgUuid, displayText, origin, ...(sendNow ? { priority: 'now' } : {}) });
     this.notifyInput?.();
     this.lastActivity = Date.now(); // 续期静默看护：send 是用户活动，防 idle 误判
     return true;
@@ -1163,11 +1168,15 @@ export class AgentSession {
   // msgUuid：本轮消息透传给 CLI 的 uuid（send 路径有；合成轮/后台任务这类无对应用户消息的槽为 null）。
   // result 上的 user_message_uuid 就是它，据此精确出槽，见 _settleOneResultTurn。
   // cliQueued：CLI 报过 queued、还没报 started，见 _noteCommandLifecycle。
-  _openTurnSlot(msgUuid = null) {
-    this._interruptedBy = null; // 配对 result 可能永不到（见 _armInterruptSettleWatchdog），不能带进新一轮
-    this._deniedNoticed.clear();
+  // sendNow：这条是「立即发送」，在别的轮还开着时交给 CLI；clientMessageId 给停止时标「已随停止取消」用。
+  _openTurnSlot(msgUuid = null, { sendNow = false, clientMessageId = null } = {}) {
+    // 立即发送是在别的轮还开着时开的槽：那一轮的中断来源还要用，也不是新一轮的开始
+    if (!sendNow) {
+      this._interruptedBy = null; // 配对 result 可能永不到（见 _armInterruptSettleWatchdog），不能带进新一轮
+      this._deniedNoticed.clear();
+    }
     const id = ++this._turnIdSeq;
-    this._openTurns.push({ id, forceSettled: false, msgUuid, cliQueued: false });
+    this._openTurns.push({ id, forceSettled: false, msgUuid, cliQueued: false, started: false, sendNow, clientMessageId });
     return id;
   }
 
@@ -1176,9 +1185,21 @@ export class AgentSession {
   // 而 CLI 自己起的轮（后台任务汇报、Monitor 事件）的 result 不带 uuid，靠这一位才分得开，见 _settleOneResultTurn。
   // 不记 started/completed 的时序：completed 可能早于 result（消息在工具边界并进当前轮时实测如此），
   // 结算只认 result。没有这些帧的 CLI 永远不置位，行为退回 FIFO。
+  //
+  // 立即发送的例外：CLI 可能把它并进正在跑的那一轮（shell 已跑一阵、前台子 agent 被转后台时实测如此），这时它没有自己的
+  // result，只有 completed（早于那一轮的 result），点停止时则是 cancelled。槽还开着就说明 result 不会来了，在这里出账。
+  // 它单独一轮时 result 先到、槽已出，这里是空操作。只对立即发送这样做：普通消息不会在别的轮还开着时交给 CLI。
   _noteCommandLifecycle(msg) {
-    const slot = this._openTurns.find(s => s.msgUuid === msg.command_uuid);
-    if (slot) slot.cliQueued = msg.state === 'queued';
+    const idx = this._openTurns.findIndex(s => s.msgUuid === msg.command_uuid);
+    if (idx < 0) return;
+    const slot = this._openTurns[idx];
+    if (slot.sendNow && (msg.state === 'completed' || msg.state === 'cancelled')) {
+      this._openTurns.splice(idx, 1);
+      this.pendingTurns = Math.max(0, this.pendingTurns - 1);
+      return;
+    }
+    slot.cliQueued = msg.state === 'queued';
+    if (msg.state === 'started') slot.started = true; // 停止时据此判断它还能不能被 cancelQueued 撤下，见 interrupt
   }
 
   _forceSettleOpenTurns() {
@@ -1325,9 +1346,16 @@ export class AgentSession {
     const dropped = toDrop.length;
     this.queue = [];
     const droppedIds = toDrop.map(it => it.clientMessageId).filter(Boolean);
+    // 还没开跑的消息（排在 CLI 队列里，或输入泵已取走、queued 帧还没回来）。有「立即发送」没开跑时要连它一起停：
+    // 普通 interrupt 回 still_queued，A 停了它照跑（实测）。判据是「没报过 started」而不是 cliQueued：取走到 queued 帧
+    // 之间那几毫秒里 cliQueued 还是 false（PR #544 Codex review）。没有时不带 cancelQueued，汇报轮后面排着的手动消息
+    // 照旧开跑（OPS-04 那条用例的语义）。快照要在 await 之前：lifecycle 的 cancelled 可能先于应答到，那时立即发送的槽
+    // 已经出了，见 _noteCommandLifecycle。
+    const unstartedSlots = this._openTurns.filter(t => !t.started);
+    const cancelQueued = unstartedSlots.some(t => t.sendNow);
     // 限流重试时 q.interrupt() 的 control_request 可能永不回包 → await 永挂 → 前端「正在停止…」卡死。
     // 超时后按失败路径强制收口（见 settleForce / catch）。
-    const raceInterrupt = () => this._raceControlRequest(() => this.q?.interrupt?.(), 'interrupt');
+    const raceInterrupt = () => this._raceControlRequest(() => this.q?.interrupt?.(cancelQueued ? { cancelQueued: true } : undefined), 'interrupt');
     // 强制结算：账面有在途轮但 SDK 拒中断/超时 → 把 pendingTurns 收口并发 interrupted，
     // 否则前端 busy 与 interruptPending 永挂（限流重试 8/10 点停止复现）。
     const settleForce = () => {
@@ -1358,7 +1386,7 @@ export class AgentSession {
     if (this.pendingTurns > dropped) this._interruptedBy = decidedBy;
     try {
     try {
-      await raceInterrupt();
+      const receipt = await raceInterrupt();
       // AG-NEW-004：await 间隙若实例已被 dispose，仍须结算 pending 与 pendingTurns 账面，
       // 再 return——勿静默丢 toDrop 账面/挂起审批；emit 仅在未 dispose 时发（弃用实例无监听者）。
       if (this.disposed) {
@@ -1373,6 +1401,17 @@ export class AgentSession {
       // 成功中断：丢弃 toDrop（尚未送达 SDK 的），pendingTurns 减 dropped；await 期间新发的留在 this.queue。
       this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
       this._dropOpenTurnSlots(dropped);
+      // CLI 取消掉的排队消息不会再有 result：出账，气泡标「已随停止取消」。槽已被 lifecycle 出过的只补标记
+      const cancelled = new Set(Array.isArray(receipt?.cancelled) ? receipt.cancelled : []);
+      for (const slot of unstartedSlots) {
+        if (!cancelled.has(slot.msgUuid)) continue;
+        const idx = this._openTurns.indexOf(slot);
+        if (idx >= 0) {
+          this._openTurns.splice(idx, 1);
+          this.pendingTurns = Math.max(0, this.pendingTurns - 1);
+        }
+        if (slot.clientMessageId) droppedIds.push(slot.clientMessageId);
+      }
       // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result。账面为 0（纯后台任务期空输入也有停止钮）
       // 时没有这条 result，标记置上就没人清，会把用户下一轮的正常完成标成「已中止」。
       this._awaitingInterruptResult = this.pendingTurns > 0;
@@ -1587,6 +1626,12 @@ export class AgentSession {
   // 不知道就当不支持——给旧 CLI 发它不认的字段，严格宿主下会被整份拒收。CLI 要到首条消息之后才吐 init。
   hasCliCapability(name) {
     return this.cliCapabilities.has(name);
+  }
+
+  // 「立即发送」要两样都在：send_now 说明这版 CLI 会为 priority:'now' 让路；cancel_queued 让停止能连它一起停住。
+  // 缺任一样都不放行：旧 CLI 不认 priority，消息会排在 CLI 队列里等这一轮跑完，停止也停不住它（7 月拿掉 CLI 侧排队的原因）。
+  canSendNow() {
+    return this.hasCliCapability('interrupt_send_now_v1') && this.hasCliCapability('interrupt_cancel_queued_v1');
   }
 
   // 当前 UI 思考档（ultracode 是 UI 档，SDK 侧实为 xhigh + Settings.ultracode）。
@@ -3812,6 +3857,9 @@ export class AgentSession {
         // command_lifecycle 至今任何一版 d.ts 都没有，却照样收得到。本仓不按枚举写 switch，只做
         // 前缀判定 + 原样透传，正是为此；旧 CLI 不发这个字段 → null，各判据自动退回原样。
         const terminalReason = typeof msg.terminal_reason === 'string' ? msg.terminal_reason : null;
+        // 给「立即发送」让路：没人按停止，被腰斩的却不是那条立即发送的消息自己的轮。要在出槽之前看，出槽后就分不出来了
+        const yieldedToSendNow = !this._awaitingInterruptResult && (terminalReason?.startsWith('aborted_') ?? false)
+          && this._openTurns.some(t => t.sendNow && t.msgUuid !== msg.user_message_uuid);
         // settle 槽：uuid 精确出槽 → 中断跳过 force 槽 → FIFO 回落，三路见 _settleOneResultTurn
         const settled = this._settleOneResultTurn(msg.user_message_uuid, terminalReason);
         // 本轮收表：账面仍有在途轮（后台任务合成轮等）→ 立即重开；否则清零（status_line 不再带 turn 段）
@@ -3835,8 +3883,8 @@ export class AgentSession {
         // 只认 aborted_* 前缀，不把 max_turns / budget_exhausted / hook_stopped 这些别的死因混进来。
         const wasInterrupted = this._awaitingInterruptResult || (terminalReason?.startsWith('aborted_') ?? false);
         this._awaitingInterruptResult = false;
-        // 本仓没发起过这次中断却收到 aborted_* ⇒ 不是任何一个按了停止的人，归给 CLI
-        const interruptedBy = wasInterrupted ? (this._interruptedBy ?? 'cli') : null;
+        // 本仓没发起过这次中断却收到 aborted_* ⇒ 不是任何一个按了停止的人，归给 CLI；为立即发送让路的单列，那是用户刚点的
+        const interruptedBy = wasInterrupted ? (yieldedToSendNow ? 'send_now' : (this._interruptedBy ?? 'cli')) : null;
         this._interruptedBy = null;
         const approvalExpired = this._approvalExpiredInTurn;
         this._approvalExpiredInTurn = false;

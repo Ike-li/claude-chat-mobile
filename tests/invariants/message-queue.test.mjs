@@ -3,6 +3,7 @@
 // 测什么：队列接真发送闸（createSendGate 的无人值守模式），断言落在「发了几次」和快照上：
 //   ① 回合结束后等 CLI 报 idle，汇报轮期间消息留在服务端 ② 汇报轮出错或被停时不发 ③ CLI 一直不报 idle 时兜底
 //   ④ 闸门不过转 held，取得回 ⑤ 第 6 节竞态表：撤回、停止与释放的先后
+//   ⑥ 立即发送：人在跟前，当场带 priority:'now' 交出去，只跳过在途轮闸；和撤回、停止、正常释放的先后
 // 不测什么 + 为什么：① result 帧里的事实怎么取出来归 agent-queued-next.test.mjs ② socket、ack 键集、真假 CLI 帧序
 //   属 S2，见 tests/invariants/server/message-queue.test.mjs ③ 卡片和本地副本属前端
 // 槽位：S1（编排，定时器注入）
@@ -38,6 +39,7 @@ function makeInstance(over = {}) {
       return true;
     },
     emitNotice(text, level) { this.notices.push({ text, level }); },
+    canSendNow() { return true; },
   };
   return Object.assign(inst, over);
 }
@@ -690,4 +692,129 @@ test('快照对外只有三态：settling、releasing 都算 waiting', async () 
   release();
   await flush();
   assert.deepEqual(ctx.q.snapshot(), []);
+});
+
+// ── 立即发送（2026-11-08，机主定：方案 A + 停止连它一起停） ──
+// 人就在跟前点的，所以过交互闸（不查驾驶员、externalDirty 照常置换判定），只跳过「在途轮」那一道：CLI 会让当前这一轮让路。
+
+test('立即发送：回合还在跑也当场交出去，带 priority:now，只发一次，条目消失', async () => {
+  const ctx = setup();
+  ctx.accept();
+  const r = await ctx.q.sendNow(SID, 'c1');
+  assert.deepEqual(r, { ok: true });
+  assert.equal(ctx.a.sent.length, 1, '在途轮闸把它拦下的话，用户点了没反应');
+  assert.equal(ctx.a.sent[0].opts.priority, 'now', '不带 priority:now，CLI 会等这一轮跑完才发，等于没点');
+  assert.equal(ctx.a.sent[0].text, '接下来跑测试');
+  assert.deepEqual(ctx.q.snapshot(), []);
+  assert.deepEqual(ctx.commits, ['c1'], '去重 ID 要登记：同一条重发不得再发一次（MSG-01）');
+  ctx.endTurn();
+  ctx.q.onCliIdle(ctx.a);
+  await ctx.fireTimers();
+  assert.equal(ctx.a.sent.length, 1, '回合结束时不得再按排队发一遍');
+});
+
+test('立即发送：CLI 不支持就不发，条目留着照旧等这一轮结束', async () => {
+  const ctx = setup({ instance: makeInstance({ canSendNow: () => false }) });
+  ctx.accept();
+  assert.deepEqual(await ctx.q.sendNow(SID, 'c1'), { ok: false, error: 'send_now_unsupported' });
+  assert.deepEqual(ctx.a.sent, []);
+  assert.equal(ctx.state(), 'waiting');
+});
+
+test('立即发送：快照告诉前端这一条能不能立即发送（按钮据此显示）', () => {
+  const ok = setup();
+  ok.accept();
+  assert.equal(ok.q.snapshot()[0].sendNow, true);
+  const no = setup({ instance: makeInstance({ canSendNow: () => false }) });
+  no.accept();
+  assert.equal(no.q.snapshot()[0].sendNow, false, '旧 CLI 上显示按钮，点了只会报错');
+});
+
+test('立即发送：ID 对不上 not_found；未发送的条目 not_waiting（那个要取回）', async () => {
+  const ctx = setup();
+  ctx.accept();
+  assert.deepEqual(await ctx.q.sendNow(SID, '别的 ID'), { ok: false, error: 'not_found' });
+  ctx.q.hold(SID, 'stopped');
+  assert.deepEqual(await ctx.q.sendNow(SID, 'c1'), { ok: false, error: 'not_waiting' });
+  assert.deepEqual(ctx.a.sent, []);
+});
+
+test('立即发送：交出去之前用户点了停止 → 不发，转未发送，取得回', async () => {
+  const { a, gate } = slowSendInstance();
+  const ctx = setup({ instance: a });
+  ctx.accept();
+  const pending = ctx.q.sendNow(SID, 'c1');
+  await flush();
+  assert.equal(ctx.state(), 'sending', '别的设备要看到它正在发，撤回却不再保证成功');
+  ctx.q.hold(SID, 'stopped');
+  gate.release();
+  assert.equal((await pending).ok, false);
+  assert.deepEqual(ctx.a.sent, [], '点了停止之后不得发出');
+  assert.equal(ctx.reason(), 'stopped');
+  assert.equal(ctx.q.take(SID, 'c1').text, '接下来跑测试');
+});
+
+test('立即发送：过闸不过（分叉要用户选）→ 不发，回到排队中，报原因', async () => {
+  const ctx = setup({ instance: makeInstance({ resumeDivergence: DIVERGENCE }) });
+  ctx.accept();
+  const r = await ctx.q.sendNow(SID, 'c1');
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'diverged');
+  assert.deepEqual(ctx.a.sent, []);
+  assert.equal(ctx.state(), 'waiting', '话不能丢：这一轮结束时照旧走释放，那时再转未发送让用户选');
+});
+
+test('立即发送和正常释放撞车：只发一次', async () => {
+  const ctx = setup();
+  ctx.accept();
+  ctx.endTurn();
+  const pending = ctx.q.sendNow(SID, 'c1');
+  ctx.q.onCliIdle(ctx.a);
+  await ctx.fireTimers();
+  await pending;
+  assert.equal(ctx.a.sent.length, 1);
+});
+
+test('MSG-03 立即发送过闸期间点了停止、过闸又没过：保持未发送，不得被改回排队中再自动发', async () => {
+  const ctx = setup();
+  let release;
+  ctx.location = () => new Promise(r => { release = () => r({ status: 'missing' }); });
+  ctx.accept();
+  const pending = ctx.q.sendNow(SID, 'c1');
+  await flush();
+  ctx.q.hold(SID, 'stopped');
+  release();
+  assert.equal((await pending).ok, false);
+  assert.equal(ctx.state(), 'held', '改回 waiting 的话，这一轮结束时它会被自动发出去');
+  assert.equal(ctx.reason(), 'stopped');
+  ctx.endTurn();
+  ctx.q.onCliIdle(ctx.a);
+  await ctx.fireTimers();
+  assert.deepEqual(ctx.a.sent, []);
+});
+
+// PR #544 Codex review P2：立即发送在途（sending）时这一轮结束了，回合结束和 idle 都跳过 sending 的条目。
+// 失败后改回 waiting 就再没有释放时机，卡片一直说「本轮结束后自动发送」。回合已结束时转未发送，交给用户。
+test('立即发送过闸不过、这期间回合已经结束 → 转未发送，不能停在没人放的排队中', async () => {
+  const ctx = setup();
+  let release;
+  ctx.location = () => new Promise(r => { release = () => r({ status: 'missing' }); });
+  ctx.accept();
+  const pending = ctx.q.sendNow(SID, 'c1');
+  await flush();
+  assert.equal(ctx.endTurn(), undefined, '前提：sending 期间回合结束被跳过');
+  ctx.q.onCliIdle(ctx.a);
+  release();
+  assert.equal((await pending).ok, false);
+  assert.equal(ctx.state(), 'held');
+  assert.equal(ctx.reason(), 'location');
+  assert.deepEqual(ctx.a.sent, []);
+});
+
+test('立即发送投递失败、这期间回合已经结束 → 转未发送，原因如实', async () => {
+  const ctx = setup({ instance: makeInstance({ async send() { ctx.endTurn(); return false; } }) });
+  ctx.accept();
+  assert.equal((await ctx.q.sendNow(SID, 'c1')).ok, false);
+  assert.equal(ctx.state(), 'held');
+  assert.equal(ctx.reason(), 'send_failed');
 });

@@ -471,6 +471,19 @@ test('presentTurnResult: 非手动中断的条/通知/工具收尾都说清来�
   }
 });
 
+// 立即发送（2026-11-08）：CLI 为那条消息让当前这一轮让路。用户刚点的，下一条正在跑：不是中断、不是完成、不转空闲。
+test('presentTurnResult: 给立即发送让路 → 灰条「已让给新消息」，不响不震不通知，前端不转空闲', () => {
+  const ui = presentTurnResult({ interrupted: true, interruptedBy: 'send_now', durationMs: 3000 });
+  assert.equal(ui.kind, 'yielded');
+  assert.equal(ui.statusBar.text, '已让给新消息 · 3.0s');
+  assert.equal(ui.notify, null, '说「⚠️ 任务被中断」像出了故障，而这是用户刚点的');
+  assert.equal(ui.haptic, null);
+  assert.equal(ui.errorBar, null);
+  assert.equal(ui.keepBusy, true, '转空闲的话停止钮消失，B 还在跑');
+  assert.equal(ui.failToolsMessage, '已让给新消息');
+  assert.equal(presentTurnResult({ durationMs: 1 }).keepBusy, undefined, '其余结局照旧转空闲');
+});
+
 test('presentTurnResult: 真错误仍中文灰条 + 红条（不 CLI 化）；灰条写「出错」、不挂累计成本', () => {
   const err = presentTurnResult({ isError: true, errors: ['boom'], durationMs: 1200, costUsd: 0.1 });
   assert.equal(err.kind, 'error');

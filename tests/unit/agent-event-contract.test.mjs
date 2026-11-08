@@ -378,7 +378,10 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        超限的字节也不能走 socket。入向 75→76）
   //      + environments:list / environments:save / environments:delete（2026-11-06，新会话页「保存的环境」：对照桌面端
   //        Save as environment。不并进 folders:*：那组改授权面，这组只是一份用户偏好，开会话时 session:new 照常过范围判定。入向 77→80）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 82);
+  //      + user:sendQueuedNow（2026-11-08，排队卡片的「立即发送」：带 priority:'now' 交给 CLI，当前这一轮让路，对照终端排队时的
+  //        Send now。不并进 user:message：那条是一条新消息过完整发送闸，这条只认已排队的那一条、只跳过在途轮闸。入向 82→83）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 83);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('user:sendQueuedNow'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('file:open'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('logs:clientPerf'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));

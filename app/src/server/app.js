@@ -3630,6 +3630,22 @@ registerSocketConnection(io, socket => {
     }
     ack(messageQueue.take(sessionId, clientMessageId));
   });
+  // 立即发送排队消息（2026-11-08）：带 priority:'now' 交给 CLI，当前这一轮让路。会替人往实例里写，所以和取回一样只认
+  // 已批准设备。判定与投递在 message-queue.sendNow（交互闸，只跳过在途轮那一道），停止时连它一起停在 agent.interrupt。
+  on(socket, 'user:sendQueuedNow', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (socket.deviceApproved !== true) {
+      ack({ ok: false, error: 'device_not_approved' });
+      return;
+    }
+    const sessionId = payload?.sessionId;
+    const clientMessageId = payload?.clientMessageId;
+    if (!isSafeSessionId(sessionId) || typeof clientMessageId !== 'string' || !clientMessageId) {
+      ack({ ok: false, error: 'invalid_payload' });
+      return;
+    }
+    ack(await messageQueue.sendNow(sessionId, clientMessageId));
+  });
   // 额度墙自动继续横幅的三个按钮：取消 / 到点自动继续 / 立即继续。相位合不合法由 auto-continue.js 的
   // act() 判，这里只校验形状——sessionId 过 SS-003 字符集守卫，action 只认三个字面量。
   on(socket, 'user:autoContinue', (payload, ack) => {
