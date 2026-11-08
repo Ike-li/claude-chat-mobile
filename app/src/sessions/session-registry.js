@@ -2,8 +2,8 @@
 // 该文件由 claude CLI 自己写入（entrypoint/kind/status 等自报字段），是「这个会话此刻
 // 是否有终端进程在驾驶」的权威声明——用于替代磁盘 transcript 尾部形态猜测（猜测的两个
 // 已知盲区见 history.js:1008-1012）。7/26 实测：status+statusUpdatedAt 只出现在
-// entrypoint=cli 的条目上（sdk-ts/sdk-cli/claude-desktop 无 status；桌面端 2.1.299 实测也自报，
-// 从哪一版开始不详，见 TERMINAL_ENTRYPOINTS）；文件按 PID 命名、非持久化，进程崩溃可能留陈尸文件，
+// entrypoint=cli 的条目上（sdk-ts/sdk-cli/claude-desktop 无 status；桌面端 2.1.299、VS Code 扩展 2.1.319
+// 实测也自报，从哪一版开始不详，见 TERMINAL_ENTRYPOINTS）；文件按 PID 命名、非持久化，进程崩溃可能留陈尸文件，
 // 故消费前必须 pid 验活。
 // 7/29 pty 实证补正两点（见 TERMINAL_BUSY_STATUSES / registryIndicatesTerminalBusy）：跑命令期间
 // 自报 "shell" 而非 "busy"；statusUpdatedAt 只在取值变化时写一次、不是心跳。条目还带 ccm 目前
@@ -171,11 +171,11 @@ export function terminalStateKey(cwd, sessionId) {
   return `${resolve(String(cwd ?? ''))}\u0000${String(sessionId ?? '')}`;
 }
 
-// 会话行上 terminal / terminalSource 字段的取值域。**这是 Map → 会话行的最后一米**：只加
+// 会话行上 terminal 字段的取值域。**这是 Map → 会话行的最后一米**：只加
 // listTerminalSessionStates 的新状态而漏了这里，新状态会在注入面被静默丢掉（2026-09-04 加
-// 'waiting' 时的现成陷阱）。来源同理——漏登记会让桌面端会话退回"终端"文案，且没有任何报错。
+// 'waiting' 时的现成陷阱）。来源不设名单（2026-11-08）：表里的来源已经排除了 SDK 系，原样带给前端，
+// 前端认得的说名字，认不得的说「电脑上」。设名单的话，没登记的来源会退回「终端」文案，且没有任何报错。
 const TERMINAL_ROW_STATES = new Set(['busy', 'waiting', 'alive']);
-const TERMINAL_ROW_SOURCES = new Set(['cli', 'claude-desktop']);
 
 // 给 session:list 行附加当前终端状态与来源。listSessionsPage 可能返回缓存对象，禁止原地写：
 // 每行浅拷贝并先清旧值，再按本次 registry 快照注入，确保状态消失后不会残留。
@@ -196,8 +196,8 @@ export function applyTerminalStatesToSessions(cwd, sessions, states = new Map())
       const info = stateMap.get(terminalStateKey(copy.cwd || cwd, copy.id));
       if (info && TERMINAL_ROW_STATES.has(info.state)) {
         copy.terminal = info.state;
-        // 来源缺失/未登记时只留状态：前端回落"终端"文案（与本改动之前完全同形），不塌成无状态。
-        if (TERMINAL_ROW_SOURCES.has(info.source)) copy.terminalSource = info.source;
+        // 来源缺失时只留状态：前端回落"终端"文案，不塌成无状态。
+        if (nonEmptyString(info.source)) copy.terminalSource = info.source;
       }
       // bgLocked 与 terminal 是两条独立的轴，故【不】写在上面那个 if 里：占用者可能是个
       // 连 state 都没有的条目（非 TERMINAL_ENTRYPOINTS 的 sdk 系 bg agent），那种条目在
@@ -239,6 +239,27 @@ export function sessionHasOtherDriver(states, sessionId) {
   return false;
 }
 
+// 接管提醒（2026-10-16）：手机开始写的时候，电脑上开着的终端（或桌面端、VS Code）还挂着这个会话。那个进程内存里
+// 停在旧叶子，之后它再写任何东西（离开摘要、Remote Control 断开提示、本地命令）或退出，下次续接就接回它那一支、
+// 手机这段不进上下文（SESSION-04 的成因）。产品管不了那个进程，只能说一声。
+// 2026-11-08 起从状态表里取，不再用 readSessionRegistry 的单条「最佳」条目：那条在 cli 之外按时间取新，
+// 同会话上 ccm 自己的 sdk-ts 条目更新时会胜出，桌面端的提醒就不出来了。状态表本来就不收 sdk 系。
+// 认不得的来源也提醒，只是说不出名字。只被后台 agent 占用（state 为 null）的不算，那条走 bgLocked。
+const LIVE_HOLDER_NOTICE = {
+  cli: '电脑上的终端还开着这个会话。手机接着聊没问题，但那个终端之后再写任何东西或退出，下次续接会接回终端那一轮。不用终端了就先在电脑上 /exit；回到电脑时用 claude -c 或 claude --resume 重新打开。',
+  'claude-desktop': '桌面端还开着这个会话。手机接着聊没问题，但桌面端之后再写任何东西或关掉它，下次续接会接回桌面端那一轮。不用了就先在桌面端关掉这个会话。',
+  'claude-vscode': 'VS Code 里还开着这个会话。手机接着聊没问题，但 VS Code 之后再写任何东西或关掉它，下次续接会接回 VS Code 那一轮。不用了就先在 VS Code 里关掉这个会话。',
+};
+const LIVE_HOLDER_NOTICE_UNKNOWN = '电脑上还有别的程序开着这个会话。手机接着聊没问题，但它之后再写任何东西或退出，下次续接会接回它那一轮。不用了就先在电脑上关掉它。';
+// 按 sessionId 扫全表，理由同 sessionHasOtherDriver。
+export function liveHolderNotice(states, sessionId) {
+  for (const [key, info] of states) {
+    if (!key.endsWith(`\u0000${sessionId}`) || !info.state) continue;
+    return Object.hasOwn(LIVE_HOLDER_NOTICE, info.source) ? LIVE_HOLDER_NOTICE[info.source] : LIVE_HOLDER_NOTICE_UNKNOWN;
+  }
+  return null;
+}
+
 // rewind 的否定证据（2026-09-24）：已连接文件夹的子目录可达之后，父目录或子目录里跑着 / 等着的终端会话
 // 改的可能正是 rewind 要覆盖的那批文件——上面两个按 cwd 相等判的汇总会把它们漏掉，而 rewind 没有下游兜底。
 // 判「重叠」= 一方是另一方的祖先（含相等），带分隔符边界（/code/app-x 不是 /code/app 的后代）。
@@ -254,7 +275,12 @@ export function hasTerminalSessionOverlapping(cwd, states, wants = ['busy', 'wai
   return false;
 }
 
-// 参与会话列表「外部驾驶员在驾驶」标注的 entrypoint，以及各自的状态取数方式：
+// 参与会话列表「外部驾驶员在驾驶」标注的 entrypoint：除 SDK 系（sdk-ts/sdk-py/sdk-cli）以外的全部取值。
+// 2026-11-08 起不再是白名单。此前只收 cli/claude-desktop，VS Code 扩展（entrypoint=claude-vscode，
+// 2.1.319 实测自报 status）驾驶的会话因此在抽屉里没有任何运行标识（真机 f8c96499），排队代发、
+// 额度重置自动继续、rewind 也都不把它当别的驾驶员。上游取值还有 claude-desktop-3p、local-agent、
+// remote 等，白名单每多一种形式就漏一次；状态取数对所有来源同一套（有自报用自报，没有就看尾部形态），
+// 来源只影响文案，所以没有理由按来源放行。下面是两个已实测来源的取数细节：
 //   cli            —— 自报 status（busy/shell/idle/waiting），权威且与回合长度无关。
 //   claude-desktop —— 桌面端 Code 模式。Claude.app 拉起【同一份 claude 二进制】（自带副本
 //                     ~/Library/Application Support/Claude/claude-code/<ver>/），用
@@ -266,8 +292,9 @@ export function hasTerminalSessionOverlapping(cwd, states, wants = ['busy', 'wai
 //                     "input needed"）；判据按 `!entry.status` 写，两种版本都对。
 //                     此前它和 sdk 系一起被排除，后果是桌面端会话在列表里【没有任何运行标识】，
 //                     只剩一个未读点（未读走 transcript 增长那条轴，与 entrypoint 无关，所以照常工作）。
-// 仍然排除 sdk-ts/sdk-cli：那是 ccm 自己或别的 SDK 工具驱动的，列表里已有 live 实例徽标，标了会双份。
-const TERMINAL_ENTRYPOINTS = new Set(['cli', 'claude-desktop']);
+// 仍然排除 SDK 系：那是 ccm 自己或别的 SDK 工具驱动的，列表里已有 live 实例徽标，标了会双份。
+// 写成带 has() 的对象而不是 Set，是为了能直接当 registryIndicatesTerminal* 的 entrypoints 参数。
+const TERMINAL_ENTRYPOINTS = { has: entrypoint => typeof entrypoint === 'string' && !entrypoint.startsWith('sdk-') };
 
 // 批量：返回 Map<terminalStateKey, { state, source }>，只收 TERMINAL_ENTRYPOINTS 且 pid 存活的条目。
 //   'busy'    = 在跑。看自报 busy/shell；无自报（如 2.1.260 的桌面端）→ 看尾部形态 pending
@@ -302,7 +329,7 @@ export async function listTerminalSessionStates({
   // 「点了也打不开」的会话集合。判据逐条抄 findBlockingLiveAgent（kind 存在 && kind !== 'interactive'
   // && pid 活），因为它就是 session:switch 真正的拒绝判据——列表预警若用另一套判据，两处必然漂移，
   // 预警要么虚报（标了却能开）要么漏报（没标却开不了），后者正是本改动要消灭的那次困惑。
-  // 【刻意不看 entrypoint】：占用者可能是 sdk 系条目，而 TERMINAL_ENTRYPOINTS 只收 cli/claude-desktop。
+  // 【刻意不看 entrypoint】：占用者可能是 sdk 系条目，而 TERMINAL_ENTRYPOINTS 不收 sdk 系。
   // 【仍按 cwd 归键】：与 findBlockingLiveAgent 的唯一差异。同一会话的进程 cwd 天然等于会话 cwd，
   // 理论上的跨 cwd 占用只会漏标（fail-open 到"不预警"，点开后仍有拒绝兜底），绝不会虚报。
   const blockedKeys = new Set();

@@ -22,6 +22,7 @@ import {
   terminalStateKey,
   cliPresenceStep,
   findBlockingLiveAgent,
+  liveHolderNotice,
 } from '../../app/src/sessions/session-registry.js';
 
 const CWD = '/Users/you/code/demo';
@@ -379,6 +380,32 @@ test('listTerminalSessionStates：sdk-ts / sdk-cli 仍不进结果（即使给�
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+// 2026-11-08 真机 f8c96499：VS Code 扩展驾驶的会话在抽屉里没有任何运行标识。注册表条目自报
+// entrypoint='claude-vscode'、status='busy'，却因为不在 cli/claude-desktop 白名单里被整条跳过。
+// 上游的 entrypoint 取值远不止这几个（二进制里还有 claude-desktop-3p、local-agent、remote 等），
+// 白名单每来一个新形式就漏一次，所以判据改成「除了 SDK 系，活着的条目都是外部驾驶员」。
+test('listTerminalSessionStates：VS Code 和以后的新来源都算外部驾驶员，sdk-py 仍排除', async () => {
+  const dir = tempDir();
+  const put = (pid, sessionId, extra) => writeFileSync(
+    join(dir, `${pid}.json`),
+    JSON.stringify({ pid, sessionId, cwd: CWD, kind: 'interactive', ...extra }),
+  );
+  try {
+    put(1, 'sid-vscode-busy', { entrypoint: 'claude-vscode', status: 'busy' });
+    put(2, 'sid-vscode-waiting', { entrypoint: 'claude-vscode', status: 'waiting' });
+    put(3, 'sid-vscode-idle', { entrypoint: 'claude-vscode', status: 'idle' });
+    put(4, 'sid-future', { entrypoint: 'brand-new-frontend', status: 'shell' });
+    put(5, 'sid-sdk-py', { entrypoint: 'sdk-py', status: 'busy' });
+    const map = await listTerminalSessionStates({ dir, isAlive: () => true });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-vscode-busy')), { state: 'busy', source: 'claude-vscode' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-vscode-waiting')), { state: 'waiting', source: 'claude-vscode' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-vscode-idle')), { state: 'alive', source: 'claude-vscode' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-future')), { state: 'busy', source: 'brand-new-frontend' },
+      '没见过的来源也要认：判据是「不是 SDK 系」，不是「在名单上」');
+    assert.equal(map.has(terminalStateKey(CWD, 'sid-sdk-py')), false, 'SDK 系（含 sdk-py）是 ccm 自己或别的 SDK 工具，不算');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // applyTerminalStatesToSessions 是 Map → 会话行的唯一注入面，它自带一层取值白名单。
 // 只加 listTerminalSessionStates 的第三态而漏了这里，waiting 会在最后一米被静默丢掉。
 test('applyTerminalStatesToSessions：waiting 能落到会话行上（注入面白名单不得漏）', () => {
@@ -399,9 +426,10 @@ test('applyTerminalStatesToSessions：waiting 能落到会话行上（注入面�
   assert.equal('terminal' in rows[3], false, '白名单外的取值不注入');
   assert.equal(rows[4].terminalSource, 'claude-desktop', '来源要能落到会话行上（前端据它选文案）');
   assert.equal(rows[1].terminalSource, 'cli');
-  // 未登记来源：状态照常注入，只是不带来源 → 前端回落"终端"文案，不塌成无 chip
+  // 未登记来源（2026-11-08 起）：状态和来源都注入。前端认不得这个来源时说「电脑上」，
+  // 不能因为没登记就把来源丢掉、让前端冒充成「终端」。
   assert.equal(rows[5].terminal, 'busy');
-  assert.equal('terminalSource' in rows[5], false, '未登记来源不注入，但不得连状态一起丢');
+  assert.equal(rows[5].terminalSource, 'brand-new-frontend', '未登记来源也要落到行上，前端才分得清它不是终端');
 });
 
 test('applyTerminalStatesToSessions：克隆行、注入当前状态并清除旧 terminal，不污染缓存对象', () => {
@@ -780,4 +808,35 @@ test.describe('listTerminalSessionStates：onUnreadable（破坏性路径的完�
       rmSync(dir, { recursive: true, force: true }); // safe-rm: 本用例 mkdtemp
     }
   });
+});
+
+// 接管提醒（手机开始写时，电脑上还开着这个会话的那个进程）按来源说话。2026-11-08 前它只认 cli 和
+// 桌面端，VS Code 开着的会话从手机接着写不会有任何提醒；而且取的是 readSessionRegistry 的单条
+// 「最佳」条目——同会话上 ccm 自己的 sdk-ts 条目更新时它会胜出，桌面端那条提醒就不出来。
+test('liveHolderNotice：按外部驾驶员的来源选提醒，ccm 自己的 sdk 条目更新也不影响', async () => {
+  const dir = tempDir();
+  const put = (pid, sessionId, extra) => writeFileSync(
+    join(dir, `${pid}.json`),
+    JSON.stringify({ pid, sessionId, cwd: CWD, kind: 'interactive', startedAt: 1_000, ...extra }),
+  );
+  try {
+    put(1, 'sid-vscode', { entrypoint: 'claude-vscode', status: 'idle', statusUpdatedAt: 1_000 });
+    put(2, 'sid-vscode', { entrypoint: 'sdk-ts', status: 'idle', statusUpdatedAt: 9_000, startedAt: 9_000 });
+    put(3, 'sid-desktop', { entrypoint: 'claude-desktop', status: 'idle', statusUpdatedAt: 1_000 });
+    put(4, 'sid-desktop', { entrypoint: 'sdk-ts', status: 'idle', statusUpdatedAt: 9_000, startedAt: 9_000 });
+    put(5, 'sid-cli', { entrypoint: 'cli', status: 'busy' });
+    put(6, 'sid-future', { entrypoint: 'brand-new-frontend', status: 'idle' });
+    put(7, 'sid-web-only', { entrypoint: 'sdk-ts', status: 'idle' });
+    put(8, 'sid-bg-agent', { entrypoint: 'sdk-ts', kind: 'bg', status: 'busy' }); // 只被后台 agent 占用：表里有键但没有状态
+    const states = await listTerminalSessionStates({ dir, isAlive: () => true });
+    assert.match(liveHolderNotice(states, 'sid-vscode') ?? '', /^VS Code 里还开着这个会话/);
+    assert.match(liveHolderNotice(states, 'sid-desktop') ?? '', /^桌面端还开着这个会话/,
+      'sdk-ts 条目更新时，旧实现会取到它而不提醒');
+    assert.match(liveHolderNotice(states, 'sid-cli') ?? '', /^电脑上的终端还开着这个会话/);
+    assert.match(liveHolderNotice(states, 'sid-future') ?? '', /^电脑上还有别的程序开着这个会话/,
+      '认不得的来源也要提醒，只是说不出名字');
+    assert.equal(liveHolderNotice(states, 'sid-web-only'), null, '只有 ccm 自己开着，没什么可提醒的');
+    assert.equal(liveHolderNotice(states, 'sid-nobody'), null);
+    assert.equal(liveHolderNotice(states, 'sid-bg-agent'), null, '后台 agent 占用走 bgLocked 那条路，不是这条提醒');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
