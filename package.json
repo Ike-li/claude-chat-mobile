@@ -109,7 +109,7 @@
     "express": "^5.3.0",
     "jose": "^6.2.14",
     "socket.io": "^4.8.4",
-    "web-push": "^3.6.7"
+    "web-push": "^4.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
