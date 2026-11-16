@@ -60,3 +60,25 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     });
   }
 });
+
+// app.css 自己也定义 --radius-lg；迁移到 v4 后不能让它改写工具类原来的固定尺寸。
+test('P0-TW-SCALE：设计变量不改写工具类圆角，小号阴影和模糊保持原有尺寸', async ({ page }) => {
+  await gotoMock(page);
+  const styles = await page.evaluate(() => {
+    const probe = document.createElement('div');
+    probe.className = 'rounded-lg shadow-sm backdrop-blur-sm';
+    probe.style.setProperty('--radius-lg', '99px');
+    document.body.appendChild(probe);
+    const computed = getComputedStyle(probe);
+    // Tailwind 会保留透明的 ring / inset 占位层；只比较实际可见的阴影。
+    const shadow = computed.boxShadow.split(/,(?![^(]*\))/).map(value => value.trim())
+      .filter(value => !value.startsWith('rgba(0, 0, 0, 0) '));
+    const result = { radius: computed.borderRadius, shadow, blur: computed.backdropFilter };
+    probe.remove();
+    return result;
+  });
+  expect(styles.radius, 'rounded-lg 必须保留 8px，不继承 app.css 的同名设计变量').toBe('8px');
+  expect(styles.shadow, 'shadow-sm 必须保留 v3 的 1px / 2px 小号阴影').toEqual(['rgba(0, 0, 0, 0.05) 0px 1px 2px 0px']);
+  expect(styles.blur, 'backdrop-blur-sm 必须保留 v3 的 4px 模糊').toBe('blur(4px)');
+  await expectNoBrowserErrors(page);
+});

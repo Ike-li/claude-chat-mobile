@@ -23,7 +23,7 @@ export function bindSessionSearchInput(container, {
   }
 
   wrap = el(`<div class="px-3 py-2 border-b border-line-soft/40" data-testid="${WRAP_TESTID}"></div>`);
-  const input = el(`<input type="search" data-testid="session-search" class="w-full rounded-lg border border-line bg-sunk/40 px-3 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none focus:border-accent" placeholder="${t('搜索会话')}" autocomplete="off" enterkeyhint="search" />`);
+  const input = el(`<input type="search" data-testid="session-search" class="w-full rounded-lg border border-line bg-sunk/40 px-3 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-hidden focus:border-accent" placeholder="${t('搜索会话')}" autocomplete="off" enterkeyhint="search" />`);
   let composing = false;
   let timer = null;
   input.addEventListener('compositionstart', () => { composing = true; });
