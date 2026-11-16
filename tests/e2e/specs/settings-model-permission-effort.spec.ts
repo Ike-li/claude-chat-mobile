@@ -15,7 +15,21 @@ async function tileLookMismatches(page: Page) {
     const bgs: Record<string, string> = { wash: bg('color-mix(in srgb, var(--accent-wash) 30%, transparent)'), surface: bg('var(--surface)') };
     const fgs: Record<string, string> = { accent: fg('var(--accent)'), ink: fg('var(--ink)'), danger: fg('var(--danger)') };
     probe.remove();
-    const name = (table: Record<string, string>, c: string) => Object.keys(table).find(k => table[k] === c) ?? c;
+    // srgb / oklab 的计算值字符串不同，但同色与透明混合后的像素应相同。
+    // 归一到 RGBA 像素，继续同时校验色相与 alpha，不把序列化格式当展示契约。
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext('2d')!;
+    const pixel = (color: string) => {
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, 1, 1);
+      return Array.from(ctx.getImageData(0, 0, 1, 1).data);
+    };
+    const name = (table: Record<string, string>, color: string) => {
+      const actual = pixel(color);
+      return Object.keys(table).find(key => pixel(table[key]).every((channel, i) => Math.abs(channel - actual[i]) <= 1)) ?? color;
+    };
     const bad: string[] = [];
     for (const tile of Array.from(document.querySelectorAll<HTMLElement>('#customModelGrid .model-tile, #customPermGrid .perm-tile, #customEffortGrid .effort-tile'))) {
       const pressed = tile.getAttribute('aria-pressed') === 'true';

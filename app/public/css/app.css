@@ -784,6 +784,9 @@ header {
   #btnAttach {
     position: relative !important;
     transform: none !important;
+    translate: none !important; /* v4 的变换工具类使用独立属性，复位必须同时清掉 */
+    scale: none !important;
+    rotate: none !important;
     width: 40px !important;
     height: 40px !important;
     border-radius: 0.75rem !important;
@@ -852,6 +855,9 @@ header {
     grid-row: 1 / -1 !important;
     position: relative !important;
     transform: none !important;
+    translate: none !important; /* v4 的变换工具类使用独立属性，复位必须同时清掉 */
+    scale: none !important;
+    rotate: none !important;
     width: 300px !important;
     max-width: 300px !important;
     height: 100dvh !important; /* #359：同移动端用 dvh，iPad 横屏 Safari 地址栏伸缩时底部不被裁 */

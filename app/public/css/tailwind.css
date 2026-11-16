@@ -1,5 +1,8 @@
 /* 编译入口：只扫产品 HTML / JS，避免测试夹具和文档里的类名混入分发 CSS。 */
-@import "tailwindcss" source(none);
+/* 保留 v3 的无层叠分层顺序：app.css 在前、工具类在后，同特异性的 hidden 等工具类仍胜出。 */
+@import "tailwindcss/theme.css";
+@import "tailwindcss/preflight.css";
+@import "tailwindcss/utilities.css" source(none);
 @config "../../../tailwind.config.js";
 @source "../index.html";
 @source "../js";
@@ -19,9 +22,10 @@
 
 /* 维持既有触控和表单默认样式。 */
 @custom-variant hover (&:hover);
-@layer base {
-  *, ::before, ::after, ::backdrop, ::file-selector-button { border-color: #e5e7eb; }
-  input::placeholder, textarea::placeholder { color: #9ca3af; opacity: 1; }
-  button, [role="button"] { cursor: pointer; }
-  dialog { margin: auto; }
-}
+*, ::before, ::after, ::backdrop, ::file-selector-button { border-color: #e5e7eb; }
+input::placeholder, textarea::placeholder { color: #9ca3af; opacity: 1; }
+button, [role="button"] { cursor: pointer; }
+dialog { margin: auto; }
+
+/* v3 把 hidden 排在 inline-flex 等 display 工具类之后；状态切换依赖两类并存时仍能隐藏。 */
+.hidden { display: none; }
