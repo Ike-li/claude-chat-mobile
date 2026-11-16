@@ -288,6 +288,8 @@ let mockQueueAckHold = null;
 // 只把转未发送的条目原样投出去，哪些原因该进由真 server 的 heldNeedsAttention 决定，这里不复刻。
 let mockQueueNeedsYou = false;
 let mockQueueHeldAcks = [];
+// 立即发送（真 server：message-queue.js 的 sendNow + 快照的 sendNow）。/__queue-arm?sendNow=1 时快照带 sendNow:true。
+let mockQueueSendNow = false;
 // WORKDIRS 的可变状态：env:set 收到数组时更新，后续 env:get 回显——
 // 这样 E2E 验的是「提交的真是数组、且 sessionLimit 原样回来了」这条端到端语义，
 // 而不只是「点了保存按钮」。收到非数组时**不更新**，正是真 server 校验会拒的那一档。
@@ -817,6 +819,7 @@ function resetMockState() {
   mockQueueAckHold = null;
   mockQueueHeldAcks = [];
   mockQueueNeedsYou = false;
+  mockQueueSendNow = false;
   mockEnvOverridden = new Set();
   mockWorkdirsList = [
     { path: '/Users/you/code/claude-chat-mobile' },
@@ -1651,6 +1654,7 @@ function mockQueueEntry({ inst, text, clientMessageId, attachments, state = 'wai
     preview: String(text ?? '').slice(0, 140), textLength: String(text ?? '').length,
     attachments: (attachments ?? []).map(({ name, mimeType }) => ({ name, mimeType })),
     acceptedAt: Date.now(), heldAt: state === 'held' ? Date.now() : null,
+    sendNow: mockQueueSendNow,
   };
 }
 
@@ -1659,6 +1663,7 @@ function mockQueueEntry({ inst, text, clientMessageId, attachments, state = 'wai
 app.post('/__queue-arm', (req, res) => {
   const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
   mockQueueEnabled = req.query.oldBackend !== '1';
+  mockQueueSendNow = req.query.sendNow === '1';
   inst.state = 'busy';
   inst.turnRunning = true;
   broadcastQueue();
@@ -1742,6 +1747,17 @@ app.post('/__queue-ack-flush', (_req, res) => {
 });
 
 app.get('/__queue-log', (_req, res) => res.json(mockQueueLog));
+
+// 立即发送之后 B 那一轮收尾（user:sendQueuedNow 让它挂着，用例据此验「A 让路后停止钮还在」）
+app.post('/__queue-sendnow-finish', (_req, res) => {
+  const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+  const base = { seq: 0, epoch: 'server', sessionId: inst.sessionId, instanceId: inst.instanceId, ts: Date.now() };
+  io.emit('agent:event', { ...base, type: 'result', payload: { messageId: 'msg_sendnow_b', durationMs: 100, costUsd: 0, isError: false, models: [] } });
+  inst.state = 'idle';
+  inst.turnRunning = false;
+  broadcastQueue();
+  res.json({ ok: true });
+});
 
 // Helper to delay executions to simulate streaming behavior
 const delay = ms => new Promise(res => setTimeout(res, ms));
@@ -7986,6 +8002,27 @@ io.on('connection', socket => {
     const reply = () => ack({ ok: true, text: full.text, model: full.model, attachments: full.attachments });
     if (mockQueueAckHold === 'take') { mockQueueHeldAcks.push(reply); return; }
     reply();
+  });
+
+  // 立即发送（真 server：app.js 的 user:sendQueuedNow → message-queue.js 的 sendNow）。按「让路」形态回放：
+  // B 上屏 → A 出 interruptedBy:'send_now' 的 result → B 那一轮挂着（/__queue-sendnow-finish 收尾）。
+  socket.on('user:sendQueuedNow', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const entry = mockQueuedMessages.find(e => e.sessionId === payload?.sessionId && e.clientMessageId === payload?.clientMessageId);
+    if (!entry) { ack({ ok: false, error: 'not_found' }); return; }
+    if (entry.state !== 'waiting') { ack({ ok: false, error: 'not_waiting' }); return; }
+    if (!entry.sendNow) { ack({ ok: false, error: 'send_now_unsupported' }); return; }
+    const full = mockQueuedFull.get(entry.clientMessageId);
+    const inst = mockInstances.find(i => i.instanceId === entry.instanceId);
+    mockQueuedMessages = mockQueuedMessages.filter(e => e !== entry);
+    mockQueueLog.push({ event: 'sendNow', sessionId: entry.sessionId, clientMessageId: entry.clientMessageId });
+    const base = { seq: 0, epoch: 'server', sessionId: inst.sessionId, instanceId: inst.instanceId, ts: Date.now() };
+    io.emit('agent:event', { ...base, type: 'user_message', payload: { text: full.text, uuid: `u-${entry.clientMessageId}`, clientMessageId: entry.clientMessageId } });
+    io.emit('agent:event', { ...base, type: 'result', payload: {
+      messageId: 'msg_sendnow_a', durationMs: 3000, costUsd: 0, isError: false, models: [], interrupted: true, interruptedBy: 'send_now', terminalReason: 'aborted_tools',
+    } });
+    broadcastQueue();
+    ack({ ok: true });
   });
 
   socket.on('user:interrupt', payload => {
