@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import webpush from 'web-push';
+import * as webpush from 'web-push';
 import { importServerInProcess, waitForServerReady } from './_spawn-server.mjs';
 
 const TOKEN = 'push-unsub-test-token';
