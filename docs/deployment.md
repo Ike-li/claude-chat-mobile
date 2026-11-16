@@ -2,33 +2,40 @@
 
 > 启动只有两条入口，互不相关：
 >
-> 1. **headless**：终端里 `npm start`（全平台基线）。进程怎么保活（tmux / 自己的 systemd / docker）自己定，本仓库不提供官方 unit。
+> 1. **headless**：终端里 `npm start`（各平台均可用）。可自行用 tmux、systemd 或 Docker 保持运行；项目不提供这些平台的服务配置。
 > 2. **macOS desktop**：`CCM.app`。常驻、崩溃拉起、看日志、改配置、重启都在菜单里。
 >
-> 下文的 Tunnel / Access 是公网怎么进来，不是第三条启动方式。
+> Tunnel 负责公网转发，Access 负责登录验证；它们与 CCM 的启动方式分别配置。
 >
-> 占位符 `<your-domain>`、`<your-team>`、`<UUID>` 换成你自己的值。
+> 占位符换成你自己的值：`<your-zone>` 是 Cloudflare 托管的域（如 `example.com`），`<your-domain>` 是 CCM 的完整访问域名（如 `ccm.example.com`）；两者可以相同。`<your-team>` 是 Access 团队名，`<UUID>` 是隧道 ID。
 
 首次本地安装先看[首次使用指南](getting-started.md)；Web/CLI 双通道与单驾驶员边界见[架构说明](architecture.md)。
+
+让本机编程模型代配时，使用[Cloudflare 配置提示词](#把-cloudflare-配置交给模型)。它与下面的手动步骤使用同一套配置和验收。
+
+**新装按这个顺序走，每一段完成再继续：**
+
+1. 按首次使用指南 §1–§5 安装依赖、生成本地配置、启动 CCM，并用 `node scripts/service.js health --json` 确认本机健康。`CCM.app` 已安装不代表 server 已启动。
+2. 完成本页 §0 的域名前置条件，再按 §1 创建隧道、写入转发规则并启动 `cloudflared`。
+3. 按 §2 配置 Access 应用，把三项 `CF_ACCESS_*` 写回 CCM，然后重启 **server**。
+4. 按 §3 设置常驻。切换启动方式前，先停止前台试跑的进程；server 和 tunnel 各保留一个。
+5. 用 [逐层验收](#3b-逐层验收)核对最终常驻状态：**本机健康 → 隧道转发 → Access 登录 → 实时连接**。
 
 ## 架构
 
 ```
-手机 → <your-domain>  →  Cloudflare 边缘（Access 验 2FA）  →  命名隧道  →  localhost:3000 → server
+手机 → <your-domain>  →  Cloudflare 边缘（Access 登录验证）  →  命名隧道  →  localhost:3000 → server
 ```
 
-- **公网入口**：固定域名，Cloudflare Access 把守（Email OTP 或 Google/Microsoft 2FA），公网**不带 `#token=`**。
+- **公网入口**：固定域名，Cloudflare Access 把守（邮箱验证码或已配置的身份提供商），公网**不带 `#token=`**。邮箱验证码本身不等于双因素验证（2FA）。
 - **两个要一直跑着的进程**（桌面端会帮你拉；headless 自己保持）：
-  - server：`node app/server.js`，桌面端**经登录 shell（`zsh -lc`）启动**，保证 claude 的 PATH / 登录态与你终端一致；headless 的 `npm start` 直接继承当前终端的环境。
+  - server：`node app/server.js`，桌面端**经登录 shell（`zsh -lc`）启动**，会读取 `.zprofile`，但不会读取交互式终端的 `.zshrc`；先按首次使用指南把 `CLAUDE_BIN` 设为绝对路径；headless 的 `npm start` 直接继承当前终端的环境。
   - tunnel：`cloudflared` 命名隧道，把 `:3000` 投到公网域名。
-- **鉴权分层**：公网走 Access JWT（服务端 `app/src/auth/cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
-  > 设备审批不会只凭 socket peer 是 loopback 就跳过：server 还会检查 Host。按 Host 路由的入口（cloudflared、配了 `server_name` 的 nginx）上，公网请求带的就是公网 Host，仍需设备 token；只有本机样 Host，或已经通过 Cloudflare Access JWT 的连接，才跳过这层。后者意味着 Access 开着时「已受信任的设备」这张表管不到隧道进来的连接（吊销无效）。
-  >
-  > ⚠️ **Host 是客户端自己填的头，不是物理位置。** 纯 TCP 转发（`ssh -R`、frp tcp、socat）不按 Host 路由，远程客户端发一个 `Host: localhost` 就能凑齐「peer 本机 + Host 本机」——peer 本来就是 loopback（转发落点在本机）。这类拓扑下持 `AUTH_TOKEN` 的远程来客会跳过设备审批。TCP 层面区分不了真本机浏览器和隧道转发进来的连接，所以**用这类打洞方式暴露时请设 `DEVICE_APPROVAL_SCOPE=all` 并重启**：它是覆盖全部路径的总开关（含 Access 那条与本机样 Host 那条）。此后本机浏览器首次也要批一次，用 `node scripts/device.js approve`、菜单栏，或跑 `npm start` 那个终端里按回车——这三条都不读任何网络判据。
+- **登录验证**：通过 Access 访问公网域名时，CCM 校验 Access 的登录凭据（JWT）；本机和局域网仍使用 `AUTH_TOKEN`。
+- **设备审批**：默认情况下，Access 登录成功或本机直连后无需再次审批。要让所有连接都需要审批，设置 `DEVICE_APPROVAL_SCOPE=all` 并重启 server。
+- **纯 TCP 转发**：使用 `ssh -R`、frp tcp、socat 等方式时也应设置 `DEVICE_APPROVAL_SCOPE=all`。远程请求可能带着 `Host: localhost` 被识别为本机连接。设置后，可通过菜单栏、`node scripts/device.js approve <ID>` 或启动服务的交互终端批准设备。详细规则见[架构说明](architecture.md#鉴权与范围边界)。
 
-> **Cloudflare 是默认路径，不是硬依赖。** `CF_ACCESS_*` 三项留空即整层关闭，server 侧零改动，
-> 换加密隧道、自建反代或只用局域网都能跑。各拓扑的明文可见方、CCM 侧的连带变化与通用配置要点，
-> 见 [不用 Cloudflare 的公网入口](#不用-cloudflare-的公网入口)。
+Cloudflare 可替换为 VPN 或其他反向代理。将 `CF_ACCESS_*` 三项同时留空即可关闭 CCM 的 Access 验证；其他配置见[不用 Cloudflare 的公网入口](#不用-cloudflare-的公网入口)。
 
 ## ⚠️ 最容易忘的一点
 
@@ -42,67 +49,53 @@ headless 没有桌面端：在跑 `npm start` 的那个终端里停掉再起。
 
 ### 0. 前置条件 CF 账号与域名
 
-§1 的第一条命令是 `cloudflared tunnel login`，它会弹浏览器让你**选一个 zone**——也就是说它假定你已经有 Cloudflare 账号、有一个域名、且该域名的 NS 已经指向 Cloudflare。已经齐了就直接跳 §1；从零开始看本节。
+需要 Cloudflare 账号，以及已由 Cloudflare 托管的域名（控制台称为 zone）。已有这些条件可直接进入 §1；还没有则按本节准备。
 
-#### 0.1 三条路线，先选一条
+#### 0.1 注册 Cloudflare 账号
 
-**Cloudflare 自己不发免费域名**，Registrar 按成本价卖（不加价，但也不免费）。所以「域名从哪来」有三条路：
+打开 [Cloudflare 注册页](https://dash.cloudflare.com/sign-up)，填写邮箱和密码，完成邮箱验证，然后登录控制台。已有账号直接登录。步骤见[官方账号说明](https://developers.cloudflare.com/fundamentals/account/create-account/)。
 
-| 路线 | 成本 | 拿到手 | 域名会变吗 | 能用 Access | 适合 |
-|---|---|---|---|---|---|
-| CF Registrar 买一个 | 约 $10/年起 | 几分钟 | 不变 | ✓ | 长期主力入口，最省心 |
-| 第三方免费域名 → 托管进 CF | 0 | 十几分钟 ~ 数周 | 不变，但服务方能收回 | ✓ | 不想花钱，先跑通链路 |
-| 不要域名，用 Quick Tunnel | 0 | 0 | **每次启动都可能变** | ✗ | 临时测试，见文末「随机隧道」 |
+网站托管在后面的步骤选 **Free**；Zero Trust 也需要单独开通，本页 §2 会说明。只想临时测试、无需固定域名时，使用文末[随机隧道](#最简替代仅测试用)，可跳过账号、域名和 Access。
 
-下面走第二条。只想临时用一下的跳到文末[最简替代](#最简替代仅测试用)——那条路不用域名也不用 CF 账号，但**仍然要装 cloudflared**（[§0.5](#05-装-cloudflared)），除此之外 §0–§2 都不用读。
+#### 0.2 准备一个域名
 
-#### 0.2 挑一个能改 NS 的免费域名服务
+`<your-zone>` 是你购买或申请的完整域名，例如 `example.com` 或 `example.dpdns.org`；CCM 的地址可以是它下面的 `ccm.example.com` 或 `ccm.example.dpdns.org`，后者就是 `<your-domain>`。不要把服务商的公共后缀 `dpdns.org` 当成自己的域名。
 
-**判据一（硬）：服务方必须允许你填自己的 NS。** 只给你一个 A/CNAME 记录面板的不行——§1 的 `cloudflared tunnel route dns` 是通过 Cloudflare API 往**你自己的 zone** 里写 CNAME，zone 不在 CF 就无从写起。
+| 现状 | 操作 |
+|---|---|
+| 已有域名 | 确认服务商允许修改域名服务器（NS），再去 §0.3。能修改 A/CNAME 记录不代表能修改 NS |
+| 愿意购买域名 | 按下方 Cloudflare Registrar 步骤购买 |
+| 想申请或托管免费域名 | 按[免费域名托管指南](cloudflare-free-domain.md)完成申请、填写 NS 和生效检查，再回本页 §0.5 |
 
-2026-09-17 核实仍在运营的两家：
+**购买：** 在 Cloudflare 控制台打开 **Domain Registration → Register Domains**，搜索想要的域名，选择可注册的名称，核对首年价、续费价和自动续费设置，填写真实联系资料并完成付款及注册邮箱验证。买成功后使用 Cloudflare 的 NS，无需去别处修改；直接到 §0.4 确认状态。详见[官方购买步骤](https://developers.cloudflare.com/registrar/get-started/register-domain/)。
 
-| 服务 | 后缀 | 审核 | 备注 |
-|---|---|---|---|
-| [DigitalPlat FreeDomain](https://dash.domain.digitalplat.org/) | `.us.kg` `.dpdns.org` `.qzz.io` `.xx.kg` | 自动，分钟级 | GitHub 账号登录；面板里直接填 NS |
-| [EU.org](https://nic.eu.org/) | `.eu.org` | **人工，几天到几周** | 1996 年起的志愿者项目；不提供默认 NS，申请表里就要你填两个 |
+免费域名的完整操作集中在上述指南，以 DigitalPlat 为例；服务方的名额、费用和审核以申请页面为准。下面 §0.3–§0.4 供已有域名、尚未托管到 Cloudflare 的用户使用。
 
-**判据二（硬）：后缀必须在 Public Suffix List 里。** 不在的话 Cloudflare 多半不认它是一个独立可注册域，加 zone 会被拒——CF 的「把子域单独作为 zone」是 Enterprise 功能，免费版走不通。自己查：
+#### 0.3 把域名添加到 Cloudflare
 
-```bash
-SUFFIX='.us.kg'   # 从上表直接复制即可，带不带前导点都行
-curl -s https://publicsuffix.org/list/public_suffix_list.dat | grep -x "${SUFFIX#.}"
-```
+1. Cloudflare 控制台选择 **Add a domain / Onboard a domain**，填 `<your-zone>`，套餐选 **Free**。此操作是添加 DNS 托管，不会替你注册或购买域名。
+2. 检查扫描出的 DNS 记录。新域名为空正常；已有网站或邮箱的域名，要保留它们需要的记录。
+3. 继续到更换 NS 的页面，复制分配给此域名的**两个完整 NS 名称**，如 `xxx.ns.cloudflare.com`。不要照抄别人的地址。
 
-有输出才行。**PSL 里是无点形式**（`us.kg` 而非 `.us.kg`），上面的 `${SUFFIX#.}` 就是替你剥掉那个点——直接把带点的后缀喂给 `grep -x` 会零输出，看起来跟「这个后缀不可用」一模一样。
+对应的[官方 DNS 托管说明](https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/)包含各阶段界面与常见问题。
 
-2026-09-17 实测：`eu.org`、`us.kg`、`dpdns.org`、`qzz.io`、`xx.kg` 都在；**`qd.je` 不在**——DigitalPlat 也提供这个后缀，别选它。
+#### 0.4 填写 NS，等域名变为 Active
 
-> ⚠️ **0.4 的 zone 变 Active 是整条路的第一个成败点。** 我没有把每个后缀都实际走通加 zone 这一步：Cloudflare 社区有过「eu.org 加不进去」的工单，而多数教程说能加，两边我都没能核实到底。所以把 0.4 当成闸门——它过不去就换个后缀重试，或直接改走买域名那条，**别带着没 Active 的 zone 继续往下配**，后面每一步都会以看不出原因的方式失败。
+在域名服务方的 **Nameservers / 域名服务器** 中填入上一步的两个 NS，替换原有 NS 并保存；不是在 DNS 记录列表里新增两条 NS 记录。若原域名启用了 DNSSEC，先按[官方切换步骤](https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/#33-turn-off-dnssec)处理旧签名，再更换 NS。
 
-> ⚠️ **免费域名的控制权不在你手上。** 服务方随时可以收回域名或改掉委派。对 CCM 来说这个域名**就是**你的公网入口：域名没了，手机打不开，通知深链（`PUBLIC_URL`）也一起失效。反过来更要紧——拿到域名控制权的人可以把它指向自己的服务器，冒一个一模一样的登录页。Access 的 2FA 挡得住数据泄露（对方拿不到你的 JWT、连不上你的隧道），但挡不住钓鱼。**当长期主力入口用就买域名；免费域名适合先把整条链路跑通。**
+回 Cloudflare 的域名 **Overview** 页面检查状态。显示 **Active（已生效）** 才继续；**Pending nameserver update** 表示还没完成，核对服务方是否已保存这两个 NS、域名是否已获批，再等待生效。不要反复创建隧道解决 NS 问题。
 
-#### 0.3 注册 Cloudflare 账号，把域名加进来
-
-1. 去 [dash.cloudflare.com](https://dash.cloudflare.com/) 注册。免费 plan 就够：Tunnel 免费，Zero Trust / Access **50 用户以内免费**（n=1 自托管用 1 个）。
-2. 控制台 **Add a domain**，填你的域名，plan 选 **Free**。
-3. CF 扫一遍现有 DNS 记录（新申请的免费域名通常是空的，正常），然后给你**两个 NS 地址**，形如 `xxx.ns.cloudflare.com`。记下这两个。
-
-#### 0.4 把 NS 指回 CF，等 zone 变 Active
-
-回域名服务方的后台，把上一步那两个 NS 填进去。
-
-> **EU.org 有个顺序陷阱**：它的申请表就要求填至少两个 NS，而 CF 要你先建 zone 才给 NS。**先在 CF 把 zone 建出来（NS 还没指过去也没关系），拿到那两个地址，再去提交 EU.org 申请。**顺序反了就要再等一轮人工审核。
-
-验证——别只看控制台绿灯：
+也可以在终端检查：
 
 ```bash
-dig +short NS <your-domain>     # 应当只返回 CF 给你的那两个地址
+dig +short NS <your-zone>
 ```
 
-传播要几分钟到几十分钟。CF 侧 Overview 显示 **Active** 才算成。DigitalPlat 官方说法是 5–30 分钟；EU.org 因为叠加人工审核，整体可能要几天。
+结果应与 Cloudflare 分配的两个 NS 相同；没有 `dig` 时直接使用控制台检查。DNS 生效可能需要数小时，以实际状态为准。
 
 #### 0.5 装 cloudflared
+
+`cloudflared` 是运行隧道的命令，不是部署 Workers 的 `wrangler`。macOS 先运行 `brew --version`；没有 Homebrew 时，按 [Homebrew 官网](https://brew.sh/)安装，并执行安装末尾 **Next steps** 中为这台电脑给出的 PATH 命令，再打开新终端。
 
 ```bash
 brew install cloudflared      # macOS
@@ -117,7 +110,7 @@ cloudflared --version         # 装好了应当打印版本号
 cloudflared tunnel login
 ```
 
-浏览器里**能看到并选中 `<your-domain>`**，才算 §0 完成——这条命令就是 §1 的第一步，选中后会往 `~/.cloudflared/` 写 `cert.pem`。
+浏览器里**能看到并选中 `<your-zone>`**，才算 §0 完成——这条命令就是 §1 的第一步，选中后会往 `~/.cloudflared/` 写 `cert.pem`。
 
 看不到你的域名，说明 zone 还没 Active，或者你登的不是加了这个域名的那个 CF 账号。回 0.4，别往下走。
 
@@ -125,18 +118,46 @@ cloudflared tunnel login
 
 > 下面第一条命令要求你已有 CF 账号、有域名、且 zone 已 Active。没有的话先看 [§0 前置条件](#0-前置条件-cf-账号与域名)。
 
+本节新装统一使用**本地配置文件**：把「公网域名转到本机哪个端口」写进 `~/.cloudflared/config.yml`，与 CCM 的隧道常驻模板一致。
+Cloudflare 也支持把规则保存在控制台、用 tunnel token 启动连接器；那是另一套配置入口，不能把它的启动命令与本节的凭据文件混用。需要识别已有命令时，见 [Cloudflare 对两种方式的说明](https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/)。
+
+按本节运行 `cloudflared tunnel create` 就是在创建 Tunnel；无需再到控制台点一次创建。规则按下面的 YAML 填写，完整命令说明见[Cloudflare 本地隧道教程](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/create-local-tunnel/)。
+
+**第一步：创建隧道和域名记录。** `<tunnel-name>` 是自选的隧道名，例如 `claude-chat-mobile`；后面始终用同一个名字。`<your-domain>` 是手机将要访问的完整域名，例如 `ccm.example.com`。
+
 ```bash
-cloudflared tunnel login                          # 浏览器选你的域名 zone
-cloudflared tunnel create <tunnel-name>           # 生成 <UUID>.json 凭据
-cloudflared tunnel route dns <tunnel-name> <your-domain>   # 建代理 CNAME
-# 写 ~/.cloudflared/config.yml：
-#   tunnel: <UUID>
-#   credentials-file: ~/.cloudflared/<UUID>.json
-#   ingress:
-#     - hostname: <your-domain>
-#       service: http://localhost:3000
-#     - service: http_status:404
+cloudflared tunnel login
+cloudflared tunnel create <tunnel-name>
+cloudflared tunnel route dns <tunnel-name> <your-domain>
 ```
+
+记下 `create` 输出的 UUID 和凭据 JSON 的绝对路径。`login` 生成的 `cert.pem` 用于管理隧道；运行隧道还需要 `create` 生成的 `<UUID>.json`。
+
+**第二步：实际创建 `~/.cloudflared/config.yml` 文件。** 下面是文件正文，不是终端命令；替换 UUID、凭据路径和域名。`credentials-file` 用绝对路径，不要在 YAML 里写 `~`。
+
+macOS 可运行 `nano "$HOME/.cloudflared/config.yml"` 打开编辑器，粘贴并修改下面的正文；按 Ctrl+O、回车保存，Ctrl+X 退出。如果文件已有其他隧道配置，先停下来核对用途，不要整份覆盖。
+
+```yaml
+tunnel: <UUID>
+credentials-file: /Users/you/.cloudflared/<UUID>.json
+
+ingress:
+  - hostname: <your-domain>
+    service: http://127.0.0.1:3000
+  - service: http_status:404
+```
+
+Linux 用户把凭据路径换成自己的家目录。CCM 若改过 `PORT`，这里的 `3000` 也要一起改。末尾的 404 是未匹配域名的兜底，CCM 的域名必须命中它前面的转发规则。
+
+**第三步：先校验规则，再前台启动。**
+
+```bash
+cloudflared tunnel --config "$HOME/.cloudflared/config.yml" ingress validate
+cloudflared tunnel --config "$HOME/.cloudflared/config.yml" ingress rule https://<your-domain>
+cloudflared tunnel --config "$HOME/.cloudflared/config.yml" run <tunnel-name>
+```
+
+前两条应校验通过，且该域名命中 `http://127.0.0.1:3000`。第三条在另一个终端里保持运行，日志出现 `Registered tunnel connection` 才说明连接器已连上 Cloudflare；若出现 `No ingress rules were defined`，先修正配置文件，继续下一节不会解决它。常驻安排在 §3。
 
 > ⚠️ `~/.cloudflared/<UUID>.json` 与 `cert.pem` 是凭据，**勿提交/泄露**。
 
@@ -149,7 +170,7 @@ node scripts/qr.js --url https://<地址>  # Quick Tunnel 的随机域名、自�
 
 `--public` 只认得两种地址：配置里的 `CF_ACCESS_HOSTNAME`，以及 `tailscale status` 报告的 MagicDNS 名。Quick Tunnel 的随机域名只存在于 cloudflared 自己的输出里，产品不管那个进程，只能用 `--url`。
 
-**开了 Cloudflare Access 时，二维码里不含令牌**——那条路只认 Access 的 JWT，`AUTH_TOKEN` 不参与鉴权（见 `app/src/auth/cf-access.js` 的 `isPublicHost`），带上它只是多印一份凭据。扫码后按提示完成 2FA 即可。`--url` 指向同一域名时走的是同一道判据。
+**开了 Cloudflare Access 时，二维码里不含令牌**——那条路只认 Access 的 JWT，`AUTH_TOKEN` 不参与鉴权（见 `app/src/auth/cf-access.js` 的 `isPublicHost`），带上它只是多印一份凭据。扫码后按提示完成 Access 登录即可。`--url` 指向同一域名时也遵循这条规则。
 
 反过来，只填了 `CF_ACCESS_HOSTNAME` 而没填 `CF_ACCESS_TEAM` / `CF_ACCESS_AUD` 时，Access 整层是关闭的、公网仍由 `AUTH_TOKEN` 独自把守——这时二维码**会**带令牌，并额外打一行告警。
 
@@ -157,20 +178,53 @@ token 走 URL fragment（`/#token=`），**不进 HTTP 请求行**，所以不�
 
 ### 2. Access（Cloudflare Zero Trust 控制台）
 
-1. Zero Trust → Access → Applications → Add → **Self-hosted**，域填 `<your-domain>`。
-2. 登录法选 **One-time PIN（Email OTP）** 或接 Google/Microsoft IdP。
-3. 策略 Allow 指定邮箱。
-4. 取应用的 **AUD tag**，连同 team 名填进项目 `ccm.config.json`（三项必须同时设置或同时留空）：
-   ```json
-   {
-     "CF_ACCESS_HOSTNAME": "<your-domain>",
-     "CF_ACCESS_TEAM": "<your-team>",
-     "CF_ACCESS_AUD": "<aud-tag>"
-   }
-   ```
-5. **登录有效期（Session Duration）**：过一次 OTP 后多久内免重复验（默认约 24h）。改法：Zero Trust → Access → Applications → 选中该应用 → **Configure / Edit → Session Duration**，下拉选 15 分钟 ~ 1 个月，或「No duration, expires immediately」每次都验；某条 Policy 内也能单独设，覆盖应用级。
-   > 换浏览器 / 无痕窗口 / 清除站点数据都会**重新触发 OTP**——Access 会话是按浏览器隔离的 `CF_Authorization` cookie，与这个时长无关（同浏览器、没清数据、未过期才免验）。
-6. **给 PWA 图标开 Bypass**，否则 Android 装出来的是快捷方式而不是真应用（见下方「Android PWA 装成快捷方式」）。
+本节使用邮箱验证码（One-time PIN，简称 OTP），不需要另外注册 Google/Microsoft 登录应用。Cloudflare 调整菜单时，以各步链接的官方文档为准。
+
+**第一步：开通 Zero Trust，记下团队名。**
+
+在 Cloudflare 控制台进入 **Zero Trust**。首次进入会要求自选一个唯一团队名、选择套餐并填写付款信息；本项目选 **Zero Trust Free**，官方说明免费套餐也需要完成付款信息步骤。由用户在官方页面填写，先核对最终套餐与金额。已有组织直接使用，不必重建。详见[官方开通步骤](https://developers.cloudflare.com/learning-paths/secure-internet-traffic/initial-setup/create-zero-trust-org/)。
+
+到 **Zero Trust → Settings → Team name and domain** 查看团队域名，例如 `myteam.cloudflareaccess.com`。后面 `CF_ACCESS_TEAM` 只填 `myteam`，不填邮箱、账号 ID 或整个网址。
+
+**第二步：启用邮箱验证码。**
+
+进入 **Zero Trust → Integrations → Identity providers → Add new identity provider → One-time PIN**，按页面保存。新建组织不一定已启用 OTP，不能跳过这一步；已有 One-time PIN 则直接使用。详见[官方 OTP 设置](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/)。
+
+**第三步：创建 CCM 的 Access 应用。**
+
+1. 进入 **Zero Trust → Access controls → Applications → Create new application**，选择 **Self-hosted and private**（旧界面为 **Access → Applications → Add → Self-hosted**）。应用名可填 `Claude Chat Mobile`。
+2. 选择 **Add public hostname**，填与 §1 完全相同的 `<your-domain>`。例如访问地址为 `ccm.example.com` 时，子域填 `ccm`、域选 `example.com`，路径留空，让整个站点都受保护。
+3. 添加访问策略：名称自选，**Action = Allow**，**Include → Emails** 填自己要用来收验证码的完整邮箱。这里填写的是获准访问 CCM 的邮箱，不要求与 Cloudflare 管理账号相同。
+4. 应用登录方式选择刚才添加的 **One-time PIN**。选择 Session Duration（登录有效期），保存应用。具体界面见[官方自托管应用步骤](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/)。
+
+**第四步：把三个值写回 CCM。**
+
+在应用列表编辑刚建好的 CCM 应用，打开 **Additional settings**，复制 **Application Audience (AUD) Tag**。这是这个 Access 应用的标识，不是 Tunnel UUID、Cloudflare API token 或 CCM 的 `AUTH_TOKEN`。位置见[官方 AUD 获取说明](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/#get-your-aud-tag)。
+
+| CCM 配置项 | 从哪里获取 | 填写格式 |
+|---|---|---|
+| `CF_ACCESS_HOSTNAME` | Access 应用的公网域名，与隧道规则一致 | `ccm.example.com`，不带 `https://` 或路径 |
+| `CF_ACCESS_TEAM` | Zero Trust Settings 中的团队域名 | `myteam.cloudflareaccess.com` 只取 `myteam` |
+| `CF_ACCESS_AUD` | CCM Access 应用的 Additional settings | 完整复制 AUD Tag |
+
+在**项目目录**替换占位符后执行，保留原有其他配置：
+
+```bash
+node scripts/config.js set CF_ACCESS_HOSTNAME=<your-domain> CF_ACCESS_TEAM=<your-team> CF_ACCESS_AUD=<aud-tag> ACCESS_PROFILE=cloudflare
+node scripts/config.js check
+```
+
+`check` 应无配置错误。这三项必须一起配置；`ACCESS_PROFILE=cloudflare` 只声明访问方案，不会在 Cloudflare 创建资源或代填参数。然后重启 **CCM server**：前台运行的在原终端按 Ctrl+C 再 `npm start`；桌面服务用菜单里的 server「重启」。
+
+再运行 `node scripts/doctor.js`，确认不再提示 Cloudflare 三项未配齐；其他失败项也要处理。
+
+**第五步：验证登录。**
+
+新开无痕窗口访问 `https://<your-domain>`，输入策略允许的邮箱，收到验证码后完成登录。必须进入 **CCM 首页**才算通过；看到验证码页只说明到达了 Cloudflare。没有收到验证码时，先核对 Allow 策略邮箱、应用是否启用 OTP，再查垃圾邮件；页面说已发码不代表邮箱已获准。完整检查见 §3b。
+
+换浏览器、无痕窗口或清除站点数据后需重新登录。以后要调整免重复登录时长，编辑此应用的 **Session Duration**。
+
+Android 用户先完成上述连接；需要安装到主屏幕时，再按下一节给图标开 Bypass。
 
 ### 2b. Android PWA：图标必须对匿名可达
 
@@ -194,7 +248,7 @@ curl -sSL -o /dev/null -w "%{http_code} %{content_type}\n" https://<your-domain>
 
 手机侧：Chrome 地址栏输 `chrome://webapks`，列表里有本应用才是 WebAPK。
 
-**修法**——给图标建一条 Bypass 应用（Access 按最长路径优先，它会覆盖根应用的 2FA 策略，其余路径不受影响）：
+**修法**——给图标建一条 Bypass 应用（Access 按最长路径优先，它会覆盖根应用的登录策略，其余路径不受影响）：
 
 Zero Trust → Access → Applications → Add → Self-hosted，Domain 填 `<your-domain>`、Path 填 `icons`，策略选 **Bypass / Everyone**。路径应用自动覆盖其下所有子路径，不用写 `/*`。
 
@@ -208,7 +262,19 @@ Zero Trust → Access → Applications → Add → Self-hosted，Domain 填 `<yo
 
 ### 3. 让 server 一直跑着
 
-**macOS 走桌面端。** `npm run app:install` 把 `CCM.app` 装进 `/Applications`，用菜单安装并启动 server，需要的话再勾「开机自启（菜单栏）」。不要把下面的 `service:install` 当成第三条入口——那是桌面端背后的同一条 CLI。
+**macOS 走桌面端。** 先在原终端用 Ctrl+C 停掉前台试跑的 server 和 tunnel，再设置常驻：
+
+1. 先按[桌面控制台安装说明](getting-started.md#可选macos-桌面控制台)准备编译工具，再用 `npm run app:install` 把 `CCM.app` 装进 `/Applications`；打开它，在控制台安装并启动 **server 服务**。
+2. 在项目终端安装并启动本节的 **tunnel 服务**（替换隧道名）：
+   ```bash
+   npm run service:install -- tunnel --tunnel=<tunnel-name> --cloudflared="$(command -v cloudflared)"
+   npm run service:status
+   node scripts/service.js health --json
+   ```
+3. 确认 server 与 tunnel 都在运行、本机健康检查通过，再继续逐层验收。
+
+server 服务会随用户登录启动，并在退出后由 launchd 拉起。需要菜单栏图标也随登录出现时，再勾「开机自启（菜单栏）」；这个开关只负责图标，不能替代 server / tunnel 服务的安装。
+本节由 CCM 管理隧道常驻，不要再为同一个隧道另装一份 Cloudflare 系统服务。下面的 `service:install` 是桌面端背后的同一条 CLI。
 
 **headless**（Linux，或 Mac 上不用 GUI）：终端里 `npm start`，窗口别关。要关终端也能活，用你自己的保活方式。
 
@@ -237,12 +303,12 @@ npm run service:status
 
 仓库 `desktop/launchd/` 下有四份占位符模板，是桌面端 / `service.js` 的数据源（`scripts/service.js` 直接读它们渲染），不是可以删掉的附件。
 
-- [`desktop/launchd/server.plist.template`](../desktop/launchd/server.plist.template) —— `node app/server.js`，经 `zsh -lc 'cd <repo> && exec <node> app/server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
+- [`desktop/launchd/server.plist.template`](../desktop/launchd/server.plist.template) —— `node app/server.js`，经 `zsh -lc 'cd <repo> && exec <node> app/server.js'` 登录 shell 启动（`.zshrc` 里的 PATH 不会自动带入，Claude 路径用 `CLAUDE_BIN` 固定），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
 - [`desktop/launchd/tunnel.plist.template`](../desktop/launchd/tunnel.plist.template) —— `cloudflared tunnel run <tunnel-name>`（读 §1 写好的 `~/.cloudflared/config.yml`）。
 - [`desktop/launchd/log-rotate.plist.template`](../desktop/launchd/log-rotate.plist.template) —— 每天 03:47 跑 `scripts/rotate-logs.sh` 做日志轮转（copy-truncate：launchd 持 O_APPEND fd，rename 式的 newsyslog/logrotate 转出来的新文件永远是空的，机制见脚本头注；默认超 20MB 才转、gzip 保留 5 份）。
 - [`desktop/launchd/menubar.plist.template`](../desktop/launchd/menubar.plist.template) —— `/usr/bin/open CCM.app`。刻意不设 `KeepAlive`（设了的话用户从菜单点「退出」会被 launchd 立刻拉起，再也关不掉）。
 
-每份模板顶部的 XML 注释列出占位符与一行可直接跑的 `node scripts/render-plist.js` 替换示例（字面量替换 + XML 转义，不用裸 `sed`——审计 TC-009：路径若含空格/`&`/`#`/引号等特殊字符，裸 `sed` 可能破坏替换或生成非法 plist）。替换后加载：
+模板顶部列出了占位符和 `node scripts/render-plist.js` 用法。请用该脚本替换，避免路径中的空格、引号或 `&` 破坏 plist。生成后加载：
 
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
@@ -250,13 +316,13 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccm.tunnel.plist
 ```
 
 ⚠️ **label 一定要用 `com.ccm.<unit>`。** `service:status`、`adopt`、桌面控制台**只扫 `com.ccm.*`
-前缀**，换个前缀装出来的那份它们看都看不到——手工装完再用工具装一次，就是两个 LaunchAgent
+前缀**，使用其他前缀的服务不会出现在这些工具中——手工装完再用工具装一次，就是两个 LaunchAgent
 抢同一个端口，而工具只报告得出其中一个。手工装好之后跑一次
 `npm run service:adopt -- server` 让工具接管（只写 manifest，一个字节都不碰 plist）。
 
 </details>
 
-#### 控制面数据放在仓库外
+#### 配置与运行数据放在仓库外
 
 `CCM_DATA_DIR` 是受支持的状态根目录；不设置时仍兼容 `./data`。长期跑着的实例建议把它设为绝对路径，避免切分支、清理仓库或测试脚本碰到生产状态：
 
@@ -271,7 +337,87 @@ chmod 700 "$HOME/Library/Application Support/claude-chat-mobile" \
 
 目录保存 CCM 的会话指针/偏好、设备信任、审批、审计、推送和缓存，文件应保持 `0600`。Claude 原始 transcript 仍在 `~/.claude/projects/`，不会迁入这里；手机上传的附件落在本目录的 `uploads/<工作区桶>/` 下（2026-09-06 起——此前落在各工作目录的 `.ccm-uploads/`，那批文件不迁移也不删除，历史消息预览会自动回落过去读）。迁移前先停掉 server（桌面端菜单或 headless 那个终端）并备份，迁完跑 `node scripts/doctor.js` 再按原入口拉起。`scripts/device.js`、server 与 doctor 都读取同一 `CCM_DATA_DIR`。
 
+### 3b. 逐层验收
+
+按顺序检查，前一层失败先修前一层。验证常驻部署时，使用已经常驻的进程，不要临时再起一份。
+
+#### 第一层：本机健康
+
+在项目目录运行：
+
+```bash
+node scripts/service.js health --json
+```
+
+**通过：** `ok` 为 `true`，`health.status` 为 `ok`，`versions` 中可看到 server、SDK 与 Claude CLI 版本。这条命令读取本地配置并带鉴权请求 `/health`，无需复制令牌。
+连不上先检查 server；401 检查配置与进程是否一致并重启 server。后台日志报找不到 `claude` 时，在能运行 Claude 的终端设置 `CLAUDE_BIN` 的绝对路径后重启（见首次使用指南 §3）。本机通过前，先不用查 Cloudflare。
+
+#### 第二层：隧道转发
+
+重跑 §1 的 `ingress validate` 和 `ingress rule`：域名必须命中 CCM 的本机地址，不能命中末尾的 `http_status:404` / `503`。再确认正在运行的连接器日志有 `Registered tunnel connection`，没有空 ingress 告警。
+
+**本层先通过配置与连接检查；实际公网转发在下一层登录后确认。** Cloudflare 的「健康」仅说明连接器在线；Access 登录页由 Cloudflare 边缘提供，也可能在本机 server 没运行时出现。两者都不能单独证明请求已到 CCM。
+
+改了本节的 `config.yml`，要重启 **tunnel**，server 重启不会让隧道重读文件。CCM 管理的隧道可用：
+
+```bash
+npm run service:restart -- tunnel
+```
+
+#### 第三层：Access 登录与 HTTP 转发
+
+在手机或浏览器无痕窗口打开 `https://<your-domain>`，先完成允许邮箱的 OTP / 已配置的身份登录，再观察登录后的结果。
+
+**通过：** 回到自己的域名并显示 **Claude Chat Mobile 首页**。仅看到验证码页不算通过。登录后若出现 503，回查第二层的规则、运行实例与日志；502 回查第一层的本机服务及转发端口；1033 检查隧道连接。不要为排错关闭 Access。
+
+#### 第四层：实时连接
+
+在 CCM 首页确认连接状态稳定，并出现能更新的延迟数值；文件夹与会话列表能正常加载。
+
+**通过：** 页面加载后，实时连接也已完成鉴权，不再停在连接中或反复重连。若首页能开但一直连不上，检查 server 的 Access JWT 鉴权日志、`CF_ACCESS_TEAM/AUD`，以及中间代理是否允许 WebSocket。
+
+这四层通过，说明手机已连接到本机 CCM。是否能正常调用模型，继续按[首次使用指南 §8](getting-started.md#8-完成首次验收)在目标工作区发送一条无副作用的消息验证；不要把页面连通当成模型调用成功。
+
+### 把 Cloudflare 配置交给模型
+
+模型需要能操作本机命令；配置 Cloudflare 页面还需要浏览器或相应 API 工具。缺少这些工具时，由用户按 §0、§2 完成页面操作，再让模型继续。账号注册、验证码、付款资料及手机上的检查由用户完成。
+
+把项目目录和下面的提示词交给模型，补上已知的值；尚未拥有域名可以注明“需要申请”。
+
+```text
+帮我首次安装 claude-chat-mobile，并配置 Cloudflare 固定域名、Tunnel 和 Access 登录。
+手机网址：https://<your-domain>
+已有或待申请的域名：<your-zone，或“需要申请”>
+允许登录的邮箱：<email>
+要连接的项目文件夹：<绝对路径，或“暂不连接”>
+是否设置常驻：<是/否>
+
+先读 docs/getting-started.md 和 docs/deployment.md。检查现状，只询问缺失的信息。
+按顺序完成，每步验证成功后再继续：
+1. 按首次使用指南准备 Node、Claude，安装 CCM 并生成配置；没有 TTY 时使用指南中的非交互命令。
+   保存 CLAUDE_BIN 的绝对路径。不要覆盖已有配置、重新生成已有 AUTH_TOKEN，或启动重复 server。
+2. 先用 node scripts/service.js health --json 确认本机健康，再配置 Cloudflare。
+3. 按部署指南 §0 注册账号、获取域名、配置 NS，确认域名在 Cloudflare 为 Active。
+   注册、验证码或付款信息需要我操作时，告诉我具体页面、要做的操作和完成标志；完成后继续。
+4. 新建隧道采用 §1 的本地 config.yml 和 UUID.json 方式；不要另建控制台 token 隧道或混用两套命令。
+   若已有同名隧道、DNS 记录或配置文件，先核对用途和管理方式，不要直接覆盖。
+   校验域名命中本机实际端口，启动连接器并检查日志；不以“隧道健康”代替转发验收。
+5. 按 §2 初始化 Zero Trust、启用 OTP、创建只允许指定邮箱的 Access 应用。
+   获取 HOSTNAME、TEAM 和应用 AUD，写入 CCM 配置并检查，重启 server。
+6. 若要求常驻，按 §3 配置；切换前先停前台进程，只保留一份 server 和 tunnel。
+   macOS 使用 CCM 的服务工具，不另装第二份 cloudflared 系统服务。
+7. 按 §3b 逐层检查：本机健康 → 隧道转发 → Access 登录 → 实时连接。
+   浏览器或手机必须在 Access 登录后进入 CCM，且实时延迟更新。需要设备审批时让我核对设备。
+8. 最后告诉我网址、启动方式、日志位置，以及每一层实测通过还是待验证。
+   模型对话由我按首次使用指南 §8 验证；未经验证不要报告“能正常聊天”。
+
+本任务只配置，不修改项目源码。不要为排错关闭鉴权、Access 或扩大邮箱放行范围。
+令牌、隧道凭据和证书保存在本机，不写入报告或提交到仓库。
+```
+
 ### 4. 通知（可选：ntfy + 深链）
+
+ntfy 是可选的另一套通知服务，不影响安装与聊天。还没部署 ntfy 时，先按[官方安装文档](https://docs.ntfy.sh/install/)准备服务，再填写下面的连接信息；只用 CCM 的 Web Push 可以跳过本节。
 
 移动端锁屏 / 息屏时，Web Push 在 iOS 上受限（须先"添加到主屏幕"、且局域网 http 下不可用）。配 ntfy 可绕开：server 端一行 POST 到 ntfy 服务，手机装 ntfy app 订阅 topic 即收锁屏通知。全在启动 shell 或配置文件注入：
 
@@ -324,13 +470,14 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 | zone 一直停在 Pending Nameserver Update | NS 没生效：`dig +short NS <your-domain>` 看返回的是不是 CF 那两个。仍是旧值就回域名服务方后台核对填没填对，再等传播（几分钟到几十分钟） |
 | `cloudflared tunnel login` 浏览器里看不到你的域名 | zone 没 Active（见上一行），或登错了 CF 账号——换账号重登。**别跳过这步往下配**，后面每步都会失败且看不出原因 |
 | `cloudflared tunnel route dns` 报权限 / zone 不存在 | 该域名的 zone 不在当前账号下。`cert.pem` 是 `tunnel login` 时写的，换过账号要删掉 `~/.cloudflared/cert.pem` 重新 login |
-| 公网 502 / 1033 | server 没跑：看 server 日志、重启；或隧道挂了：看 tunnel 日志 |
-| OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜 `[http-auth] 鉴权失败（access_jwt）`（socket 握手侧是 `[conn] … 握手鉴权`），核对配置里的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
+| 隧道显示健康，Access 登录后却返回 503 | 连接器在线但可能没有加载 CCM 的转发规则。按 §1 检查规则命中与空 ingress 告警，修改本地配置后重启 tunnel；按[逐层验收](#3b-逐层验收)定位 |
+| 公网 502 / 1033 | 502 先确认本机 CCM 健康、规则里的地址和端口正确；1033 检查连接器是否仍连接 Cloudflare。见[逐层验收](#3b-逐层验收) |
+| OTP 登录后首页能开，但实时连接失败 | 检查 WebSocket 和 JWT：server 日志搜 `[http-auth] 鉴权失败（access_jwt）`（socket 握手侧是 `[conn] … 握手鉴权`），核对 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
 | 手机进不去登录页 | 检查 DNS / 隧道日志有无 `Registered tunnel connection` |
 | Android 装的 PWA 长按只有「移除」、系统设置点进去是 Chrome | 装成了 shortcut 而非 WebAPK：Access 拦了 `/icons/*`，Google 打包服务器抓不到图标。见 §2b，给图标加 Bypass 后删图标重装 |
 | PWA 仍装成 shortcut（长按只有「移除」），但 §2b 的 `curl` 已返回 `image/png` | 安装那一刻手机连不上 Google：WebAPK 由 Google 服务器打包、再经 Google Play 装回手机，任一步连不上，Chrome 都会退回 shortcut 且不报错。在 Google 服务受限的网络里，先开代理（Chrome、Google Play 商店、Google Play 服务都要走代理），再删图标重装 |
 | 开着代理装，Chrome 通知一直停在「正在安装」 | Chrome 已把安装交给 Google Play，Play 还在忙别的下载（实测是正在更新 Chrome 本身），这次安装一直轮不到。到 Play 的「管理应用和设备」停掉或等完进行中的更新，再从 Chrome 重新安装 |
-| 改了配置不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
+| 改了配置不生效 | `ccm.config.json` 中需重启的项要重启 server；本节 `config.yml` 的转发规则要重启 tunnel。两者是独立进程 |
 | 公网 1033 且部署机开着全局代理/VPN | 代理的 TUN 模式劫持了 `cloudflared` 到 Cloudflare edge 的出站连接：先临时关闭系统代理/VPN 复测确认；长期共存则在代理软件里给 `cloudflared` 进程或 `*.trycloudflare.com` / `*.cloudflareaccess.com` / 你的隧道域名配置直连(bypass)规则 |
 | 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在工作区 `.claude/settings.local.json` 的 `env` 块写 `"ANTHROPIC_MODEL": "<带后缀名>"`（或在启动 shell `export` 后重启），或 web 端 `/model <带后缀名>` 切换（本项目配置文件里的 `ANTHROPIC_*` 启动期被剥除） |
 | 回复只有工具卡片、无正文 | 网关可能不流式 → `app/src/agent/agent.js` `map()` 已有全文兜底；仍复现则带 `LOG_STDERR=1` 看子进程日志 |
@@ -339,19 +486,18 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 ## 不用 Cloudflare 的公网入口
 
 `CF_ACCESS_HOSTNAME/TEAM/AUD` 三项留空时，`app/src/auth/cf-access.js` 整层关闭（`isPublicHost` 恒 false），
-server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬约束，各方案自身的安装配置以其官方文档为准。
+无需修改 CCM 代码。本节说明 CCM 需要调整的配置，各工具的安装方法见其官方文档。
 
-选定方案后建议声明 `ACCESS_PROFILE=vpn|reverse-proxy|direct|lan`（Cloudflare 用户可声明 `cloudflare`；装机向导
-会问这一项，手机「设置」与 `node scripts/config.js set` 也能改）：它是纯声明、不改变任何运行时行为，
-但 `doctor` 与手机端安全体检会按它做针对性检查——声明与 `CF_ACCESS_*`/`PUBLIC_URL`/`AUTH_TOKEN`/通知配置
-互相矛盾时当场指出，而不是等到用不了才发现。**托管隧道（ngrok、Quick Tunnel、Tailscale Funnel…）
-归 `reverse-proxy`**，判据见下面「托管隧道归哪一档」；`direct` 是「公网 IP + 端口转发、无中间节点」，
-它单列是因为暴露面与限速粒度两条判据都与反代相反（见下文「公网直连」）。
+选定方案后设置 `ACCESS_PROFILE`，让 `doctor` 和手机安全自检检查相应配置。它仅用于自检，不改变访问规则，可在装机向导、手机设置或 `node scripts/config.js set` 中修改。
 
-### 收窄监听面：BIND_MODE / BIND_HOST
+- 加密 VPN：`vpn`。
+- 反向代理，以及 ngrok、Quick Tunnel、Tailscale Funnel 等公开隧道：`reverse-proxy`。
+- 公网 IP 加端口转发，或服务直接监听公网地址：`direct`。
+- 仅局域网：`lan`；Cloudflare Tunnel + Access：`cloudflare`。
 
-默认情况下 server 绑 `0.0.0.0`（同 WiFi 的手机可直连）。**没有「未设 token 就降级绑 loopback」这条路**——
-`resolveBindPlan` 的 token 门排在模式校验之前，缺 token 直接拒绝启动（见下方「不变量」）。
+### 限制监听地址：BIND_MODE / BIND_HOST
+
+默认监听 `0.0.0.0`，同一 WiFi 的手机可访问。所有模式都需要 `AUTH_TOKEN`，缺少时服务拒绝启动。
 若你打算「本机只开 loopback，公网入口完全由自己转发」（SSH `-L`、Tailscale Serve、反代等），可以显式收窄：
 
 | 配置 | 实际监听 | 适用 |
@@ -362,11 +508,7 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 | `BIND_MODE=custom` + `BIND_HOST=::` | `::`（IPv4/IPv6 双栈） | 需要 IPv6 访问（默认的 `0.0.0.0` 只监听 IPv4） |
 | `BIND_MODE=custom` + `BIND_HOST=<网卡地址>` | 该地址 | 只对某一块网卡开放 |
 
-**不变量**：`AUTH_TOKEN` 是**所有**模式的共同前提，`loopback` 也不例外——本机浏览器打开同样是 web
-访问（[hard-rules §1「鉴权是启动前提」](hard-rules.md)）。没有它 **server 拒绝启动**并说明原因，
-而不是静默降级成 `127.0.0.1`：后者会让你以为配好了、实际手机全部连不上却毫无提示。
-`BIND_MODE` 拼错、或 `custom` 没给 `BIND_HOST`，同样拒绝启动。改这两项都要重启；
-`doctor` 与手机端安全体检有单独一项报告当前绑到哪、以及配置会不会导致启动失败。
+`AUTH_TOKEN` 在所有模式下都必填，包括 `loopback`。`BIND_MODE` 无效、或 `custom` 未提供 `BIND_HOST` 时，服务也会拒绝启动。修改监听配置后需重启，可用 `doctor` 核对实际地址。
 
 ### 各拓扑的明文可见方
 
@@ -387,35 +529,24 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 
 ### 托管隧道（ngrok / Quick Tunnel / Funnel…）归哪一档
 
-**归 `ACCESS_PROFILE=reverse-proxy`，不新增枚举值。** 判据是下一节那四条连带变化在托管隧道下**逐条相同**：
-`CF_ACCESS_*` 留空导致 Access 加层不生效、设备审批自动顶上、TLS 终止在对方那边、
-本机 agent 回连 3000 使所有公网客户端的连接 IP 都是 `127.0.0.1` 从而**默认共用一个限速桶**
-（能否用 `TRUSTED_PROXY=loopback` 拆桶，取决于那家会不会自己追加 `X-Forwarded-For`，去它的文档确认）。
-既然判据没有一条不同，多一个枚举值只会多一份要同步维护的检查矩阵。
+托管隧道选择 `ACCESS_PROFILE=reverse-proxy`。CCM 仍需令牌和设备审批；请求经本机连接器转发时，默认可能共用同一个登录限速计数。要按真实来源限速，需确认服务商会追加 `X-Forwarded-For`，再配置 `TRUSTED_PROXY=loopback`。
 
-明文可见方**看 TLS 在哪一跳终止，不看厂商是不是"隧道"**：终止在服务商那边，服务商就能看到明文
-（ngrok、Cloudflare Quick Tunnel 都是这样）；终止在你本机，中间只过密文。
-具体到某一家请去它自己的文档里确认这一条，别按"它叫隧道所以是加密的"推断——
-上表第二行的"不能"成立是因为那类方案本身就是端到端加密的 overlay 网络，不是因为名字里有隧道。
+服务商能否看到对话内容，取决于 TLS 在哪里解密：在服务商处解密，服务商就能看到明文；端到端加密的 VPN 中，中继只转发密文。具体行为以对应工具的官方说明为准。
 
-**Tailscale 一个产品名对应两种语义相反的拓扑，这是本节唯一真会让人选错的地方：**
+**Tailscale 一个产品名对应两种语义相反的拓扑，需要按实际用法区分：**
 
 | 用法 | 手机怎么连上 | 声明成 | 有没有公网面 |
 |---|---|---|---|
 | 设备加入 tailnet | 手机也装 Tailscale，走隧道内地址（`100.64/10`） | `vpn` | 无——未入网的设备根本触达不到 |
 | Tailscale Funnel | 任何浏览器打开公开 URL | `reverse-proxy` | **有，全公网可达** |
 
-选错的方向恰好朝放松：`vpn` 不在 doctor 的公网信号集里（`fileEditExposureDiagnostic` 只认
-`cloudflare` / `reverse-proxy` / `direct`），于是文件编辑器直写不会提示关闭、体检还会说"入网资格由隧道承担"——
-对 Funnel 是假话。手机「设置」里的选项与装机向导都点名了这一条，改声明的时候别按产品名对号入座。
+Funnel 是公开入口，应选择 `reverse-proxy`。误选 `vpn` 会让安全自检漏掉公网文件编辑提示。
 
 #### Tailscale 五分钟配方（`vpn` 档，不经 Cloudflare 的推荐路径）
 
-先说硬限制：**PWA 与 Web Push 需要 HTTPS。** 这条路上 HTTPS 由 `tailscale serve` 提供（证书由 Tailscale 自动签发），
-不用买域名、不用碰任何控制台。产品对 Tailscale 只探测、指路——不装、不起、不保活：tailscaled 本来就是
-系统守护进程，没有任何东西需要 CCM 保活，这正是它与 `cloudflared` 的差别。
+PWA 与 Web Push 需要 HTTPS；这里由 `tailscale serve` 提供证书。CCM 提供配置说明和检测，不负责安装或启动 Tailscale。
 
-1. 电脑与手机都装 Tailscale，登录**同一个账号**。手机入网后就能触达电脑的隧道内地址（`100.x.y.z`）。
+1. 按 [Tailscale 官方入门步骤](https://tailscale.com/docs/how-to/quickstart)注册账号，在电脑与手机安装并登录**同一个账号**。手机入网后就能触达电脑的隧道内地址（`100.x.y.z`）。
 2. 在电脑上看 MagicDNS 名：`tailscale status`，形如 `<机器名>.<tailnet>.ts.net`。
    `node scripts/doctor.js` 的 TAILSCALE 项会直接打印 `https://` 地址与下一步命令。
 3. 拿 HTTPS：`tailscale serve --bg 3000`（端口换成你的 `PORT`）。电脑上只跑一次，之后
@@ -427,7 +558,7 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 **别顺手开 Funnel。** `tailscale funnel` 会把这个地址暴露到全公网，那是另一档拓扑（`reverse-proxy`，见上表）；
 `serve` 只在 tailnet 内可达，未入网的设备根本触达不到端口。
 
-设备审批照常：Host 是 MagicDNS 名而不是 localhost，不会触发本机免审；`CF_ACCESS_*` 留空，设备审批自动顶上。
+设备审批照常：Host 是 MagicDNS 名而不是 localhost，不会触发本机免审；`CF_ACCESS_*` 留空，自动启用设备审批。
 登录限速在 `tailscale serve` 下**合桶**：Serve 是跑在 tailscaled 里的本地反代，固定把请求代理到 `127.0.0.1:<PORT>`，
 CCM 看到的连接 IP 是 127.0.0.1，整个 tailnet 的设备共用一个限速桶（一台输错几次会把另一台一起锁住；
 桶里只有你自己的设备，通常可接受）。别为此开 `TRUSTED_PROXY`：Serve 虽然会覆盖写 `X-Forwarded-For`、采信本身安全，
@@ -442,20 +573,20 @@ CCM 看到的连接 IP 是 127.0.0.1，整个 tailnet 的设备共用一个限�
 
 ### 换掉入口后，CCM 侧的四处连带变化
 
-这四条对**所有**非 Cloudflare 方案共通，与选哪种拓扑无关。先说口径：**公网基线 = `AUTH_TOKEN` + 逐设备审批**，
-对所有拓扑相同；Cloudflare Access 是**可选加层**：开着时它管的公网 Host 改认 Access 身份（替代 `AUTH_TOKEN`，
-缺省也替代设备审批），关着时回到基线、设备审批自动顶上，两种状态都是完整的两道门。下表的「变化」是加层的有无，不是防护等级的升降。
+这四条对**所有**非 Cloudflare 方案共通，与选哪种拓扑无关。默认验证方式是 **`AUTH_TOKEN` + 逐设备审批**，
+对所有拓扑相同；Cloudflare Access 可用于验证公网身份：开着时它管的公网 Host 改认 Access 身份（替代 `AUTH_TOKEN`，
+缺省也替代设备审批），关着时回到基线、自动启用设备审批，两种方式都保留访问验证。下表说明各自使用的凭据、设备审批和限速方式。
 
-| | Access 加层开启 | `CF_ACCESS_*` 留空后 |
+| | Access 验证开启 | `CF_ACCESS_*` 留空后 |
 |---|---|---|
-| Cloudflare Access（可选加层） | 公网 Host 强制 Access JWT，fail-closed | **不生效**；基线不变。想再加一层可在入口层自行补（反代类拓扑） |
+| Cloudflare Access（可选的身份验证） | 公网 Host 强制 Access JWT，fail-closed | **不生效**；基线不变。想再加一层可在入口层自行补（反代类拓扑） |
 | `AUTH_TOKEN` | LAN/本机走它 | 不变，全部请求走它 |
-| 设备审批 | 被 Access 跳过 | **自动顶上**，每台新设备批准一次 |
+| 设备审批 | 被 Access 跳过 | **需要审批**，每台新设备批准一次 |
 | 登录限速粒度 | per 真实来源（`CF-Connecting-IP`，IPv6 按 /64） | 反代类**默认按连接 IP 合桶**；反代自己追加 `X-Forwarded-For` 时可声明 `TRUSTED_PROXY=loopback` 按末跳分桶。direct 与直连裸隧道地址的 vpn 天然分桶；经 `tailscale serve` 这类本地反代的 vpn 同反代档合桶 |
 
 后两行需要展开：
 
-**设备审批会自己回来。** `shouldBypassDeviceApproval`（`app/src/auth/rate-limiter.js`）先判 `deviceApprovalScope === 'all'` 返回 false，
+**关闭 Access 验证后，新设备需要审批。** `shouldBypassDeviceApproval`（`app/src/auth/rate-limiter.js`）先判 `deviceApprovalScope === 'all'` 返回 false，
 紧接着 `if (accessEnabled) return true`——**缺省**下 Access 与设备审批是替代关系而非叠加
 （声明 `DEVICE_APPROVAL_SCOPE=all` 可让两者叠加）。失去 Access 不等于防护归零。
 反代进来的请求也会被正确判成「非本机」：peer 虽是 `127.0.0.1`，但 Host 是公网域名，不满足 bypass 条件。
@@ -494,9 +625,8 @@ IPv4 不受影响，仍按整地址分桶。
   不是降级绑 `127.0.0.1`——任何拓扑都得先有令牌。
 - PWA 与 Web Push 需要安全上下文（HTTPS，或 `localhost`）。裸 IP 的 `http://` 能正常聊天，
   但装不了 PWA、收不到 Web Push，通知只能退回 ntfy（见上节）。
-- `CF_ACCESS_*` 三项留空。配置面板清空时会弹一次确认「会移除 Cloudflare Access 这层可选公网加层」
-  （`app/src/ops/env-schema.js` 的 `checkCfAccessTeardown`），它问的是「你是不是已经换好了别的入口」，
-  换方案时点「仍然保存」即可。若声明了 `ACCESS_PROFILE`，面板还会提醒把它一并更新，避免声明指着旧方案。
+- 将 `CF_ACCESS_*` 三项同时留空。配置面板会要求确认关闭 Access 验证；换好入口后再确认，并更新 `ACCESS_PROFILE`。
+
 - **要用通知就必须显式设 `PUBLIC_URL`。** 深链地址是 `PUBLIC_URL` 优先、回落 `CF_ACCESS_HOSTNAME`
   （`app/src/ops/notify-channels.js` 的 `publicUrl`）——两个都没有时通知仍正常送达，但**不带 click，点了不跳转**。
   该项的配置说明写的是「留空回退到 CF_ACCESS_HOSTNAME」，对本节场景等同于「留空即没有」。
@@ -510,17 +640,17 @@ IPv4 不受影响，仍按整地址分桶。
 要 PWA / Web Push 则需给隧道内主机名配证书——部分方案自带签发能力，其余需自行处理。
 
 **反向代理类**：Mac 侧用任意方式把 3000 暴露给反代所在主机（frp、SSH `-R`、VPN 内网互通均可），
-反代对外终止 TLS。CCM 对反代只有两条硬要求：
+反代对外终止 TLS。CCM 对反代只有两项配置要求：
 
 ```nginx
 location / {
     proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
 
-    # 硬要求 1：Host 原样透传。设备审批的判据读它，配成空值或写死会打穿这层
+    # 保留原始 Host，供 CCM 判断访问域名；不要留空或写死为 localhost
     proxy_set_header Host $host;
 
-    # 硬要求 2：WebSocket 升级。Socket.io 靠它，缺了会退化成长轮询或直接连不上
+    # 允许 WebSocket 升级，保持 Socket.io 实时连接
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
 
@@ -537,11 +667,9 @@ location / {
 关键仍是前两条。`X-Forwarded-For` **默认不读**；只有反代自己追加它、且你显式声明
 `TRUSTED_PROXY=loopback` 时才用于限速分桶（前提与反例见上节「限速桶默认会合并」）。
 
-公网基线（`AUTH_TOKEN` + 设备审批）在反代下照常生效。反代与 Cloudflare 的差别只在「有没有加层」：
-Cloudflare 有 Access，反代要加就在入口层自己补（mTLS、OIDC / forward auth、Basic Auth 等均可）。
-入口 URL 谁都能打开时，这层加层的价值是把暴破尝试挡在 CCM 之外，不是补齐什么缺口。
+反向代理入口仍使用 `AUTH_TOKEN` 和设备审批。需要在请求到达 CCM 前验证身份时，可另配 mTLS、OIDC / forward auth 或 Basic Auth。
 
-**托管隧道类**（同属 `reverse-proxy` 档，归类判据见上文）：不用写上面这段配置——Host 透传与
+**托管隧道类**（同属 `reverse-proxy` 档，分类见上文）：不用写上面这段配置——Host 透传与
 WebSocket 升级由服务商那端负责，主流几家默认就满足。本机只需 `<工具> http://localhost:3000` 之类的一条命令。
 需要额外做的只有两件：`PUBLIC_URL` 填分配到的地址（换了地址要跟着改），以及尽量在入口层加一道
 该服务商提供的认证（多数家有 Basic Auth / OAuth 选项，免费档常常没有）——没有的话公网就只剩
@@ -590,12 +718,12 @@ WebSocket 升级由服务商那端负责，主流几家默认就满足。本机�
 第三步，落地。以下是 CCM 的硬约束，配置必须满足，不满足就是错的：
 1. server 监听 3000。AUTH_TOKEN 是启动前提，没设它 server 直接拒绝启动（不是降级绑 127.0.0.1）。
 2. 反代必须原样透传 Host 头（nginx 里是 proxy_set_header Host $host;）。
-   设备审批的判据读这个头，配成空值或写死会打穿一层防护。
+   设备审批会检查这个请求头；不要留空或写死为 localhost。
 3. 反代必须支持 WebSocket 升级（Upgrade / Connection 头），Socket.io 依赖它。
 4. X-Forwarded-For 默认不读。只有反代自己追加它（nginx 的 $proxy_add_x_forwarded_for，Caddy / Traefik 默认）
    且 proxy_pass 到 127.0.0.1 时，才可在 CCM 配 TRUSTED_PROXY=loopback 让登录限速按真实来源分桶；
    ssh -R、frp tcp、没配转发头的 nginx 这类透传路径绝不能开这项——开了等于关掉限速。
-5. CF_ACCESS_* 三项要留空，此时 Cloudflare Access 这层可选加层不生效、设备审批自动顶上；
+5. CF_ACCESS_* 三项要留空，此时 Cloudflare Access 这层可选的身份验证不生效、自动启用设备审批；
    公网基线（AUTH_TOKEN + 设备审批）不变。如果选了反代类拓扑，提醒我可以在反代层再加一层认证。
 6. PWA 与 Web Push 需要 HTTPS 或 localhost，裸 IP 的 http 下不可用。
 7. 如果我要用通知，PUBLIC_URL 必须显式设成入口地址。它平时回落 CF_ACCESS_HOSTNAME，
@@ -616,7 +744,7 @@ WebSocket 升级由服务商那端负责，主流几家默认就满足。本机�
 - 配完用鉴权后的 /health JSON 验证连通性，不要只看进程存在或端口监听。
 - 第一次从新设备连接后，运行 node scripts/device.js list，让我核对再 approve。
 
-背景与判据见 docs/deployment.md 的「不用 Cloudflare 的公网入口」一节。
+配置说明见 docs/deployment.md 的「不用 Cloudflare 的公网入口」一节。
 ```
 
 </details>
@@ -636,7 +764,7 @@ cloudflared tunnel --url http://localhost:3000
 
 ## 看日志的两条路（都可选，都只在 macOS）
 
-同名不同物，别混：
+两种日志窗口的区别如下：
 
 | | `LOG_TERMINAL`（下面这节） | 桌面控制台的「查看日志」 |
 |---|---|---|
@@ -660,8 +788,7 @@ node scripts/config.js set LOG_FILE=/绝对/路径 # 只告诉日志窗口和 do
 窗口只是跟随那个文件，server 不会因为设了 `LOG_FILE` 就往里写。headless 直接 `npm start` 时输出留在终端，窗口会是空的；
 要用它，先把输出重定向到文件（如 `npm start 2>&1 | tee -a /绝对/路径`），再让 `LOG_FILE` 指向同一个文件。
 
-（直接改 `ccm.config.json` 也行：`"LOG_TERMINAL": true`。JSON 里写布尔值，
-落到进程环境时会由 schema 归一成这个键实际认的字面量。）
+也可直接在 `ccm.config.json` 中设置 `"LOG_TERMINAL": true`。
 
 - **仅 macOS**（靠 osascript 驱动 Terminal.app）；Linux 留空即可，设了会打一行"已跳过"。
 - **首次会弹系统「自动化」授权框**，需允许控制「终端」；拒绝后 server 照常跑，只是开不出窗口（日志会提示怎么开）。

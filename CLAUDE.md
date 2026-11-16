@@ -12,15 +12,16 @@
 
 ## 动手前
 
+- 用户要求安装或部署时，先读 [docs/getting-started.md](docs/getting-started.md)；Cloudflare 公网入口继续读 [docs/deployment.md](docs/deployment.md) 的「从零搭建」和「把 Cloudflare 配置交给模型」，按四层验收报告实际结果。
 - 不知道某个功能该怎么做时：**CLI 有什么 web 就有什么**，先去找 claude code CLI 是怎么实现的。Agent SDK 文档在 https://code.claude.com/docs/en/agent-sdk/overview ，尽量不重复造轮子。
-- 改动涉及同步链路、推送、镜像锁、事件回放时，**先读 [docs/architecture.md](docs/architecture.md)**——判据都在那里，凭直觉改这几处基本会错。
+- 改动涉及同步链路、推送、镜像锁、事件回放时，**先读 [docs/architecture.md](docs/architecture.md)**；其中说明了状态判断、边界和参数。
 - 要新增、修改或删除任何测试文件之前，**先读 [docs/testing.md](docs/testing.md)**。
 - **不开无鉴权的 HTTP 数据端点**：`/health`、`/metrics`、历史回显都过鉴权。
 - 桌面端 CCM.app 或另一个 server 占着端口时，**勿再手动 `npm start`**；临时起 server（import 了 `app/src/server/app.js` 也算，它在模块顶层就 listen）必须带一次性的 `CCM_DATA_DIR`，否则写进生产 `data/`；还要设 `CLI_HOOKS_BRIDGE=off CLI_STATUSLINE_BRIDGE=off`：两个桥的目录默认与生产共用，hooks 事件读完即删，会被临时 server 抢走。
 
 ## 测试跑在哪：宿主机只跑白名单，其余进容器
 
-- **宿主机只跑** `npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:invariants`、`npm run test:e2e` 及其同源别名（真相源 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。`test:invariants:server` 与 `test:invariants:env` 不在名单上，别照后缀类推。
+- **宿主机只跑** `npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:invariants`、`npm run test:e2e` 及其同源别名（完整名单见 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。`test:invariants:server` 与 `test:invariants:env` 不在名单上，别照后缀类推。
 - **其余一律进容器**：`npm run test:docker`、`npm run mutate:docker -- <文件>` 等，首次先 `npm run docker:build`。PreToolUse 钩子对有容器替代的命令直接 deny 并指出改跑哪条。
   - 在 worktree 里别用 `npm run test:docker` 跑全量：容器只挂 worktree 根，`.git` 指针文件在容器里解析不到，unit 段的 git 类用例必红，`&&` 串联又让后面几段一条不跑。拆开跑：宿主机 `npm run test:unit`、`npm run test:invariants`，容器 `npm run test:docker:invariants`、`npm run test:docker:integration`。
 - **改动过程中只跑相关文件，全量留到开 PR 前跑一次**（CI 会再跑全套）：
@@ -39,6 +40,9 @@
 - PR 合进 `dev` 后，删掉这个 PR 的 worktree、本地分支（`git branch -d`，只删已合并的）和远程分支，不用再问。长期 worktree（gh-pages、promo、third-party）不动。
 
 ## 文档
+
+- 文档应通俗、简洁：先写操作步骤、预期结果和常见错误；术语首次出现时解释，避免内部行话、重复强调和与操作无关的开发过程叙述。
+- 新手指南只保留首次使用的必需步骤，其他配置按需展开。修改说明时保留安全条件、适用范围和验证方法，中英文对应内容同步更新。
 
 [docs/architecture.md](docs/architecture.md)（双通道、单驾驶员、回放、推送）· [docs/testing.md](docs/testing.md) 与 [tests/README.md](tests/README.md)（怎么写测试、执行槽、不变量编号）· [docs/display-contracts.md](docs/display-contracts.md)（模型、effort、statusline 展示语义；改契约先改 `tests/unit/display-contracts.test.mjs`）· [docs/deployment.md](docs/deployment.md)（常驻、隧道、CF Access）· [docs/getting-started.md](docs/getting-started.md)（装机与运维命令）
 

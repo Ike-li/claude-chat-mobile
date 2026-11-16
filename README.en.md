@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>The Claude Code on your computer — keep driving it from your phone.</strong><br>
-  Your own local claude · any gateway or API key works · the control plane stays on your machine
+  Your own local claude · any gateway or API key works · service and records stay on your machine
 </p>
 
 <p align="center">
@@ -40,11 +40,11 @@
 * **It drives the same `claude` you use on your computer.** Your local `claude` CLI, through the Agent SDK: the same CLAUDE.md, MCP servers, skills, login and permission rules. The goal is that anything you can do in the terminal, you can do from the phone.
 * **It works where official Remote Control can't.** Relays, third-party gateways, API keys, non-Anthropic models, Bedrock / Vertex, telemetry disabled: however your `claude` is configured, that is what it uses.
 * **Every session is already there.** All sessions in your connected folders can be viewed and resumed: ones started in the terminal, last week's, ones you never turned remote access on for.
-* **The control plane stays on your machine.** Server, transcripts, device trust and audit logs all live on your computer, fully self-contained on a LAN, with no account to sign up for.
+* **Service and records stay on your machine.** Server, transcripts, device trust and audit logs all live on your computer, fully self-contained on a LAN, with no account to sign up for.
 
 ## What you do in the terminal, and how it works on the phone
 
-Walking away from the desk, the fear isn't losing sight of the output — it's that **it stalls on something that needs you and waits all night**. So these three first:
+Handle approvals, answer questions, and receive task notifications on your phone:
 
 | In the terminal | On the phone |
 | --- | --- |
@@ -72,7 +72,7 @@ Also: image upload and screenshot paste, event catch-up after a reconnect, PWA i
 
 ## How it differs from official Remote Control
 
-**If you can use official [Remote Control](https://code.claude.com/docs/en/remote-control) and accept its account and data path, use it** — zero deployment, and it is the default recommendation. This project is for people the official path refuses, or whose control plane they cannot accept. The first group typically points the `claude` CLI at a relay, a third-party model or a non-Anthropic one, which shuts the official door outright; the second needs session records and audit logs to stay on their own machine.
+Official [Remote Control](https://code.claude.com/docs/en/remote-control) needs no self-hosted deployment and suits users who accept its account and storage model. CCM suits users of other model gateways, or those who want session records, device trust, and audit logs stored on their own computer.
 
 |  | Official Remote Control | Claude Chat Mobile |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ Also: image upload and screenshot paste, event catch-up after a reconnect, PWA i
 | **Driving one session from both ends** | Yes — send from terminal, web or phone interchangeably | **No** — single-driver model; the web side must explicitly take over, and that can fork the session |
 | **Deployment cost** | None | You run a server yourself |
 
-> A note on wording: this is not "data never leaves your machine" — model requests are still sent by the local `claude` CLI using your existing configuration. What CCM promises is that it adds **no additional** data egress beyond that.
+> The local `claude` still sends model requests to your configured provider. Storing records locally does not keep model requests offline.
 
 CCM makes no assumption about where it runs: wherever your `claude` CLI works, the control plane follows. Your own dev machine is the main case; a remote server works just the same, with your phone connecting to that server.
 
@@ -90,13 +90,16 @@ CCM makes no assumption about where it runs: wherever your `claude` CLI works, t
 
 You need Node.js ≥ 20 and a working local `claude` CLI. This project **does not** install or sign you into Claude.
 
+New computer: start with [Getting Started](docs/getting-started.en.md). For a fixed public URL, continue with [Cloudflare account, domain, Tunnel, and Access setup](docs/deployment.md#从零搭建) (Chinese). To delegate setup, copy the [installation prompt](docs/getting-started.en.md#delegate-installation-to-a-model).
+
 ```bash
-curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
-cd claude-chat-mobile-master
-npm ci --omit=dev && npm run setup && npm start
+curl -fsSL -o ccm-master.tar.gz https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz \
+  && tar xzf ccm-master.tar.gz \
+  && cd claude-chat-mobile-master \
+  && npm ci --omit=dev && npm run setup && npm start
 ```
 
-Open the address printed in the terminal on your phone. The first time a new device connects it needs one approval: `node scripts/device.js list`, then `approve <ID>`. Typing a 64-character token on a phone is painful — `node scripts/qr.js` renders the address as a terminal QR code.
+Leave the server terminal open. In another terminal, enter the project directory and run `node scripts/qr.js`; scan it with a phone on the same Wi-Fi. For a new device, inspect `node scripts/device.js list`, then approve it with `node scripts/device.js approve <ID>`.
 
 > **A running server ≠ a working chat.** If chat doesn't work from the phone, get `claude` through one turn in your host terminal first, then retry. Full checklist: [Getting Started §8](docs/getting-started.en.md#8-complete-the-first-run-check).
 
@@ -112,7 +115,7 @@ To change code or run tests, `git clone` the full repository instead. Configurat
 Phone PWA / browser ↕ Socket.io ↕ CCM Server (local) ↕ Claude Agent SDK ↕ local claude CLI
 ```
 
-The phone is only a **remote control plane**. What actually executes code, reads the project, calls tools and maintains sessions is still the Claude Code on your computer — no database, no multi-tenancy, no SaaS backend.
+The phone provides a **remote interface**. What actually executes code, reads the project, calls tools and maintains sessions is still the Claude Code on your computer — no database, no multi-tenancy, no SaaS backend.
 
 **One boundary worth knowing**: a live session has exactly one driver at a time. While the terminal is driving, the Web side is read-only by default; you can explicitly resume from the Web, but that may fork the session. The two never type into the same live Claude process at once.
 
@@ -151,6 +154,7 @@ Read [deployment and operations](docs/deployment.md) (Chinese) before exposing i
 **Using it**
 
 * **[Getting Started](docs/getting-started.en.md)** — from install to your phone's first message; configuration, updating, command reference
+* **[Use a free domain with Cloudflare](docs/cloudflare-free-domain.md)** (Chinese) — registration, nameservers, Active status, and the next CCM setup steps
 * **[Deployment and operations](docs/deployment.md)** (Chinese) — LAN to long-term public entry points, Cloudflare Tunnel / Access, off-Cloudflare alternatives
 * [Security policy](SECURITY.md) — how to report a vulnerability privately
 

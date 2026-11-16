@@ -42,6 +42,7 @@ const ROOT_FILES = new Map([
   ['.nvmrc', 'Project configuration'],
   ['docs/architecture.en.md', 'Documentation'],
   ['docs/architecture.md', 'Documentation'],
+  ['docs/cloudflare-free-domain.md', 'Documentation'],
   ['docs/deployment.md', 'Documentation'],
   ['docs/display-contracts.md', 'Documentation'],
   ['docs/getting-started.en.md', 'Documentation'],

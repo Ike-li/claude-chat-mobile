@@ -1,25 +1,20 @@
 # 展示契约（Display Contracts）
 
-> **目的**：锁定「TUI 怎么显 · SDK 怎么拿 · Web 怎么显」中**允许的变换**与**禁止的改写**。  
-> **可执行锚点**：`tests/unit/display-contracts.test.mjs`（改契约先改测试，再改实现）。  
-> **范围（v1）**：模型 · 思考强度 effort · statusline。其它面（工具卡/历史/权限 pill）见文末扩展清单。
+> **目的**：锁定「TUI 怎么显 · SDK 怎么拿 · Web 怎么显」中**允许的变换**与**禁止的改写**。
+>
+> **对应测试**：`tests/unit/display-contracts.test.mjs`（改契约先改测试，再改实现）。
+>
+> **范围（v1）**：模型 · 思考强度 effort · statusline。其他界面（工具卡片、历史、权限选择器）见文末扩展清单。
 
 项目入口见 [README](../README.md)；首次运行见[首次使用指南](getting-started.md)；整体数据路径见[架构说明](architecture.md)；产品不变量与 n=1 取舍见[硬性规则索引](hard-rules.md)。
 
 **原则**
 
-1. **不是 100% 字节透传**。每条契约写明「源 → 允许变换 → 屏幕上应是什么」。
-2. **条数 / 语义对齐 TUI**；展示层可做可读化，不得偷偷合并、猜测、用 Web 偏好冒充 CLI 态。
-3. **单测锚点**是回归闸；本文是给人读的索引。冲突时以**测试 + 实现**为准，再回来改本文。
-   注意**代码注释不是仲裁依据**：注释和文档一样会过时（已实测到多处旧决策注释与现行分支相反）。
-   历史设计规格文档（`design.md` 及其编号体系）已下线，注释里的路径引用分两轮清完：2026-08-16
-   清了 `src/` 与 `public/js/`（约 110 处），2026-09-03 补清上轮完全未覆盖的 `tests/` 整树与
-   `index.html`（32 处）。**没有门禁钉这件事**——上轮漏的那 32 处躺了 18 天，期间 check 一直全绿，
-   是人工全仓 grep 才翻出来的。以后删文档，别指望门禁替你找残留引用。
-   现存编号锚点有两套登记面：docs/hard-rules.md 在册的（AD-5 / SP-10 / OQ-09 / UP-1 等）与历次审查修复标记，
-   以及 tests/README.md 那份由 `check-invariant-ids.js` 硬闸执行的不变量编号表——**本文对应的
-   `DISPLAY-01` 就在后者**（`logic-statusline` / `logic-bg-tasks` / `statusline` 三份 invariants 写着「守护：DISPLAY-01」）。
-   注释可以帮你理解「当初为什么这么做」，但「现在到底怎么做」只由被测试覆盖的实现回答。
+1. 每项规则说明数据来源、允许的变换和预期显示结果。
+2. 列表条数和含义应与终端界面一致。可改善可读性，不得合并、猜测，或用网页偏好替代 CLI 实际状态。
+3. 以测试覆盖的实现为准，同时维护本文。注释仅用于解释背景；删除文档时应检查全仓引用。
+
+规则编号见 [hard-rules.md](hard-rules.md)；完整仓库的 `tests/README.md` 列出本文对应的 `DISPLAY-01`。下文 TUI 指终端界面，FE 指网页界面，wire 指模型的实际标识，pin 指固定使用该标识。
 
 ---
 
@@ -112,7 +107,7 @@ transcript 事实            stream / control / usage     status_line 组装    
 新会话（FRESH）另走 `resolveFreshPrefs`：新会话页暂存 > CLI settings > 硬默认。
 | **settings.effortLevel** | 通常无 max；`normalizeEffortLevel` **不认** ultracode | L3 CLI 默认 |
 
-### 2.2 UI → SDK 映射（硬契约）
+### 2.2 UI → SDK 映射
 
 | UI 入参 | `normalizeEffortUiLevel` 结果 | Agent 行为 |
 |---------|------------------------------|------------|
@@ -161,7 +156,7 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 | **CLI settings 来的档** | 没在 Web 上选过档时，L3（settings 的 `effortLevel`）照常当显式档下发（`--effort`，跑起来同终端读 settings），但用户没选过它，**视同没指定**：占位与空首页摘要显「`<档> · CLI 默认`」（胶囊只显档名，同上）、不高亮磁贴。发之前（空首页）与发之后（实例）一致，不能发完一条就变成光秃的档（验收 O15）。点同一档 = 钉成用户自选：服务端只改来源与落盘，不置换实例（`user:setEffort` 的幂等闸按「档 + 来源」判） |
 | **来源字段** | `effortSource`：`user`（Web 上点的）/ `cli-settings`（L3）/ `default`（没指定）。随 instances（实例的 `effortSource`、空首页的 `defaultEffortSource`）与 `effort_mode.source` 下发，随 sessions.json 落盘。缺字段（旧回执、本字段之前落盘的会话）按 `user` 显示，与改动前一致 |
 | **续接时的来源** | `resolveResumeEffort` 随取值的那一层带出来源。存的是 `cli-settings` 来的档时，settings 此刻读得到就跟它（终端 `claude --resume` 也每次现读 settings），读不到（缓存冷 / 读失败）才沿用记下的档 |
-| **实际档来源** | 只能问 CLI：`AgentSession.refreshEffectiveEffort()` 调 `get_settings` 取 `applied.effort`（init 后、切模型后，仅在没指定时问）；server 经 `effort_mode.effective` 与 instances 的 `effortEffective` 下发。只进文案，不当成钉住的档 |
+| **实际档来源** | 只能问 CLI：`AgentSession.refreshEffectiveEffort()` 调 `get_settings` 取 `applied.effort`（init 后、切模型后，仅在没指定时问）；server 经 `effort_mode.effective` 与 instances 的 `effortEffective` 下发。只用于展示，不作为用户指定的档位 |
 | **未知档** | `effortUiState` **不得**把 `null` 猜成 `low` |
 | **CLI 镜像** | `mirrorReadonly` 时 null 文案为「CLI 档位未知」，不用 Web 实例的实际档补 |
 | **面板数据源** | `resolvePanelState`：镜像态**整组**只用 CLI 观察值，禁止 Web 偏好补空 |
@@ -193,7 +188,7 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 |------|-----------|------------------|-------------|
 | `model` | `activeModel \|\| reportedModel`（wire/裸 id） | snapshot：`displayName` 优先，否则 `id` | 展开态；底栏 pill **另算**（Web pill 偏 wire） |
 | `effort` | agent.effort 有则带 | snapshot.effort | 有则显 |
-| `ctx.tokens` / in out w r | `lastUsage` 真值（单轮口径；可缺） | context_window | 绝对 token 不猜；**不**单独拿来算 left；`message_delta` 残缺帧须 `mergeMessageUsage` |
+| `ctx.tokens` / in out w r | `lastUsage` 真值（单轮统计；可缺） | context_window | 绝对 token 不猜；**不**单独拿来算 left；`message_delta` 残缺帧须 `mergeMessageUsage` |
 | `ctx.totalTokens` | SDK `getContextUsage().totalTokens`（全量占用） | —（CLI 无此字段，mock 可补） | left 最优先；与 usedPercent 同源 |
 | `ctx.usedPercent` / windowSize | **只认真值**：`getContextUsage()`（**无 lastUsage 也可**）→ 失败则垫会话缓存 `agent.ctxWindowCache`（同 model 才有效）；**不按模型名猜** | CLI 给的 used_percentage / size | 两级真值都没有则只显绝对 token（不编造分母）；`left` 见 `formatStatuslineCtxLeft`（totalTokens → %×window → tokens；有 % 时**禁止**用 lastUsage 单轮 tokens） |
 | `cost` / `duration` | 会话累计 | snapshot.cost | est $ / 时长 |
@@ -260,7 +255,7 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 
 ---
 
-## §5 扩展清单（未进 v1 硬闸、仍有意策略）
+## §5 扩展清单（不在 v1 专项测试内）
 
 | 面 | 策略摘要 | 主要代码 |
 |----|----------|----------|
@@ -268,10 +263,10 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 | 工具卡 | 截断 600/Bash 2000（live 与历史回放同一份 `toolResultCap`）、脱敏 base64、标题抽 path；截断的卡给「展开全文」（`tool:full`：live 先查实例内存，带会话坐标时回落读 transcript，历史卡只走后者，门同 `image:get`）；输出只有 JSON 才高亮；输入以 `{`/`[` 开头就按 JSON 高亮（截断的也算），其余不高亮，都不走自动识别 | `toolResultCap` · `formatTool*` · `toolOutputHighlightClass` · `toolInputHighlightClass` |
 | 审批 sheet | ExitPlanMode → markdown plan；input 不截断 | `formatPermInputDisplay` |
 | 历史回显 | 滤 CLI 系统行；非 jsonl 全量 | `history.js` |
-| 会话列表 | **生产走 SDK `listSessions` 快路径**（判据 `baseDir === CLAUDE_DIR`）+ 按 jsonl 存在做归属过滤 + readdir 补 SDK 漏报；隔离测试注入别的 baseDir 时回落自造扫盘。`hasMore` / `total` / 标题 `query` 搜索（搜索强制全量 readdir 绕开 SDK ~51 窗；匹配键 OR SDK `summary` 与 `ai-title` / 未截断 firstUser / 命令名，展示标题优先 summary）/ 列表缓存（按目录里 jsonl 与旁路标题的 stat 指纹失效）由 `listSessionsPage` 维护；`excludeIds` 供删文件窗口临时过滤。readdir 成功时 `hasMore = total > limit`，不得 OR SDK 触顶 | `listSessionsPage` · `scanSessionsViaSdk` |
+| 会话列表 | **生产走 SDK `listSessions` 快路径**（条件为 `baseDir === CLAUDE_DIR`）+ 按 jsonl 存在做归属过滤 + readdir 补 SDK 漏报；隔离测试注入别的 baseDir 时回落自造扫盘。`hasMore` / `total` / 标题 `query` 搜索（搜索强制全量 readdir 绕开 SDK ~51 窗；匹配键 OR SDK `summary` 与 `ai-title` / 未截断 firstUser / 命令名，展示标题优先 summary）/ 列表缓存（按目录里 jsonl 与旁路标题的 stat 指纹失效）由 `listSessionsPage` 维护；`excludeIds` 供删文件窗口临时过滤。readdir 成功时 `hasMore = total > limit`，不得 OR SDK 触顶 | `listSessionsPage` · `scanSessionsViaSdk` |
 | 系统条中文 | compacting 等 agent 写死中文 | `agent.map` system |
 
-后续若某面反复踩坑，升格进 display-contracts 测试块即可。
+某类展示问题反复出现时，将对应规则加入 display-contracts 测试。
 
 ---
 

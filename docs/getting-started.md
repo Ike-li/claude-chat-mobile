@@ -1,58 +1,87 @@
 # 首次使用指南
 
-> 目标：从一个已经能运行 `claude` 的电脑开始，把 Claude Chat Mobile 启动起来，并从手机发出第一条消息。
+> 目标：准备本机环境、安装 Claude Chat Mobile，并从手机发出第一条消息。
 
 [English](getting-started.en.md) · [返回 README](../README.md)
 
 ## 完成后你会得到什么
 
 - 一个只在你电脑上运行的 Claude Chat Mobile server。
-- 一个受 `AUTH_TOKEN`、工作区白名单和设备审批保护的手机入口。
-- 与本机 `claude` CLI 共用配置、工具和落盘会话记录的 Web 界面。
+- 一个受 `AUTH_TOKEN`、已连接的项目文件夹和设备审批保护的手机入口。
+- 与本机 `claude` CLI 共用配置、工具和保存在本机的会话记录的 Web 界面。
 
-本指南覆盖首次安装。已经在跑桌面端或终端里的 `npm start` 时，不要再开第二个 server；桌面端用菜单里 server 一行的「重启」，headless 在原终端重启。
+本指南按步骤完成首次安装；推送、终端同步和桌面控制台可稍后配置。文中的命令都在电脑上执行，从第 3 步起须在项目目录中运行。
+
+手动安装按 §1–§8 操作；要在外网使用，再接着看[Cloudflare 从注册到接入](deployment.md#从零搭建)。交给本机编程模型时，使用[安装提示词](#把安装交给模型)。
+
+需要免费域名时，按[免费域名托管到 Cloudflare](cloudflare-free-domain.md)完成申请和 DNS 托管，再继续部署指南。
+
+macOS 用「终端」App 执行命令。代码框可以复制；`<…>` 是要替换的值，不能原样执行。命令报错时先处理当前步骤，再继续。
+
+如果 CCM 已在运行，使用原来的启动方式重启：桌面端点 server「重启」，终端运行的则在原终端停止后重新启动。
 
 ## 1. 检查前置条件
+
+还没装 Node 或 Claude 时，先完成下表；已经能用的可以跳过。
+
+| 工具 | 首次安装 | 装好后的检查 |
+|---|---|---|
+| Node.js（含 npm） | 打开 [Node.js 下载页](https://nodejs.org/en/download)，选择当前 LTS 和自己的操作系统。macOS 下载并打开 `.pkg` 安装包，按提示安装；Linux 使用页面给出的安装方式 | 重新打开终端，`node --version` 至少为 20，`npm --version` 能输出版本 |
+| Claude Code CLI | 按 [Claude 官方安装说明](https://code.claude.com/docs/en/setup#install-claude-code)安装终端版。macOS / Linux 可运行下方命令 | 新开终端后 `claude --version` 能输出版本 |
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+然后运行 `claude`。官方订阅用户按提示在浏览器登录；API key / 网关用户按下一节配置。在准备接入的项目文件夹中完成一次正常对话，再回来继续。Claude 的账号、订阅或 API 费用由所用服务方提供，安装 CCM 不会开通模型服务。
+
+若新开终端后仍提示 `claude: command not found`，按官方说明[检查 PATH](https://code.claude.com/docs/en/troubleshoot-install#verify-your-path)，不要直接进入 CCM 安装。
+
+确认前置条件：
 
 ```bash
 node --version
 which claude
 claude --version
-claude auth status
 ```
 
 需要满足：
 
 - Node.js ≥ 20。
 - `which claude` 能找到本机 CLI。
-- `claude auth status` 显示已登录；或能在终端正常开始一次对话。
+- 官方订阅用户：`claude auth status` 显示已登录。
+- API key 或第三方网关用户：在目标项目目录运行 `claude`，能正常对话；不要求登录官方订阅账号。
 - macOS 或 Linux。原生 Windows 属实验路径，推荐 WSL2。
 
-项目不自带 Claude，也不会替你安装或登录 CLI。
+CCM 的安装向导只配置 CCM；Node、Claude 安装及账号登录须先完成。
 
 ### 官方订阅与第三方网关
 
-- 官方订阅：确保启动 server 的本机账号已经登录 `claude`，无需再配 API key。
-- 第三方网关：网关配置属于 `claude` CLI 自己，不属于本项目。本项目拉起的每个会话都按工作区目录加载 CLI 的 user / project / local 三层 settings，所以**终端里怎么配，手机上就怎么生效**。两条正规通道：
-  - **CLI settings 文件的 `env` 块（推荐）**：写在工作区的 `.claude/settings.local.json`（只对这一个工作区、不进 git），或 `~/.claude/settings.json`（所有目录的基底）。例如：
+官方订阅用户先在电脑上登录 `claude`，无需额外配置 API key。API key、第三方网关等配置由 Claude CLI 管理，CCM 会读取目标项目的 CLI 配置。
 
-    ```json
-    {
-      "env": {
-        "ANTHROPIC_BASE_URL": "https://gw.example.com",
-        "ANTHROPIC_AUTH_TOKEN": "……",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "<网关认的模型名>",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "<网关认的模型名>"
-      }
-    }
-    ```
+推荐把网关变量写进以下任一文件的 `env` 中：
 
-    它由 CLI 按工作区目录从文件读取，不依赖启动 server 的进程环境，**macOS 桌面控制台拉起的常驻服务同样生效**。手建的 `settings.local.json` 要自己加进 `.gitignore`（CLI 只在自己首次写入时才会把它加进全局 git excludes）；`env` 块在目录被 CLI 信任后生效，终端里进过一次该目录即可。
-  - **启动 shell 的 `export`**：先在**将要启动 server 的 shell** 里导出 `ANTHROPIC_*`，再 `npm start`。只有这条路才要求 headless 终端入口——macOS 桌面控制台拉起的常驻服务是干净的 GUI 血统环境，里面没有你终端里 export 的变量。两条路同时存在时，网关键以 settings 文件为准（本项目 2026-07-30 实测）。
-- 不要把 `ANTHROPIC_*` 写进本项目的配置文件（`ccm.config.json` / `.env`）：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。剥除不是静默的——启动日志会逐个打印 `[config] 已忽略配置文件里的 ANTHROPIC_…`，`doctor` 的「ANTHROPIC_* 环境」一项也会提示。
-- worktree 会话注意：CLI 在 worktree 里读的是**主 checkout** 根目录那份 `settings.local.json`（官方文档明写），本项目会把主 checkout 独有的网关键中和掉、不让它误伤 worktree。worktree 要走网关，在 worktree 自己的 `.claude/settings.local.json` 里配，或干脆配在 `~/.claude/settings.json`。
-- 手机端「⚙️ 设置与状态」→「🩺 排查」→「🔍 安全体检」里的 MODEL_SETTINGS 一项会逐工作区读这些文件，核对 `model` 与 `ANTHROPIC_DEFAULT_*_MODEL` 档位映射是否打架（命令行的 `doctor` 没有这一项）。它只读配置、不发请求：✓ 说明配置自洽，不说明网关提供这些模型。
-- 顺带说明：官方的 Remote Control 遥控在网关 / API key / 关遥测配置下整条不可用（要求 claude.ai 订阅并直连官方 API）；本项目对模型通路零假设，上述配置下全功能可用——这正是它存在的主要理由之一，见 [README「为什么需要它」](../README.md#和官方-remote-control-差在哪)。
+- 项目目录的 `.claude/settings.local.json`：只用于该项目；请确认已加入 `.gitignore`。
+- `~/.claude/settings.json`：作为所有项目的默认配置。
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://gw.example.com",
+    "ANTHROPIC_AUTH_TOKEN": "……",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "<网关支持的模型名>",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "<网关支持的模型名>"
+  }
+}
+```
+
+在终端进入目标项目并启动 `claude`，按提示确认信任该目录。这种文件配置也适用于 macOS 后台服务。
+
+也可以先在终端 `export ANTHROPIC_…`，再从**同一个终端**运行 `npm start`。桌面端启动的服务不会继承另一个终端临时导出的变量。两种配置同时存在时，网关变量以 CLI settings 文件为准。
+
+**不要把 `ANTHROPIC_*` 写入 `ccm.config.json` 或 `.env`**：CCM 会忽略它们并打印提示。worktree 要使用网关时，写在该 worktree 的 `.claude/settings.local.json` 或用户级 `~/.claude/settings.json` 中；CCM 会排除仅来自主检出的网关变量。
+
+手机的「设置与状态 → 排查 → 安全体检」中，`MODEL_SETTINGS` 只检查配置是否一致，不验证网关是否支持该模型。最终以实际回复为准。
 
 ## 2. 获取代码与安装依赖
 
@@ -61,14 +90,15 @@ claude auth status
 ### 方式 A：源码归档（只想把它跑起来）
 
 ```bash
-curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
-cd claude-chat-mobile-master
-npm ci --omit=dev
+curl -fsSL -o ccm-master.tar.gz https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz \
+  && tar xzf ccm-master.tar.gz \
+  && cd claude-chat-mobile-master \
+  && npm ci --omit=dev
 ```
 
-归档由 GitHub 现打（`/archive/refs/heads/master.tar.gz`），约 1.5 MB。`master` 只在发版时前进，所以它就是最新发布；要钉住某个版本，换成 `/archive/refs/tags/vX.Y.Z.tar.gz`，解压目录名会是 `claude-chat-mobile-X.Y.Z`。裁剪按仓库里 `.gitattributes` 的 `export-ignore`：测试树、Docker 测试环境和维护者门禁工具都不在里面，运行 server、装机向导、启动自检、设备审批、桌面端和两个 CLI 桥则完整保留。
+下载成功后才解压和安装。`master` 对应最新发布版本；指定版本时，把下载地址改为 `/archive/refs/tags/vX.Y.Z.tar.gz`，并进入对应的 `claude-chat-mobile-X.Y.Z` 目录。
 
-`package.json` 原样保留：`npm run` 仍会列出 `test` / `check` / `lint` / `mutate` 这类命令，但它们引用的测试树和门禁不在归档里，跑不了；`devDependencies` 也还在，`--omit=dev` 会跳过它们。需要 `npm test` / `npm run check` / `npm run lint` 就用方式 B。
+归档包含运行、配置和运维工具，不含测试文件。需要修改代码或运行测试时选方式 B。
 
 ### 方式 B：完整仓库（要改代码或跑测试）
 
@@ -78,13 +108,13 @@ cd claude-chat-mobile
 npm ci --omit=dev
 ```
 
-两种方式都用 `npm ci --omit=dev`：严格按 `package-lock.json` 复现发布时的依赖树、不改写 lock，且只装运行依赖、不下载 Playwright 浏览器。要在完整仓库里跑测试，再执行一次不带该参数的 `npm ci`。
+`npm ci --omit=dev` 只安装锁文件中指定的运行依赖。开发或测试时，在完整仓库中改用 `npm ci`。
 
 ## 3. 生成本地配置
 
 ### 交互式向导
 
-在真实终端里运行：
+在电脑的终端中运行（向导需要键盘输入）：
 
 ```bash
 npm run setup
@@ -93,35 +123,49 @@ npm run setup
 向导会：
 
 1. 生成随机 `AUTH_TOKEN` 并写入 `ccm.config.json`，文件权限设为 `0600`。
-2. 询问「手机端要打开哪个项目目录」。填绝对路径（或 `~/` 路径），家目录本身会被拒绝；**直接回车跳过**——一个文件夹都不连也能用，以后在手机上新建会话时再选，或直接用「无文件夹」。填了第一个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，**第一项就是手机端默认打开的那个**。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
-3. 询问「你打算怎么从手机访问」（仅局域网 / Cloudflare / 加密隧道 VPN / 反向代理与托管隧道 / 公网直连）。回车可跳过；选了会写入 `ACCESS_PROFILE`，`doctor` 与手机端安全体检按它做针对性检查，向导结尾也会打印对应方案的文档指引。
-4. 询问是否启用手机端文件编辑器直写（唯一绕过 Agent 工具审批链的写入通道）。回车维持默认开；答 `n` 写入 `FILE_EDIT=off`。
+2. 选择手机上要使用的项目文件夹。填绝对路径或 `~/` 路径，不能填家目录本身。可继续添加多个目录，第一项为默认目录；直接回车可跳过，以后在手机上选择或使用「无文件夹」。
+3. 选择访问方式：局域网、Cloudflare、VPN、反向代理或公网直连。结果写入 `ACCESS_PROFILE`，供自检使用；回车可跳过。
+4. 选择是否允许手机文件编辑器直接保存文件。默认开启，保存时不经过 Claude 审批；答 `n` 关闭。
 5. macOS 上会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
    Xcode Command Line Tools。
 6. 询问是否安装 CLI hooks bridge。默认安装，但只有你确认后才会写 `~/.claude/settings.json`。
 
 如果配置文件已存在，向导默认不覆盖。
 
+**选择 Cloudflare 只写入访问方案声明。** 向导不会创建隧道、域名记录或 Access 应用，也不会自动填写 `CF_ACCESS_HOSTNAME/TEAM/AUD`。先完成本指南的本机启动与健康检查，再按[部署指南的新装顺序](deployment.md)配置公网入口。
+
+### 固定 Claude CLI 的路径
+
+在当前能运行 `claude` 的终端、项目目录下执行：
+
+```bash
+node scripts/config.js set CLAUDE_BIN="$(command -v claude)"
+```
+
+这会把当前找到的 CLI 绝对路径写入配置。尤其是 macOS 后台服务：终端里的 `which claude` 成功，不代表后台能找到它。后台使用 `zsh -lc`，读取 `.zprofile`，不会读取 `.zshrc`；仅把 `~/.local/bin` 加进 `.zshrc` 时就可能出现这个差异。以后 CLI 搬了位置，更新此项并重启 server。
+
 ### 配置文件
 
-所有配置集中在项目根的 `ccm.config.json`，一份 JSON：
+配置保存在项目根的 `ccm.config.json`。以下仅展示格式：保留向导生成的令牌，将目录换为自己的实际路径。
 
 ```json
 {
   "$schemaVersion": 1,
   "AUTH_TOKEN": "……",
   "WORKDIRS": ["/Users/you/code/project-a"],
-  "PORT": 3000,
-  "WEB_STATUSLINE": false
+  "PORT": 3000
 }
 ```
 
-开关是真正的 `true` / `false`，端口是数字，不再有 `KEY=value` 的引号与转义规则。
+端口写数字，开关写 `true` 或 `false`，不要加引号。
+
+<details>
+<summary>更多配置：手动修改、多个文件夹和旧版迁移</summary>
 
 旧版 `.env` 仍受支持：**`ccm.config.json` 存在时优先读它，缺失则回落 `.env`**，既有部署无需改动。
 （向导只生成新格式；已有 `.env` 的部署照常工作，配置项清单随时可用 `node scripts/config.js schema` 查看。）
 
-环境变量始终优先于配置文件——`PORT=4000 npm start` 会压过文件里的值。
+环境变量优先于配置文件。例如 `PORT=4000 npm start` 会使用 4000 端口。
 
 配置文件里**没被本项目登记的键也会照常传下去**（写进 `process.env`，claude 子进程继承它）——
 `HTTPS_PROXY`、`CLAUDE_CONFIG_DIR` 这类第三方变量放在这里是有效的。启动日志会为每个未登记的键
@@ -139,11 +183,7 @@ npm run config:migrate      # = node scripts/config.js migrate
 迁移会把 `.env` 读进来、连同外置的 `workdirs.json` 一起内联进 `ccm.config.json`，
 **保留原有的 `AUTH_TOKEN`**。原 `.env` 不会被删除，但从此不再被读取（新文件优先）。
 
-> ⚠️ **不要用 `npm run setup --force` 来「升级」。** `--force` 是覆盖重装，会生成一个新的
-> `AUTH_TOKEN`——所有已批准的设备都会失效，每台手机都得重新走一遍审批。
-> **注意这道拒绝只在非交互模式（`--yes`）下存在**：`resolveSetupPlan` 的 `env_exists` 检查排在
-> `if (!args.yes)` 早退之后，交互式 `npm run setup` 根本走不到它（`--force` 在交互模式下同样不起作用）。
-> 升级请直接用 `node scripts/config.js migrate`。
+> **升级时使用 `npm run config:migrate`，不要覆盖重跑 setup。** 覆盖配置会生成新 `AUTH_TOKEN`，所有设备都需要重新登录并审批。交互向导会询问是否覆盖；非交互模式仅在带 `--force` 时允许覆盖。
 
 桌面控制台在旧格式下会在配置窗口顶部显示一条横幅和「迁移配置」按钮，不必回到终端。
 
@@ -153,7 +193,7 @@ npm run config:migrate      # = node scripts/config.js migrate
 
 ```bash
 node scripts/config.js init              # 直接生成配置文件（含随机 AUTH_TOKEN），不走向导
-node scripts/config.js schema            # 列出全部配置项及其含义（活文档，从 schema 生成）
+node scripts/config.js schema            # 列出全部配置项及其含义（与程序使用同一份配置定义）
 node scripts/config.js get               # 当前配置（密钥默认脱敏，须 --reveal 才出明文）
 node scripts/config.js set PORT=4100 WEB_STATUSLINE=false
 node scripts/config.js set 'WORKDIRS=["/path/a","/path/b"]'   # 数组类要 JSON 字面量，不是逗号分隔
@@ -168,7 +208,7 @@ node scripts/config.js migrate           # 旧 .env → ccm.config.json（含 wo
 
 ### 非交互模式
 
-编程 agent、CI shell 或其他没有 TTY 的环境必须显式使用：
+由编程助手或自动化脚本安装、无法回答交互问题时，使用：
 
 ```bash
 node scripts/setup.js \
@@ -185,9 +225,10 @@ node scripts/setup.js \
 - 已有配置文件时命令会拒绝覆盖。只有确认要替换现有 token 与配置时才加 `--force`。
 - 可用 `--config <path>` 指定配置文件位置。这条路径独立于仓库根已有的配置，不会因为旁边已有 `ccm.config.json` 而被拒。
 
-多工作区在 `ccm.config.json` 里加 `WORKDIRS` 数组，每项是绝对路径或 `{path, sessionLimit}`。
-**第一项就是手机端默认打开的那个**（2026-09-08 前另有一个独立的 `WORK_DIR` 键写同一个路径，已合并；
-旧配置里那一行仍被识别、折进列表首位并提示可以删掉）：
+### 多个文件夹与 worktree
+
+在 `ccm.config.json` 的 `WORKDIRS` 数组中填写多个目录，每项可以是绝对路径或 `{path, sessionLimit}`。
+**第一项是默认打开的目录。** 旧版 `WORK_DIR` 仍可识别，会合并到列表首位：
 
 ```json
 {
@@ -201,20 +242,21 @@ node scripts/setup.js \
 }
 ```
 
-`WORKDIRS` **支持热加载**，改完即生效、无需重启。哪些项能热加载由 schema 的 `reload` 标记决定，
-`node scripts/config.js schema` 会在条目上标出（写这句时只有 `WORKDIRS`，以 schema 输出为准）。
+`WORKDIRS` 保存后立即生效，无需重启。其他配置是否需要重启，可用 `node scripts/config.js schema` 查看。
 
 `WORKDIRS` 就是「已连接的文件夹」，与 Claude 桌面端给手机开的那份文件夹清单同一语义：
 
 - **子文件夹直接可用**：连上 `~/code` 之后，`~/code/app` 里开会话不必再单独列出；抽屉里有会话的子文件夹各成一节。连接互相嵌套时归最深的那个。
-- **git worktree 跟随所属仓库**：仓库里的 worktree（如 `.claude/worktrees/` 下的托管 worktree）直接可用，会话并进仓库的会话列表。仓库外的平级 worktree（`../repo-<分支>`）不跟随——和官方桌面端一样，它就是一个普通文件夹，要用就单独连接（手机上「＋ 选择文件夹」即可），它自成一节；父目录整个连着时它本来就在范围里，照样归仓库。归属从仓库一侧双向回验（worktree 的 `.git` 指针与仓库侧的回链必须互相对上），全程不执行 git。
+- **git worktree**：仓库内部的 worktree 可直接使用，会话归入该仓库。仓库外的平级 worktree 需要单独连接，或连接包含它的父目录。
 - **不能连接的**：家目录本身、磁盘根（配置文件里也写不进去）。`~/.claude` 与本应用的数据目录手机上加不了；连了它们的上级目录（比如装着本应用的 `~/code`）时，它们也不会顺带变成会话目录——除非你在配置文件里把它们显式写进 `WORKDIRS`。仓库 `.claude/worktrees/` 下的 worktree 不能单独添加，添加它所属的仓库即可。
 - **手机上可以直接选、也可以断开**：新会话页点文件夹胶囊，或抽屉顶部「＋ 选择文件夹」——只浏览家目录里的目录名，不能加的会置灰并写明原因。「在这里开始会话」会先把它连上再开（已经连着的不重复加），就地新建的文件夹也直接连上、在里面开。抽屉里已连接的文件夹右侧「⋯」可以断开：只是不再显示、不能在里面新开，文件和会话记录都不动，开着的会话照常跑完。添加和断开都写回配置文件里的 `WORKDIRS` 并立即生效。两种情况手机上改不了：文件夹列表来自环境变量（下面那两个旧键）；没有 `ccm.config.json`（只用旧版 `.env`）——先在电脑上运行 `npm run config:migrate` 生成（保留原有 token，见[从旧版 `.env` 升级](#从旧版-env-升级)）。
 - **无文件夹**：新会话也可以不放进任何文件夹，跑在应用自建的一次性目录里（macOS 在 `~/Library/Application Support/claude-chat-mobile/scratch-workspaces`，Linux 在 `${XDG_DATA_HOME:-~/.local/share}/claude-chat-mobile/scratch-workspaces`）。第一条消息发出时才建，删除会话时一并删除（目录里还有别的会话时保留）。
 
 旧版的 `WORK_DIRS`（逗号分隔）与 `WORK_DIRS_FILE=workdirs.json`（外部文件）仍然可用。
 优先级：shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > 配置文件内联 `WORKDIRS`。
-两个 env 都没设时才用配置文件里的 `WORKDIRS`（这是生产路径）。
+两个 env 都没设时才用配置文件里的 `WORKDIRS`。
+
+</details>
 
 ## 4. 运行启动自检
 
@@ -222,8 +264,8 @@ node scripts/setup.js \
 node scripts/doctor.js
 ```
 
-它会检查 token、CLI 路径、工作区、端口、网关环境、文件权限、bridge 状态、文档/前端一致性等——
-**跑一次看输出即可，这里不列全**（列全必漂：加检查项时没人会回头补散文）。
+自检会检查令牌、Claude 路径、项目目录、端口和配置权限等。先处理输出中的失败项；未启用的可选功能可以稍后配置。
+若已选择 Cloudflare，但还没配置公网入口，`ACCESS_PROFILE` 提示 `CF_ACCESS_*` 未配齐是待办项；可以先完成下一步的本机启动和健康检查，随后按部署指南补齐，公网验收前须消除这项告警。
 若提示 3000 已被桌面端占用，不要再执行下一步的 `npm start`，从桌面端菜单里 server 一行点「重启」。
 
 权限类问题可让 doctor 做最小修复：
@@ -232,11 +274,11 @@ node scripts/doctor.js
 node scripts/doctor.js --fix
 ```
 
-`--fix` 会收紧配置文件与控制面 JSON 文件权限；先阅读输出，再决定是否运行。
+`--fix` 会将配置和状态文件设为仅当前用户可读写；先确认自检提示需要修复权限。
 
 ## 5. 启动 server
 
-首次本地试用：
+在项目目录启动服务，保持这个终端打开：
 
 ```bash
 npm start
@@ -249,13 +291,13 @@ npm start
 - 可在手机打开的局域网 URL；
 - bridge 与待审批设备状态。
 
-健康检查同样需要鉴权（`AUTH_TOKEN` 是启动前提，server 一定有它）：
+**另开一个终端，进入同一项目目录**，检查服务是否正常：
 
 ```bash
-curl -sS "http://127.0.0.1:3000/health?token=<AUTH_TOKEN>"
+node scripts/service.js health --json
 ```
 
-返回包含 `status`、`versions`、`buildNonce` 与 `timestamp` 的 JSON 才算 server 已正常响应。`AUTH_TOKEN` 等同本机 shell 入口密钥，不要把真实值贴到 issue、聊天记录或截图中。
+命令会从本地配置读取令牌并带鉴权请求 `/health`。返回 `ok: true`、`health.status: "ok"`，并在 `health.versions` 中显示 server、SDK 与 CLI 版本，才算 server 已正常响应。`AUTH_TOKEN` 等同本机 shell 入口密钥，不要把真实值贴到 issue、聊天记录或截图中。
 
 如果桌面端或已有的 `npm start` 占着 3000，不要再起一个。桌面端菜单里 server 一行点「重启」，headless 在原终端重启。详见[部署指南的运维速查](deployment.md#运维速查)。
 
@@ -263,25 +305,21 @@ curl -sS "http://127.0.0.1:3000/health?token=<AUTH_TOKEN>"
 
 ### 同一 WiFi
 
-直接打开启动日志给出的地址：
+推荐在电脑的项目目录生成二维码，用同一 WiFi 下的手机扫码：
+
+```bash
+node scripts/qr.js
+```
+
+二维码需要约 90 列 × 45 行的终端窗口；窗口太小时先放大。
+
+手动输入时，用 `node scripts/config.js get AUTH_TOKEN --reveal` 在本机查看令牌，填入以下地址。`<lan-ip>` 使用启动日志里的局域网 IP；脱敏后的令牌不能用于登录。
 
 ```text
 http://<lan-ip>:3000/#token=<AUTH_TOKEN>
 ```
 
-首次加载后 token 会存入浏览器 `localStorage`，并从地址栏清除。
-
-手输 64 位 token 很痛苦，可以打成二维码用手机扫：
-
-```bash
-node scripts/qr.js                    # 自动取本机可达地址
-node scripts/qr.js --url <地址>       # 指定隧道或 Tailscale 域名
-```
-
-需要约 90 列 × 45 行的终端窗口。窗口太窄时它直接拒绝输出，不会打印一个必然扫不出来的码。
-
-> 二维码里含完整 `AUTH_TOKEN`。投屏、录屏或旁边有人时不要打印——一串明文 token 人会本能地遮挡，
-> 一个「看起来无害」的二维码不会，而旁人拍一张就是完整凭据。
+首次登录后，浏览器会保存令牌并从地址栏移除。**二维码和完整地址都含访问令牌，请勿分享或在投屏时展示。**
 
 ### 临时 HTTPS
 
@@ -297,11 +335,11 @@ cloudflared tunnel --url http://localhost:3000
 https://<random>.trycloudflare.com/#token=<AUTH_TOKEN>
 ```
 
-随机隧道适合测试，域名每次启动都可能变化，也没有 Cloudflare Access；设备审批仍然生效。固定域名和 Access 加层见[部署指南](deployment.md)——**还没有 CF 账号或域名**（含免费域名怎么弄）从[前置条件](deployment.md#0-前置条件-cf-账号与域名)开始看；不想经过 Cloudflare 看下一节。
+随机隧道适合测试，域名每次启动都可能变化，也没有 Cloudflare Access；设备审批仍然生效。固定域名和 Access 登录配置见[部署指南](deployment.md)——**还没有 CF 账号或域名**（含免费域名怎么弄）从[前置条件](deployment.md#0-前置条件-cf-账号与域名)开始看；不想经过 Cloudflare 看下一节。
 
 ### Tailscale（不经 Cloudflare 的推荐路径）
 
-不想让流量经过 Cloudflare、也不想买域名，用 Tailscale：电脑与手机装好并登录同一账号，在电脑上跑一次
+不想让流量经过 Cloudflare、也不想买域名，可选 Tailscale。先按[官方入门步骤](https://tailscale.com/docs/how-to/quickstart)注册账号，在电脑与手机安装并登录同一账号，再在电脑上运行：
 
 ```bash
 tailscale serve --bg 3000
@@ -330,7 +368,7 @@ node scripts/device.js approve <ID>
 
 先核对待审设备 ID，再批准。批准后页面会立即解锁，不需要重新输入 token。
 
-订阅了推送的话，新设备接入时还会收到一条「🔐 新设备请求接入」——出于明文通道的考虑，通知里不含设备 ID/IP，核对一律回 app 内做；同一批请求 5 分钟内只提醒一次。
+订阅了推送的话，新设备接入时还会收到一条「🔐 新设备请求接入」——通知不包含设备 ID/IP，请回到 app 核对；同一批请求 5 分钟内只提醒一次。
 
 如批准错设备或设备丢失：
 
@@ -338,27 +376,24 @@ node scripts/device.js approve <ID>
 node scripts/device.js deny <ID>
 ```
 
-跳过设备审批只有两种情况：已经通过 Cloudflare Access JWT 的连接，或**真·本机直连**——peer 是 loopback **且** Host 也是 `localhost` 或 `127.0.0.1`（空 Host 不算；用 `http://[::1]:端口` 打开的页面不跳过，要审批一次）。
-经 cloudflared / nginx / SSH 反代进来的请求 peer 同样是 `127.0.0.1`，但 Host 是公网域名，**仍需审批**；普通局域网和临时随机隧道也不跳过。判据见 `app/src/auth/rate-limiter.js` 的 `shouldBypassDeviceApproval`。
+默认配置下，本机直连和通过 Cloudflare Access 身份验证的连接无需再次审批；局域网手机和临时隧道通常需要。设置 `DEVICE_APPROVAL_SCOPE=all` 后，所有连接都需要审批。
+
+本机识别还会检查请求的 Host，不能只看来源 IP。SSH / frp 等纯 TCP 转发的注意事项见[部署指南](deployment.md#架构)，具体实现见 `app/src/auth/rate-limiter.js` 的 `shouldBypassDeviceApproval`。
 
 ## 8. 完成首次验收
 
-两道门分开：**CCM 的访问令牌 / 设备审批**只决定手机能不能进主壳；**主机终端里的 `claude` 能不能正常跑完一轮会话**决定能不能真正对话。服务起来 ≠ 能聊天。
+固定域名走 Cloudflare 时，先完成[部署指南的逐层验收](deployment.md#3b-逐层验收)：**本机健康 → 隧道转发 → Access 登录 → 实时连接**。看到 Access 登录页、隧道显示健康，都不能替代登录后进入 CCM 并建立实时连接。
 
-**这条判据对两种模型通路是同一条**（见上文 [官方订阅与第三方网关](#官方订阅与第三方网关)）：官方订阅要求本机已 `/login`；第三方网关不走 Anthropic 登录、**永远不会出现 `Not logged in`**，它要求的是 settings 里的 `ANTHROPIC_*` 真的生效。所以别拿「有没有登录」当判据——拿「在同一个工作区目录下，终端里的 `claude` 能不能聊」当判据。
+能打开 CCM 只说明连接成功。**完成首次使用还要确认能收到模型回复：**
 
-在手机上依次确认：
+1. 首页选择目标项目文件夹，或使用「无文件夹」。
+2. 新建会话，发送“只回复 OK”。确认回复逐步显示，最后结束运行。
+3. 若出现 `Not logged in · Please run /login`，在电脑上登录 Claude；若出现网关 401、无法连接或模型不存在，检查 [CLI 的网关配置](#官方订阅与第三方网关)。先在同一项目目录用终端 `claude` 跑通，再回手机重试。
+4. 在输入框下方的「模型 · 权限 · 思考」设置中确认所选配置。如已启用 Web Push，再发送一条测试推送。
 
-1. 首页显示预期工作区。
-2. **硬门（模型通路没配好也能验）**：新建会话并发送一条消息。**只要手机上出现的是 CLI 透传上来的真实结果——正常回答，或一条具体的错误——本步就算通过**：它证明 CCM 到 CLI 这条链路是通的，而不是假流式成功。
-   - 官方订阅未登录 → 「Not logged in · Please run /login」：到主机终端打开 `claude` 执行 `/login`（或先跑通 `claude auth status`）。
-   - 第三方网关**不会**出现上面那条（它不走 Anthropic 登录）。配置没生效时看到的是网关自己的报错，例如 401、连不上、模型名不认 → 照上文 [官方订阅与第三方网关](#官方订阅与第三方网关) 检查 `ANTHROPIC_*` 写在哪一层，再看手机端安全体检的 MODEL_SETTINGS 一项（它只核对映射是否自洽；模型名网关认不认，以这条报错为准）。
-   - 两种情况收敛到同一个动作：**先在主机终端、同一个工作区目录下把 `claude` 跑通一轮正常会话**，再从手机重试。
-3. **绿路径（终端已能正常会话）**：发送一个无副作用的问题，例如“只回复 OK”，能看到流式回答和回合结束状态。
-4. 在会话里点输入框下方那枚「模型 · 权限 · 思考」胶囊（会话设置），确认模型、权限档、思考强度可见；服务状态在会话抽屉的「⚙️ 设置与状态」→「🖥 宿主机」→「📊 服务状态」。
-5. 如已启用 Web Push，使用“发一条测试推送”验证通道，不要等真实审批出现才发现配置有误。
+收到 CLI 错误说明请求已经到达 CLI，**仍需解决错误并收到正常回复，才算完成安装验收**。服务状态可在「设置与状态 → 宿主机 → 服务状态」查看。
 
-到这里，最小可用路径已经完成。下面几节都是可选增强，不影响 Web 自己发起会话。
+下面的功能均为可选，不影响从网页发起会话。
 
 ## 可选：手机推送通知
 
@@ -397,11 +432,11 @@ Web Push 链路上有三处要连 Google，**分别发生在不同设备上**，
 
 ### 不想依赖 Google
 
-用 ntfy：server 直接 POST 到你指定的 ntfy 服务，全程不经 Google，手机装 ntfy app 订阅 topic 即收。配置见 [deployment.md](deployment.md) 的「通知」一节——注意 ntfy 正文恒最小化，但**标题会带工作区目录名**，务必自托管或用私密 topic + `NTFY_TOKEN`。
+用 ntfy：server 直接 POST 到你指定的 ntfy 服务，全程不经 Google，手机装 ntfy app 订阅 topic 即收。配置见 [deployment.md](deployment.md) 的「通知」一节——注意 ntfy 正文不含消息内容，但**标题会带工作区目录名**，务必自托管或用私密 topic + `NTFY_TOKEN`。
 
 ## 可选：CLI statusline bridge
 
-Web 驾驶的会话开箱即用 SDK 状态栏。只有当你还想在 Web **只读查看终端正在运行的会话**时同步 CLI 的模型、思考强度、上下文、成本和额度，才需要 statusline bridge。
+网页发起的会话默认提供 SDK 状态栏。只有当你还想在 Web **只读查看终端正在运行的会话**时同步 CLI 的模型、思考强度、上下文、成本和额度，才需要 statusline bridge。
 
 ```bash
 npm run statusline:status
@@ -409,9 +444,9 @@ npm run statusline:install
 ```
 
 - `status` 只读，不改 `~/.claude`。
-- `install` 是显式 opt-in，会包装已有的 Claude CLI statusline 命令；未配置 statusline 时安装器会拒绝。
+- `install` 需要主动执行，会包装已有的 Claude CLI statusline 命令；未配置 statusline 时安装器会拒绝。
 - 安装后重开终端里的 Claude CLI，并重启常驻 server。
-- 卸载用 `npm run statusline:uninstall`，安装器会按 manifest 恢复原命令并拒绝覆盖发生漂移的配置；`~/.claude/ccm/statusline-v1`（含快照）一并清掉，`~/.claude/ccm` 空了也会移除。
+- 卸载用 `npm run statusline:uninstall`，安装器会按 manifest 恢复原命令并不会覆盖安装后被手动修改的配置；`~/.claude/ccm/statusline-v1`（含快照）一并清掉，`~/.claude/ccm` 空了也会移除。
 
 ## 可选：CLI hooks bridge
 
@@ -438,7 +473,13 @@ npm run hooks:uninstall
 
 只在 macOS 上可用，且完全可选 —— 手机端与命令行已经覆盖全部功能。
 
-装机向导会问一句要不要编译它；也可以随时自己来：
+先运行 `xcode-select -p` 检查编译工具。若报未安装，运行下面的命令，在系统窗口完成安装后再继续；需要的是 Xcode Command Line Tools，无需安装完整 Xcode。详见 [Apple 安装说明](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools/)。
+
+```bash
+xcode-select --install
+```
+
+安装桌面控制台：
 
 ```bash
 npm run app:install    # 首次编译并装进 /Applications —— 这是 macOS 那条入口
@@ -449,18 +490,9 @@ npm run app:install    # 首次编译并装进 /Applications —— 这是 macOS
 npm run app:build && open desktop/build/CCM.app
 ```
 
-**只需要 Xcode Command Line Tools，不是完整的 Xcode**（前者约 1–2GB，后者 12GB+）。
-装过 git / 用过 `cc` 的机器多半已经有了；没有的话：
+菜单栏图标显示服务状态。常用的安装、体检、日志和配置操作可在 app 内完成：
 
-```bash
-xcode-select --install
-```
-
-菜单栏图标显示服务状态。**桌面端自包含，不需要开终端** —— 安装、体检、看日志、改配置
-全部在 app 内完成：
-
-- **配置…**：一张表单，内容由 `config.js schema` 下发，改完点保存。它走的是同一个 CLI，
-  所以**server 没起来时照样能改配置** —— 那恰恰是最需要改它的时刻。密钥只显示掩码，
+- **配置…**：一张表单，内容由 `config.js schema` 下发，改完点保存。服务尚未启动时也能修改配置。密钥只显示掩码，
   不动就不会被提交。还在旧版 `.env` 上时，窗口顶部会有一条横幅和「迁移配置」按钮。
 - **查看日志**：内嵌滚动视图，下拉框可在 server / tunnel / logrotate 等各服务日志间切换（`~/Library/Logs/ccm-*.log` 有文件就有源），2 秒刷新，只读文件尾部（日志几百 MB 时也不会卡死）。
 - **首次安装向导 / 体检 / 安装卸载服务**：在内嵌任务窗口里逐步执行，实时显示每一步的输出，
@@ -478,8 +510,8 @@ headless 继续用终端里的 `npm start`，两套不要同时占 3000。
 ### 桌面端不对劲时的退路
 
 桌面端是 GUI 进程，有一类命令行结构上碰不到的失效方式——窗口沉到别的窗口后面点不到、菜单栏
-图标被刘海挤掉、GUI 进程继承到的 `PATH` 和你终端里的不是同一份。这类问题的共同点是
-**server 照常在跑，只是那一屏够不着它**。
+图标被刘海挤掉、GUI 进程继承到的 `PATH` 和你终端里的不是同一份。前两类可能只影响控制台；
+PATH 差异还可能让 server 因找不到 Claude 而启动失败。先确认服务本身是否健康，不能仅凭菜单栏图标判断。
 
 所以菜单里「点了没反应」时，先用终端确认服务本身的状态。这两条不经过 app：
 
@@ -496,12 +528,7 @@ node scripts/doctor.js     # 启动自检
 
 ### 为什么不直接发一个编译好的 app
 
-自己编译出来的产物**没有 quarantine 属性**，双击就能开。而从网页下载的 app 会被系统打上
-quarantine，第一次打开必然撞 Gatekeeper 的「无法验证开发者」——要根治得买 Apple 开发者
-账号做公证（每年 $99），对一个自托管工具不成比例。让你自己 `xattr -d` 绕过去，等于教你
-关掉一层安全机制。
-
-编译还有个附带好处：产物与你手上这份源码严格同版本，不需要相信任何人打包的二进制。
+本地编译能让应用与当前源码保持同一版本，也不会产生网页下载文件的 quarantine 标记。项目目前不提供经过 Apple 公证的预编译安装包。
 
 ### 菜单栏图标被刘海挡住了怎么办
 
@@ -517,18 +544,23 @@ MacBook Pro 的刘海会挤掉靠右的菜单栏图标。这个 app 默认没有
 defaults write com.ccm.menubar CCMShowDockIcon -bool true
 ```
 
-<details>
-<summary>把首次安装交给编程 agent</summary>
+## 把安装交给模型
 
-在仓库目录中把下面内容交给 Claude Code、Codex CLI 或其他本机编程 agent：
+模型需要能读写项目文件、运行本机命令；只有聊天窗口、无法操作这台电脑时，只能提供指导。账号登录、验证码和付款信息由用户完成。
+
+把项目目录和下面的提示词交给本机编程模型。源码归档也包含这份指南，不必依赖模型自动读取 `AGENTS.md`。要配置 Cloudflare 公网入口，再接着使用[Cloudflare 配置提示词](deployment.md#把-cloudflare-配置交给模型)。
+
+<details>
+<summary>复制本机首次安装提示词</summary>
 
 ```text
 帮我首次安装并启动 claude-chat-mobile（把本机 claude CLI 接到手机 Web UI）。
 这是全新环境首次安装，不是重启已经在跑的桌面端或 npm start。
 
 按顺序做，每步确认结果再进入下一步：
-1. 检查 node --version ≥ 20，which claude 能找到命令，并用 claude auth status 确认已登录。
-   任一不满足就停下来告诉我，不要自行安装或登录 claude。
+1. 检查 node --version ≥ 20，which claude 能找到命令。官方订阅用户用 claude auth status 确认登录；
+   API key / 网关用户核对现有 CLI 配置，不要求官方登录。缺少前置条件时，按 docs/getting-started.md §1
+   协助安装；需要用户操作的登录或系统授权，给出具体步骤，完成后继续。不要重装已有的工具。
 2. 运行 npm ci --omit=dev。
 3. 先跟我确认要不要先连一个项目文件夹（要的话确认它的绝对路径；不连也行，以后在手机上选），
    以及是否安装 CLI hooks bridge。不要把整个家目录当工作区；hooks=on 会修改 ~/.claude/settings.json。
@@ -537,9 +569,10 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
    以免当前会话里已有的值压过刚写入的配置。然后：
    node scripts/setup.js --yes --work-dir=<确认后的绝对路径> --hooks=<on 或 off>
    （不连文件夹就去掉 --work-dir 这一项。）如果配置文件已存在就停下来，不要自行加 --force。
-5. 运行 node scripts/doctor.js；只在输出明确要求且安全时使用 --fix。
+5. 在能找到 claude 的终端执行 node scripts/config.js set CLAUDE_BIN="$(command -v claude)"。
+   再运行 node scripts/doctor.js；仅在需要修复文件权限时使用 --fix。
 6. 确认 3000 没被桌面端或另一个 npm start 占用后，用 `npm start` 启动（headless）。
-   用鉴权后的 /health JSON 验证，不要只看进程是否存在。
+   另开终端进入同一项目目录，用 node scripts/service.js health --json 验证。
 7. 告诉我启动日志中的局域网手机地址，但不要把 AUTH_TOKEN 写进任何会外传的文件或报告。
 8. 等我的手机发起连接后，运行 node scripts/device.js list；让我核对设备，再执行 approve。
 公网入口按 docs/deployment.md；启动只有 npm start 或 macOS 桌面端，不要擅自改系统服务。
@@ -549,8 +582,7 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 
 ## 命令速查
 
-装机之后日常会用到的都在这里。**每条 CLI 不带子命令就会打印自己的用法**，参数一律以那份输出
-为准——这份速查只列命令名和用途，不重复参数（重复一份就会和代码分叉）：
+下表列出常用命令。完整参数以命令的帮助输出为准：
 
 ```bash
 node scripts/config.js       # 不带子命令即列出用法，下面几条同理
@@ -570,7 +602,7 @@ npm run setup -- --help
 | `npm start` | 启动 server（默认 3000） |
 | `npm run dev` | 同上，改代码自动重启 |
 | `npm run setup` | 交互装机向导 |
-| `node scripts/config.js schema` | **列出全部配置项及其含义**，从 schema 生成，永不与代码分叉 |
+| `node scripts/config.js schema` | **列出全部配置项及其含义**，由程序的配置定义生成 |
 | `node scripts/config.js get\|set\|unset` | 读写单项；secret 要明文须显式 `--reveal` |
 | `npm run config:check` | 校验现有配置 |
 | `npm run config:migrate` | 旧版 `.env` → `ccm.config.json` |
@@ -598,14 +630,14 @@ npm run setup -- --help
 
 两者用途不同，见上面[两节](#可选cli-statusline-bridge)各自的说明。
 
-### macOS 桌面端与受管服务
+### macOS 桌面端与服务管理
 
 | 命令 | 用途 |
 |---|---|
 | `npm run app:install` / `npm run app:build` | 编译并装进 `/Applications` / 只编译到 `desktop/build/` |
-| `npm run service:status` | 各 unit 的运行态与归属（`--json` 供菜单栏消费） |
-| `npm run service:health` | 唯一会打 `/health` 的命令 |
-| `npm run service:install\|restart\|logs\|uninstall` | 受管服务操作 |
+| `npm run service:status` | 各服务的运行状态与管理方式（`--json` 输出） |
+| `npm run service:health` | 带鉴权检查服务健康 |
+| `npm run service:install\|restart\|logs\|uninstall` | CCM 管理的服务操作 |
 | `npm run service:adopt` | 接管手工安装的 unit，只写 manifest、不动 plist |
 | `node scripts/service.js start\|stop <unit>` | 单个 unit 启停（无 npm 别名） |
 
@@ -636,9 +668,7 @@ node -p "require('./package.json').version"
 ```
 
 **最后一行打印的版本号要和[最新发布](https://github.com/Ike-li/claude-chat-mobile/releases/latest)对上**，没变就是没更新到。
-这里不用安装时那条 `curl … | tar xz`：下载失败时 macOS 自带的 tar 收到空输入照样返回成功，一个文件都没换，
-后面的 `npm ci` 也照跑，看上去像更新完了；下载断在半路，则可能只换掉了一部分文件。直连 GitHub 不稳时，
-给 curl 配上代理（`https_proxy=…`）再重来。
+下载失败时停止，重试成功后再解压。GitHub 连接不稳时，可为 curl 配置代理（`https_proxy=…`）。
 
 **这样覆盖不会动你的配置和数据。** `ccm.config.json` 与 `data/` 都写在 `.gitignore` 里，而归档就是
 GitHub 现场 `git archive` 的产物——它只打包 git 追踪的文件，所以这两样根本不在归档中，`tar` 也就无从
@@ -747,8 +777,8 @@ server 起来之后，`/health` 的 `versions.server` 报的是同一个值，`v
 
 ```bash
 npm run uninstall -- --dry-run   # 先看会做什么，不动任何东西
-npm run uninstall -- --yes       # 卸安装面：launchd 受管服务、残留的菜单栏 app 进程、CCM.app、偏好域、两个 CLI 桥及 ~/.claude/ccm
-npm run uninstall -- --purge --yes  # 追加删除数据目录（按白名单逐项）、ccm.config.json/.env、受管服务日志
+npm run uninstall -- --yes       # 卸载 CCM 管理的服务、桌面应用和 CLI 桥，清理相关设置
+npm run uninstall -- --purge --yes  # 另删指定的应用数据、配置和服务日志
 ```
 
 只删本产品安装/运行产生的东西：不在 service manifest 里的 launchd unit（比如手工装的
@@ -768,7 +798,7 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 | `EADDRINUSE :3000` | 桌面端或另一个 npm start 占着端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
 | 手机已进主壳，发消息却出现「Not logged in · Please run /login」 | 这是 **Claude CLI 未登录**，不是 CCM 令牌/设备门坏了。到主机终端跑 `claude auth status`；未登录则在 `claude` 里 `/login`，完成后再从手机重试。**用第三方网关则不会出现这条**——它不走 Anthropic 登录，配置没生效时报的是网关自己的错，见下面「第三方网关配置不生效」。前置条件见上文 §1 |
-| 输错一次 token 后，紧接着用正确 token 也被拒（HTTP 429 `cooldown`） | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。锁里的请求不校验令牌，**回 429 `{"status":"cooldown"}` 并带 `Retry-After`**，和「令牌不对」（401）分得开，也不说「尝试过多」——你只错了一次。网页端会显示「N 秒后自动重试」并到点自己重连；脚本**等 `Retry-After` 秒后再试**即可，不停重试反而一直落在锁里。只有连续 8 次失败触发的 15 分钟长锁才回 `{"status":"rate_limited"}` |
+| 输错一次 token 后，紧接着用正确 token 也被拒（HTTP 429 `cooldown`） | 登录失败后会短暂限制重试：首次 0.5 秒，后续依次延长。429 `cooldown` 响应带 `Retry-After`，网页会自动等待重连；脚本应等到指定时间再试。连续 8 次失败会锁定 15 分钟，返回 `rate_limited`。 |
 | 自己没输错，却被限速挡住 | 限速按来源分桶，同桶内的失败会累加。**IPv6 客户端按 /64 归桶**，所以同网段另一台设备连错也会连累你；反代终止在 loopback 时所有公网客户端更是共用一个桶（见[部署指南](deployment.md#换掉入口后ccm-侧的四处连带变化)）。等过锁定窗口，或重启 server 立即清零 |
 | 第三方网关配置不生效 | `ANTHROPIC_*` 要放在 CLI 自己的通道里：工作区 `.claude/settings.local.json` 或 `~/.claude/settings.json` 的 `env` 块，或启动 server 的 shell；写进 `ccm.config.json` 会被剥除。桌面控制台入口只认前一种 |
 | CLI 会话状态或通知缺失 | 分别检查 statusline bridge 与 hooks bridge；两者用途不同 |
@@ -783,4 +813,4 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 - 理解 Web/CLI 双通道：[架构说明](architecture.md)
 - 理解模型、effort、statusline 展示来源：[展示契约](display-contracts.md)
 - 维护者：n=1 硬性规则与技术债索引：[hard-rules.md](hard-rules.md)
-- 查看全部配置项及其含义：`node scripts/config.js schema`（从 schema 生成，永不与代码分叉）
+- 查看全部配置项及其含义：`node scripts/config.js schema`（由程序的配置定义生成）
