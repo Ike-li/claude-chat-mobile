@@ -14,7 +14,7 @@
 2. 列表条数和含义应与终端界面一致。可改善可读性，不得合并、猜测，或用网页偏好替代 CLI 实际状态。
 3. 以测试覆盖的实现为准，同时维护本文。注释仅用于解释背景；删除文档时应检查全仓引用。
 
-规则编号见 [hard-rules.md](hard-rules.md) 和 [tests/README.md](../tests/README.md)；本文对应 `DISPLAY-01`。下文 TUI 指终端界面，FE 指网页界面，wire 指模型的实际标识，pin 指固定使用该标识。
+规则编号见 [hard-rules.md](hard-rules.md)；完整仓库的 `tests/README.md` 列出本文对应的 `DISPLAY-01`。下文 TUI 指终端界面，FE 指网页界面，wire 指模型的实际标识，pin 指固定使用该标识。
 
 ---
 
