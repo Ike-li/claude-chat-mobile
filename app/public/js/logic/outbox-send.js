@@ -572,6 +572,20 @@ export function presentTurnResult(payload = {}, opts = {}) {
   const secs = (durationMs / 1000).toFixed(1);
   const errorText = Array.isArray(p.errors) ? p.errors.filter(Boolean).join('; ') : '';
 
+  // 给立即发送让路（2026-11-08）：用户刚点的，下一条正在跑。不响不震不通知，前端也不转空闲（keepBusy），
+  // 否则 B 的第一个流事件到来之前停止钮消失、发送闸松开。工具卡照常收口：被转后台的已经有自己的 tool_result。
+  if (p.interrupted && p.interruptedBy === 'send_now') {
+    const label = t('已让给新消息');
+    return {
+      kind: 'yielded',
+      statusBar: { text: `${label} · ${secs}s`, cls: 'text-ink-faint' },
+      errorBar: null,
+      notify: null,
+      failToolsMessage: label,
+      haptic: null,
+      keepBusy: true,
+    };
+  }
   if (p.interrupted) {
     const label = interruptLabel(p.interruptedBy);
     const title = p.interruptedBy === 'system:idle-watchdog' ? t('⚠️ 任务超时中断')

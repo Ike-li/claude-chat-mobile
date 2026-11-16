@@ -742,6 +742,8 @@
           <div id="queuedCardStatus" class="text-ink-soft" data-testid="queued-card-status"></div>
           <div id="queuedCardPreview" class="text-ink-faint truncate" data-testid="queued-card-preview"></div>
         </div>
+        <!-- 立即发送：CLI 声明了能力位才显示（快照的 sendNow），点了这一轮让路，见 app/queued-message.js -->
+        <button type="button" id="queuedCardSendNow" class="hidden hit-44 shrink-0 px-2 py-1 rounded-lg border border-accent bg-accent-wash text-accent-deep font-semibold active:scale-95" data-testid="queued-card-send-now"></button>
         <button type="button" id="queuedCardAction" class="hit-44 shrink-0 px-2 py-1 rounded-lg border border-accent text-accent font-semibold active:scale-95" data-testid="queued-card-action"></button>
       </div>
 

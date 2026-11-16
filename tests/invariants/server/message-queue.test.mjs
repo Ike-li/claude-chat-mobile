@@ -1,9 +1,10 @@
 // tests/invariants/server/message-queue.test.mjs —— 消息排队的接线：真 server 上收下、等回合结束、发出或转未发送
-// 守护：MSG-03（排队消息只在回合正常结束后发出；任何一道闸不过都不得发，也不得丢）/ MSG-01（同一条至多发一次）/ SESSION-01（释放时终端在驾驶不得发）/ NOTIFY-01（带 queuedNext 的 result 不是「任务完成」；转未发送无条件推，用户点的停止、关闭除外）/ ALERT-01（未发送进「需要你」，取回后退出）
+// 守护：MSG-03（排队消息只在回合正常结束后发出，立即发送除外；任何一道闸不过都不得发，也不得丢）/ OPS-04（立即发送并进当前轮时账面不得永挂）/ MSG-01（同一条至多发一次）/ SESSION-01（释放时终端在驾驶不得发）/ NOTIFY-01（带 queuedNext 的 result 不是「任务完成」；转未发送无条件推，用户点的停止、关闭除外）/ ALERT-01（未发送进「需要你」，取回后退出）
 // 测什么：真 app/server.js + 假 CLI。外部能观察到的只有 ack、user_message 事件（数气泡就是数 send）、result 和 instances 快照：
 //   ① 一条走完：ack 键集、快照、queuedNext、发出后快照清空 ② 同 ID 重发不重复 ③ 取回后不再发 ④ 停止、关标签转未发送
 //   ⑤ 汇报轮帧序：tail 档等汇报轮跑完才发，汇报轮出错不发；fold 档靠 idle 立刻发；后台子 agent、旧 CLI 走 1.5 秒兜底
 //   ⑥ 终端在驾驶时转未发送 ⑦ 未批准设备取不到全文 ⑧ 转未发送的推送（本机 ntfy 截获）与 needsYou
+//   ⑨ 立即发送：让路、并进两种帧序下账面归零（OPS-04）；让路前点停止连它一起停（MSG-03）；CLI 不支持时照旧排队
 // 不测什么 + 为什么：① 判定规则与竞态表在 tests/invariants/message-queue.test.mjs（S1，能卡住 await）
 //   ② 释放时 externalDirty：要在 result 到 idle 那 2ms 里标脏，S2 造不出，S1 覆盖 ③ 额度墙：假 CLI 造不出，S1 覆盖
 //   ④ 真帧序：假 CLI 照 2.1.318 探针写，真帧序靠零 token 真链路 ⑤ FRESH 首轮没有 sessionId 时拒收：窗口取决于 ack 和 init
@@ -16,7 +17,7 @@ import '../../setup/require-disposable-env.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
@@ -51,8 +52,12 @@ async function withServer(env, run) {
     const timer = setTimeout(() => reject(new Error('user:takeQueued ack 超时')), 5000);
     sock.emit('user:takeQueued', payload, (res) => { clearTimeout(timer); resolve(res); });
   });
+  const sendNow = payload => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('user:sendQueuedNow ack 超时')), 8000);
+    sock.emit('user:sendQueuedNow', payload, (res) => { clearTimeout(timer); resolve(res); });
+  });
   const ctx = {
-    root, events, send, take, sock,
+    root, events, send, take, sendNow, sock,
     queued: () => lastInstances?.queuedMessages,
     needsYou: () => lastInstances?.needsYou,
     bubbles: text => events.filter(e => e.type === 'user_message' && e.payload?.text === text),
@@ -276,6 +281,8 @@ test('待审批的设备取不到全文', async () => {
     const res = await ctx.take({ sessionId: SESSION_ID, clientMessageId: 'q1' });
     assert.equal(res.ok, false);
     assert.equal(res.error, 'device_not_approved', `待审批设备不得走到取回，实际 ${JSON.stringify(res)}`);
+    const now = await ctx.sendNow({ sessionId: SESSION_ID, clientMessageId: 'q1' });
+    assert.equal(now.error, 'device_not_approved', `待审批设备不得替人往实例里写，实际 ${JSON.stringify(now)}`);
   });
 });
 
@@ -354,3 +361,78 @@ test('NOTIFY-01 / ALERT-01：回合中途进程退出转未发送 → 推一条�
   });
 });
 
+
+// ── 立即发送（2026-11-08）──
+// 假 CLI 的 turn-send-now 档照 CLI 2.1.319 零 token 实测的两种帧序吐：yield（A 以 aborted_tools 结束、B 单独一轮）、
+// absorb（B 并进 A，只有 lifecycle、没有自己的 result）。外部能看到的账面只有「下一条普通发送收不收」。
+const SEND_NOW_CAPS = 'interrupt_receipt_v1,interrupt_cancel_queued_v1,interrupt_send_now_v1,interrupt_requeue_taken_v1';
+const sendNowEnv = (over = {}) => ({
+  CCM_FAKE_CLAUDE_MODE: 'turn-send-now', CCM_FAKE_CLAUDE_CAPABILITIES: SEND_NOW_CAPS, CCM_FAKE_CLAUDE_INIT_EACH_TURN: '1', ...over,
+});
+// 账面归零了没有：普通发送收不收。收了的那条在 turn-send-now 档里会挂着，用例到此为止
+async function assertIdle(ctx, instanceId, label) {
+  await waitForCondition(() => ctx.events.some(e => e.type === 'instances'
+    && e.payload?.instances?.find?.(x => x.instanceId === instanceId)?.turnRunning === false), { timeoutMs: 5000, label: `${label}：turnRunning 广播成 false` });
+  const next = await ctx.send({ text: '下一条', clientMessageId: 'next', instanceId });
+  assert.equal(next.ok, true, `${label}：账面没归零，下一条被在途轮闸拒掉 ${JSON.stringify(next)}`);
+}
+
+test('立即发送（让路）：当场发出、只发一次；A 的 result 标 send_now、不带 queuedNext；B 跑完账面归零', async () => {
+  await withServer(sendNowEnv(), async (ctx) => {
+    const { first } = await queueOne(ctx);
+    await waitForCondition(() => ctx.queued()?.length === 1, { timeoutMs: 3000, label: '快照里出现这一条' });
+    assert.equal(ctx.queued()[0].sendNow, true, 'CLI 声明了能力位，前端要能显示按钮');
+    const ack = await ctx.sendNow({ sessionId: SESSION_ID, clientMessageId: 'q1' });
+    assert.deepEqual(ack, { ok: true });
+    await waitForCondition(() => ctx.results().length === 2, { timeoutMs: 8000, label: 'A 让路、B 跑完' });
+    assert.equal(ctx.bubbles('排队的话').length, 1);
+    const [aResult, bResult] = ctx.results().map(e => e.payload);
+    assert.equal(aResult.interruptedBy, 'send_now', '不标来源，前端会说「任务被中断」并推送');
+    assert.equal(aResult.queuedNext, undefined);
+    assert.equal(bResult.interrupted, false);
+    await waitForCondition(() => ctx.queued()?.length === 0, { timeoutMs: 3000, label: '快照清空' });
+    await assertIdle(ctx, first.instanceId, '让路形态');
+    assert.equal(ctx.bubbles('排队的话').length, 1, '回合结束时不得再按排队发一遍');
+  });
+});
+
+test('OPS-04 立即发送（并进）：B 没有自己的 result，账面照样归零', async () => {
+  await withServer(sendNowEnv({ CCM_FAKE_CLAUDE_SEND_NOW_SHAPE: 'absorb' }), async (ctx) => {
+    const { first } = await queueOne(ctx);
+    assert.deepEqual(await ctx.sendNow({ sessionId: SESSION_ID, clientMessageId: 'q1' }), { ok: true });
+    await waitForCondition(() => ctx.results().length === 1, { timeoutMs: 8000, label: 'A 收尾' });
+    assert.equal(ctx.bubbles('排队的话').length, 1);
+    assert.equal(ctx.results()[0].payload.interrupted, false, '并进不是中断');
+    await assertIdle(ctx, first.instanceId, '并进形态（等 B 的 result 的话账面永挂）');
+  });
+});
+
+test('MSG-03 立即发送后、还没让路就点停止：带 cancel_queued，B 标「已随停止取消」，不再跑', async () => {
+  const controlLog = join(realpathSync(mkdtempSync(join(tmpdir(), 'ccm-inv-sendnow-ctl-'))), 'control.log');
+  await withServer(sendNowEnv({ CCM_FAKE_CLAUDE_SEND_NOW_DELAY_MS: '3000', CCM_FAKE_CLAUDE_CONTROL_LOG: controlLog }), async (ctx) => {
+    const { first } = await queueOne(ctx);
+    assert.deepEqual(await ctx.sendNow({ sessionId: SESSION_ID, clientMessageId: 'q1' }), { ok: true });
+    await waitForCondition(() => ctx.bubbles('排队的话').length === 1, { timeoutMs: 3000, label: 'B 上屏' });
+    ctx.sock.emit('user:interrupt', { instanceId: first.instanceId });
+    await waitForCondition(() => ctx.events.some(e => e.type === 'system' && e.payload?.kind === 'queue_dropped'), { timeoutMs: 5000, label: 'B 标已随停止取消' });
+    const dropped = ctx.events.find(e => e.type === 'system' && e.payload?.kind === 'queue_dropped');
+    assert.deepEqual(dropped.payload.clientMessageIds, ['q1']);
+    const interrupts = readFileSync(controlLog, 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(r => r.subtype === 'interrupt');
+    assert.deepEqual(interrupts.map(r => r.cancel_queued), [true], '普通 interrupt 停不住 B：A 停了，B 紧接着照跑');
+    await waitForCondition(() => ctx.results().length === 1, { timeoutMs: 5000, label: 'A 的 error result' });
+    await assertIdle(ctx, first.instanceId, '停止之后');
+    assert.equal(ctx.results().length, 1, 'B 已取消，不得再跑出 result');
+  });
+  rmSync(join(controlLog, '..'), { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+});
+
+test('MSG-03 CLI 没声明能力位：立即发送被拒，条目照旧等这一轮结束再发', async () => {
+  await withServer({ CCM_FAKE_CLAUDE_MODE: 'turn-send-now', CCM_FAKE_CLAUDE_RESULT_DELAY_MS: '1500' }, async (ctx) => {
+    await queueOne(ctx);
+    await waitForCondition(() => ctx.queued()?.length === 1, { timeoutMs: 3000, label: '快照里出现这一条' });
+    assert.equal(ctx.queued()[0].sendNow, false, '旧 CLI 上显示按钮，点了只会报错');
+    assert.deepEqual(await ctx.sendNow({ sessionId: SESSION_ID, clientMessageId: 'q1' }), { ok: false, error: 'send_now_unsupported' });
+    assert.equal(ctx.bubbles('排队的话').length, 0);
+    await waitForCondition(() => ctx.bubbles('排队的话').length === 1, { timeoutMs: 8000, label: '回合结束后照旧发出' });
+  });
+});

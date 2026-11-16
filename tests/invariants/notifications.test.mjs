@@ -50,6 +50,10 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
     assert.doesNotMatch(stopped.title, /出错/);
   });
 
+  test('result：给立即发送让路（interruptedBy=send_now）→ 不推，那是用户刚点的，下一条正在跑', () => {
+    assert.equal(notificationForEvent('result', { durationMs: 1500, interrupted: true, interruptedBy: 'send_now' }, { hasClients: false }), null);
+  });
+
   test('result：带 queuedNext → 不推，下一条排队消息马上开跑，这时说「任务完成」是假的', () => {
     assert.equal(notificationForEvent('result', { durationMs: 1500, queuedNext: true }, { hasClients: false }), null);
   });

@@ -1,7 +1,7 @@
 // tests/invariants/logic-queued-message.test.mjs —— 排队消息的前端判定：入口什么时候给、话怎么不丢
 // 守护：MSG-03（任何一道闸不过都不得丢：用户看得到、取得回；server 重启后由发送方的本地副本交还）
 // 测什么：① 入口可用性，尤其是后端不支持时恒不给（前端热更新先于后端重启）② 卡片三态的文案和按钮
-//   ③ 排队请求的 ack 判定，四种结局都不丢话 ④ 取回时不覆盖输入框 ⑤ 本地副本对账：server 重启交还、已发出才删
+//   ③ 排队请求的 ack 判定，四种结局都不丢话 ⑥ 立即发送按钮什么时候给、回执怎么说 ④ 取回时不覆盖输入框 ⑤ 本地副本对账：server 重启交还、已发出才删
 // 不测什么 + 为什么：① 按钮和卡片的真实渲染属 S3，见 tests/e2e/specs/queued-message.spec.ts ② server 侧的状态机
 //   在 tests/invariants/message-queue.test.mjs ③ localStorage 配额属 S3 也造不稳，读写降级走控制器
 // 槽位：S1（纯函数）
@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  isQueueAvailable, mergeTakenIntoComposer, presentQueueSubmitAck, reconcileQueuedCopies, resolveQueuedCard,
+  isQueueAvailable, mergeTakenIntoComposer, presentQueueSubmitAck, presentSendNowAck, reconcileQueuedCopies, resolveQueuedCard,
 } from '../../app/public/js/logic/queued-message.js';
 
 const SID = 's-1';
@@ -57,6 +57,26 @@ test('卡片：排队中给撤回，带一行预览', () => {
   assert.equal(card.preview, '接下来跑测试');
   assert.equal(card.actionLabel, '撤回');
   assert.equal(card.clientMessageId, 'c1');
+});
+
+test('卡片：CLI 支持时排队中多一个「立即发送」；不支持、正在发送、未发送都没有', () => {
+  assert.equal(resolveQueuedCard([entry({ sendNow: true })], SID).sendNowLabel, '立即发送');
+  assert.equal(resolveQueuedCard([entry({ sendNow: false })], SID).sendNowLabel, null, '旧 CLI 上点了只会报错');
+  assert.equal(resolveQueuedCard([entry()], SID).sendNowLabel, null, '旧 server 的快照没有这个字段');
+  assert.equal(resolveQueuedCard([entry({ sendNow: true, state: 'sending' })], SID).sendNowLabel, null);
+  assert.equal(resolveQueuedCard([entry({ sendNow: true, state: 'held', reason: 'stopped' })], SID).sendNowLabel, null, '未发送的要取回，不是立即发送');
+});
+
+test('立即发送回执：成功不说话；没发出去时说清话还在哪，绝不说成已发出', () => {
+  assert.equal(presentSendNowAck(null, { ok: true }), null, '成功时 B 的气泡就是回执');
+  assert.deepEqual(presentSendNowAck(new Error('timeout'), undefined), { message: '没有确认立即发送，可再试一次', tone: 'text-danger' });
+  for (const error of ['not_found', 'not_waiting', 'cancelled']) {
+    assert.deepEqual(presentSendNowAck(null, { ok: false, error }), { message: '已被取走或已发出', tone: 'text-info' }, error);
+  }
+  assert.deepEqual(presentSendNowAck(null, { ok: false, error: 'send_now_unsupported' }), { message: '这个会话的 CLI 不支持立即发送，这条留在排队里', tone: 'text-danger' });
+  for (const error of ['diverged', 'external_dirty_busy', 'send_failed', 'device_not_approved', '__未知__']) {
+    assert.match(presentSendNowAck(null, { ok: false, error }).message, /这条留在排队里/, `${error}：话还在 server，用户要知道它没丢`);
+  }
 });
 
 test('卡片：正在发送没有按钮', () => {

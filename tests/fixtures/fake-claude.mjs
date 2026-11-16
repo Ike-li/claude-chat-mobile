@@ -57,6 +57,18 @@
 //   turn-autoreport-fold → 通知并进当前回合：task_notification 在 result 之前，没有下一轮，result 后直接报 idle。
 //   turn-bg-agent → 后台子 agent 占着 CLI：吐 task_started{is_backgrounded:true}，result 之后一直不报 idle，
 //             但下一条 user 照常开跑。形态照 CLI 2.1.318 实测。
+//   turn-send-now → 立即发送（2026-11-08，形态照 CLI 2.1.319 零 token 实测）。第一条一直不收尾，直到一条带
+//             priority:'now' 的 user 进来：先报它 queued，隔 CCM_FAKE_CLAUDE_SEND_NOW_DELAY_MS（真 CLI 等 shell 登记成
+//             后台任务约 3 秒）再让路。CCM_FAKE_CLAUDE_SEND_NOW_SHAPE 选形态：
+//               yield（缺省）→ 第一轮 result{success, is_error:false, aborted_tools} → 它 cancelled → 这条 started、init、
+//                     正文、自己的 result → completed；
+//               absorb → 这条 started、completed（并进第一轮，没有自己的 result）→ 正文 → 第一轮 result{completed}。
+//             让路之前收到 interrupt：带 cancel_queued 回 {cancelled:[这条]} 并报它 cancelled；不带回 {still_queued:[这条]}，
+//             它照跑。然后第一轮出 error_during_execution + aborted_tools。没有排队的 priority:'now' 时 interrupt 照旧回 {}。
+//             设了 CCM_FAKE_CLAUDE_RESULT_DELAY_MS 时，没等到 priority:'now' 的第一轮到点正常收尾。
+//
+// 【能力位】与模式正交：CCM_FAKE_CLAUDE_CAPABILITIES=<逗号分隔> → system/init 带 capabilities（真 CLI 2.1.319 报
+//   interrupt_receipt_v1、interrupt_cancel_queued_v1、interrupt_send_now_v1、interrupt_requeue_taken_v1）。不置位时 init 逐字不变。
 //
 // 【会话状态帧】与模式正交：真 CLI 只在设了 CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1 时才吐
 //   system/session_state_changed，这里同样按它开关。回合开始报 running，真正空闲才报 idle。
@@ -94,6 +106,9 @@ import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 
 const MODE = process.env.CCM_FAKE_CLAUDE_MODE || 'init';
+const CAPABILITIES = process.env.CCM_FAKE_CLAUDE_CAPABILITIES ? process.env.CCM_FAKE_CLAUDE_CAPABILITIES.split(',') : null;
+const SEND_NOW_SHAPE = process.env.CCM_FAKE_CLAUDE_SEND_NOW_SHAPE === 'absorb' ? 'absorb' : 'yield';
+const SEND_NOW_DELAY_MS = Number(process.env.CCM_FAKE_CLAUDE_SEND_NOW_DELAY_MS) || 0;
 const TURN_MODES = new Set([
   'turn', 'turn-bg', 'turn-bg-agent', 'turn-autoreport', 'turn-autoreport-collide', 'turn-autoreport-tail',
   'turn-autoreport-fold', 'turn-screenshot', 'turn-local-command',
@@ -175,6 +190,7 @@ function emitInit() {
     model: (INIT_EACH_TURN && GATEWAY_MODEL) || 'fake-claude',
     permissionMode: 'default',
     ...(COMMANDS ? { slash_commands: COMMANDS.map(c => c.name) } : {}),
+    ...(CAPABILITIES ? { capabilities: CAPABILITIES } : {}),
   });
 }
 
@@ -274,6 +290,11 @@ rl.on('line', (line) => {
     answerBackgroundTasks(msg);
     return;
   }
+  if (msg.type === 'control_request' && msg.request?.subtype === 'interrupt' && sendNow.queued) {
+    if (CONTROL_LOG) appendFileSync(CONTROL_LOG, `${JSON.stringify(msg.request)}\n`);
+    stopBeforeYield(msg);
+    return;
+  }
   if (msg.type === 'control_request') {
     if (CONTROL_LOG) appendFileSync(CONTROL_LOG, `${JSON.stringify(msg.request)}\n`);
     if (MCP_RECONNECT_ERROR && msg.request?.subtype === 'mcp_reconnect') {
@@ -309,6 +330,7 @@ rl.on('line', (line) => {
   if (msg.type !== 'user') return;
 
   if (autoReportState === 'waiting') { queueBehindAutoReport(msg); return; }
+  if (MODE === 'turn-send-now' && sendNow.running && msg.priority === 'now') { queueSendNow(msg); return; }
 
   emitState('running');
   if (!announcedInit || INIT_EACH_TURN) {
@@ -321,12 +343,94 @@ rl.on('line', (line) => {
     startForegroundTask(msg);
     return;
   }
+  if (MODE === 'turn-send-now' && !sendNow.running) {
+    sendNow.running = msg;
+    emitLifecycle('queued', msg);
+    emitLifecycle('started', msg);
+    // 设了 RESULT_DELAY_MS 时到点照常收尾（没有立即发送进来的话）：给「不支持立即发送、照旧排队」的用例用
+    if (RESULT_DELAY_MS > 0) {
+      setTimeout(() => {
+        if (sendNow.running !== msg || sendNow.queued) return;
+        sendNow.running = null;
+        finishTurn(msg);
+        emitLifecycle('completed', msg);
+      }, RESULT_DELAY_MS);
+    }
+    return;
+  }
 
   if (!TURN_MODES.has(MODE)) return;
 
   if (RESULT_DELAY_MS > 0) setTimeout(() => (EXIT_MID_TURN ? process.exit(1) : finishTurn(msg)), RESULT_DELAY_MS);
   else finishTurn(msg);
 });
+
+// turn-send-now：第一轮挂着，等一条 priority:'now'，见文件头
+const sendNow = { running: null, queued: null, timer: null };
+const sendNowResult = (msg, over = {}) => ({
+  type: 'result', subtype: 'success', session_id: SESSION_ID, uuid: randomUUID(), user_message_uuid: msg.uuid ?? null,
+  is_error: false, duration_ms: 1, duration_api_ms: 1, num_turns: 1, result: '', total_cost_usd: 0, terminal_reason: 'completed', ...over,
+});
+const sendNowReply = () => out({
+  type: 'assistant', session_id: SESSION_ID, uuid: randomUUID(), parent_tool_use_id: null,
+  message: { role: 'assistant', content: [{ type: 'text', text: REPLY }] },
+});
+
+function queueSendNow(msg) {
+  sendNow.queued = msg;
+  emitLifecycle('queued', msg);
+  sendNow.timer = setTimeout(yieldToSendNow, SEND_NOW_DELAY_MS);
+}
+
+function yieldToSendNow() {
+  const { running: a, queued: b } = sendNow;
+  sendNow.queued = null;
+  sendNow.timer = null;
+  if (SEND_NOW_SHAPE === 'absorb') {
+    emitLifecycle('started', b);
+    emitLifecycle('completed', b);
+    sendNowReply();
+    out(sendNowResult(a));
+    emitLifecycle('completed', a);
+  } else {
+    out(sendNowResult(a, { terminal_reason: 'aborted_tools' }));
+    emitLifecycle('cancelled', a);
+    emitLifecycle('started', b);
+    emitInit();
+    sendNowReply();
+    out(sendNowResult(b));
+    emitLifecycle('completed', b);
+  }
+  sendNow.running = null;
+  emitState('idle');
+}
+
+function stopBeforeYield(msg) {
+  const { running: a, queued: b } = sendNow;
+  clearTimeout(sendNow.timer);
+  sendNow.queued = null;
+  sendNow.timer = null;
+  const cancel = msg.request.cancel_queued === true;
+  out({
+    type: 'control_response',
+    response: { subtype: 'success', request_id: msg.request_id, response: cancel ? { still_queued: [], cancelled: [b.uuid] } : { still_queued: [b.uuid] } },
+  });
+  if (cancel) emitLifecycle('cancelled', b);
+  // errors 必须带：SDK 读 error_during_execution 时对它 .map，缺了直接抛（真 CLI 带一条 ede_diagnostic）
+  out(sendNowResult(a, {
+    subtype: 'error_during_execution', is_error: true, terminal_reason: 'aborted_tools',
+    errors: ['[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use'],
+  }));
+  emitLifecycle('cancelled', a);
+  sendNow.running = null;
+  if (cancel) { emitState('idle'); return; }
+  emitLifecycle('started', b);
+  emitInit();
+  sendNowReply();
+  out(sendNowResult(b));
+  emitLifecycle('completed', b);
+  emitState('idle');
+}
 
 function startForegroundTask(msg) {
   fgPendingMsg = msg;

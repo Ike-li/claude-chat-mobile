@@ -9,7 +9,7 @@ import { MAIN_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../..
 // 主按钮什么时候变、卡片三态、撤回和取回把话放回哪、服务重启时话怎么交还。
 //
 // mock 默认不下发 queuedMessages，等于一台没升级的后端（见 QUEUE-OLD）。/__queue-arm 打开，并让当前实例停在一轮在跑；
-// 带 oldBackend=1 只开这一轮、不打开排队。这一轮怎么结束由用例用 /__queue-release、/__queue-hold 决定，不等定时器。
+// 带 oldBackend=1 只开这一轮、不打开排队；带 sendNow=1 时快照的 sendNow 为真（CLI 声明了立即发送的能力位）。这一轮怎么结束由用例用 /__queue-release、/__queue-hold 决定，不等定时器。
 
 const btnSend = (page: Page) => page.locator('#btnSend');
 const stopInline = (page: Page) => page.locator('[data-testid="btn-stop-inline"]');
@@ -17,13 +17,15 @@ const card = (page: Page) => page.locator('[data-testid="queued-card"]');
 const cardStatus = (page: Page) => page.locator('[data-testid="queued-card-status"]');
 const cardPreview = (page: Page) => page.locator('[data-testid="queued-card-preview"]');
 const cardAction = (page: Page) => page.locator('[data-testid="queued-card-action"]');
+const cardSendNow = (page: Page) => page.locator('[data-testid="queued-card-send-now"]');
 const input = (page: Page) => page.locator('#input');
 
-async function openRunningTurn(page: Page, { oldBackend = false } = {}) {
+async function openRunningTurn(page: Page, { oldBackend = false, sendNow = false } = {}) {
   await gotoMock(page);
   await sendChatMessage(page, 'test:settings-echo');
   await waitForIdle(page);
-  await page.request.post(`/__queue-arm${oldBackend ? '?oldBackend=1' : ''}`);
+  const query = [oldBackend && 'oldBackend=1', sendNow && 'sendNow=1'].filter(Boolean).join('&');
+  await page.request.post(`/__queue-arm${query ? `?${query}` : ''}`);
   await expect(btnSend(page)).toHaveAttribute('data-mode', 'stop');
 }
 
@@ -333,6 +335,56 @@ test.describe('消息排队', () => {
     await expect(cardAction(page)).toHaveText('取回');
     await expect(cardStatus(page)).toContainText('本轮出错');
 
+    await expectNoBrowserErrors(page);
+  });
+
+  // 立即发送（2026-11-08）：mock 按「让路」形态回放——B 上屏、A 出 interruptedBy=send_now 的 result、B 那一轮挂着，
+  // /__queue-sendnow-finish 收尾。真帧序与账目在 tests/invariants/agent-send-now.test.mjs 与 S2。
+  test('QUEUE-SENDNOW-1 立即发送：当场上屏，A 让路只留一行灰字、不说被中断，B 在跑时停止钮一直在', async ({ page }) => {
+    await openRunningTurn(page, { sendNow: true });
+    await queueOne(page);
+    await expect(cardSendNow(page)).toHaveText('立即发送');
+    await expect(cardAction(page)).toHaveText('撤回');
+
+    // 记下点击之后主按钮的每一次变化：A 的 result 让前端转空闲的话，停止钮会闪掉一下，随后的 instances 广播
+    // 又把它点亮，只看最终状态看不出来
+    await page.evaluate(() => {
+      const el = document.getElementById('btnSend')!;
+      (window as any).__modes = [];
+      new MutationObserver(() => (window as any).__modes.push(el.dataset.mode)).observe(el, { attributes: true, attributeFilter: ['data-mode'] });
+    });
+    await cardSendNow(page).click();
+    await expect(card(page)).toBeHidden();
+    await expect(page.locator('#messages').getByText('接下来跑测试')).toHaveCount(1);
+    await expect(page.locator('#messages').getByText(/已让给新消息/)).toHaveCount(1);
+    await expect(page.locator('#messages').getByText(/被中断|已中止/)).toHaveCount(0);
+    const log = await (await page.request.get('/__queue-log')).json();
+    expect(log.at(-1)).toMatchObject({ event: 'sendNow', clientMessageId: expect.any(String), sessionId: expect.any(String) });
+    // 灰字和转空闲在同一个 result 处理里：灰字可见时，闪掉（如果有）已经记下了，不用再等
+    await expect(btnSend(page)).toHaveAttribute('data-mode', 'stop');
+    const modes: string[] = await page.evaluate(() => (window as any).__modes);
+    expect(modes.filter(m => m !== 'stop'), `A 让路时停止钮闪掉过：${JSON.stringify(modes)}`).toEqual([]);
+
+    await page.request.post('/__queue-sendnow-finish');
+    await expect(btnSend(page)).not.toHaveAttribute('data-mode', 'stop');
+    await expectNoBrowserErrors(page);
+  });
+
+  test('QUEUE-SENDNOW-2 CLI 不支持：没有立即发送按钮，只有撤回', async ({ page }) => {
+    await openRunningTurn(page);
+    await queueOne(page);
+    await expect(cardAction(page)).toHaveText('撤回');
+    await expect(cardSendNow(page)).toBeHidden();
+    await expectNoBrowserErrors(page);
+  });
+
+  test('QUEUE-SENDNOW-3 点的时候已被别的设备取走：说清楚，不报错、不发', async ({ page }) => {
+    await openRunningTurn(page, { sendNow: true });
+    await queueOne(page);
+    await page.request.post('/__queue-vanish');
+    await cardSendNow(page).click();
+    await expect(page.locator('#messages').getByText('已被取走或已发出')).toHaveCount(1);
+    await expect(page.locator('#messages').getByText('接下来跑测试')).toHaveCount(0);
     await expectNoBrowserErrors(page);
   });
 

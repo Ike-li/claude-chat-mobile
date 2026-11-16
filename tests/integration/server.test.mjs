@@ -684,6 +684,9 @@ const ACK_SHAPES = [
   { event: 'user:autoContinue', branch: '没有布防', payload: () => ({ sessionId: 'no-such-session', action: 'cancel' }), required: ['ok', 'error'], check: ack => assert.equal(ack.ok, false) },
   { event: 'user:takeQueued', branch: '非法 sessionId', payload: () => ({ sessionId: '../x', clientMessageId: 'c1' }), required: ['ok', 'error'], check: ack => assert.equal(ack.error, 'invalid_payload') },
   { event: 'user:takeQueued', branch: '没有这条', payload: () => ({ sessionId: 'no-such-session', clientMessageId: 'c1' }), required: ['ok', 'error'], check: ack => assert.equal(ack.error, 'not_found') },
+  // 立即发送：成功支 { ok } 要先排上一条且 CLI 声明能力位，在 tests/invariants/server/message-queue.test.mjs
+  { event: 'user:sendQueuedNow', branch: '非法 sessionId', payload: () => ({ sessionId: '../x', clientMessageId: 'c1' }), required: ['ok', 'error'], check: ack => assert.equal(ack.error, 'invalid_payload') },
+  { event: 'user:sendQueuedNow', branch: '没有这条', payload: () => ({ sessionId: 'no-such-session', clientMessageId: 'c1' }), required: ['ok', 'error'], check: ack => assert.equal(ack.error, 'not_found') },
 ];
 
 // 未纳入（各有理由，不是遗漏）：
