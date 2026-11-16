@@ -1,6 +1,6 @@
 # Getting Started
 
-> Goal: start with a computer where `claude` already works, run Claude Chat Mobile, and send the first message from your phone.
+> Goal: prepare your computer, install Claude Chat Mobile, and send the first message from your phone.
 
 [中文](getting-started.md) · [Back to README](../README.en.md)
 
@@ -16,51 +16,81 @@
 ## What you will have
 
 - A Claude Chat Mobile server running only on your computer.
-- A phone entrypoint protected by `AUTH_TOKEN`, a workspace allowlist, and device approval.
-- A Web UI that shares configuration, tools, and persisted session history with your local `claude` CLI.
+- A phone entrypoint protected by `AUTH_TOKEN`, connected project folders, and device approval.
+- A Web UI that shares configuration, tools, and session history saved on your computer with your local `claude` CLI.
 
-This guide covers a first installation. If the desktop app or a terminal `npm start` is already running, do not start a second server. Restart from the desktop menu, or in the same terminal for headless.
+Follow steps 1–8 for a first installation; notifications, terminal sync, and the desktop console are optional. Run commands on your computer, and use the project directory from step 3 onward.
+
+For public access, continue with [Cloudflare setup from account registration onward](deployment.md#从零搭建) (Chinese). To delegate installation, use the [coding-agent prompt](#delegate-installation-to-a-model).
+
+For a free domain, follow [registration and Cloudflare DNS setup](cloudflare-free-domain.md) (Chinese), then continue with the deployment guide.
+
+On macOS, run commands in Terminal. Replace `<…>` placeholders before running a command. Resolve an error in the current step before moving on.
+
+If CCM is already running, restart it through its existing entrypoint: the desktop server menu, or the terminal that started it.
 
 ## 1. Check the prerequisites
+
+Install any missing tools first; skip tools that already work.
+
+| Tool | First installation | Check |
+|---|---|---|
+| Node.js, including npm | Open [Node.js downloads](https://nodejs.org/en/download), select the current LTS and your OS. On macOS, open the `.pkg` installer and follow its prompts; on Linux, follow the page's instructions | In a new terminal, `node --version` is at least 20 and `npm --version` prints a version |
+| Claude Code CLI | Follow the [official terminal installation guide](https://code.claude.com/docs/en/setup#install-claude-code). On macOS / Linux, you can run the command below | In a new terminal, `claude --version` prints a version |
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+Run `claude`. Subscription users complete the browser sign-in; API key / gateway users configure their provider as described below. Complete one normal conversation in the project folder you intend to connect, then continue here. Installing CCM does not provide a model account, subscription, or API credit.
+
+If a new terminal still reports `claude: command not found`, follow the official [PATH checks](https://code.claude.com/docs/en/troubleshoot-install#verify-your-path) before installing CCM.
+
+Confirm the prerequisites:
 
 ```bash
 node --version
 which claude
 claude --version
-claude auth status
 ```
 
 You need:
 
 - Node.js 20 or newer.
 - A local `claude` command that `which` can find.
-- `claude auth status` showing a signed-in account, or a CLI that can start a normal terminal conversation.
+- Claude subscription users: `claude auth status` shows a signed-in account.
+- API key or third-party gateway users: `claude` can complete a conversation in the target project. A subscription login is not required.
 - macOS or Linux. Native Windows is experimental; WSL2 is recommended.
 
-The project does not bundle, install, or sign in to Claude for you.
+The CCM setup wizard configures CCM only. Install Node and Claude and complete account sign-in first.
 
 ### Claude subscriptions and third-party gateways
 
-- Claude subscription: make sure the local account that will start the server is already signed in to `claude`; no extra API key is needed.
-- Third-party gateway: gateway configuration belongs to the `claude` CLI, not to this project. Every session this project starts loads the CLI's user / project / local settings for the workspace directory, so **whatever works in your terminal works on your phone**. Two supported channels:
-  - **The `env` block of a CLI settings file (recommended)**: put it in the workspace's `.claude/settings.local.json` (this one workspace only, never committed) or in `~/.claude/settings.json` (the base for every directory). For example:
+For a Claude subscription, sign in to `claude` on this computer; no extra API key is needed. API keys and gateways are configured in the Claude CLI. CCM loads its settings for the target project.
 
-    ```json
-    {
-      "env": {
-        "ANTHROPIC_BASE_URL": "https://gw.example.com",
-        "ANTHROPIC_AUTH_TOKEN": "…",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "<model name your gateway accepts>",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "<model name your gateway accepts>"
-      }
-    }
-    ```
+Put gateway variables in the `env` block of either file:
 
-    The CLI reads it from the file for the workspace directory, independent of the environment of the process that started the server, so **it also takes effect under the persistent service launched by the macOS desktop console**. If you create `settings.local.json` by hand, add it to `.gitignore` yourself (the CLI only adds it to your global git excludes the first time it writes the file itself); the `env` block applies once the CLI trusts the directory, which happens the first time you open it in a terminal.
-  - **`export` in the startup shell**: export `ANTHROPIC_*` in the **shell that will start the server**, then `npm start`. Only this path requires the headless terminal entrypoint — the persistent service launched by the macOS desktop console runs in a clean GUI-lineage environment that does not contain what you exported in your terminal. When both are present, gateway keys from the settings file win (verified in this project on 2026-07-30).
-- Do not put `ANTHROPIC_*` in this project's config files (`ccm.config.json` / `.env`). Startup strips those values so a project file cannot override the CLI/provider environment. The stripping is not silent — the startup log prints `[config] 已忽略配置文件里的 ANTHROPIC_…` for each one, and `doctor` flags it too.
-- Worktree sessions: inside a worktree the CLI reads the `settings.local.json` at the **main checkout's** root (the official docs say so); this project neutralizes the gateway keys that exist only in the main checkout so they cannot leak into the worktree. To use a gateway in a worktree, configure it in the worktree's own `.claude/settings.local.json`, or simply in `~/.claude/settings.json`.
-- The MODEL_SETTINGS item of the phone's security check (⚙️ Settings & status → 🩺 Troubleshoot → 🔍 Security check) reads these files per workspace and reports when `model` and the `ANTHROPIC_DEFAULT_*_MODEL` tier mapping conflict (the command-line `doctor` has no such item). It only reads config and sends no request: a ✓ means the config is consistent, not that the gateway serves those models.
+- `.claude/settings.local.json` in the project: applies to that project; make sure it is in `.gitignore`.
+- `~/.claude/settings.json`: defaults for all projects.
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://gw.example.com",
+    "ANTHROPIC_AUTH_TOKEN": "…",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "<model supported by your gateway>",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "<model supported by your gateway>"
+  }
+}
+```
+
+Start `claude` in the target project and accept the directory trust prompt. File-based settings also work with the macOS background service.
+
+Alternatively, `export ANTHROPIC_…` and run `npm start` in the **same terminal**. The desktop service does not inherit variables exported in another terminal. If both are configured, gateway values from CLI settings take precedence.
+
+**Do not put `ANTHROPIC_*` in `ccm.config.json` or `.env`**: CCM ignores them and logs a notice. For a worktree, use its own `.claude/settings.local.json` or the user-level settings file; CCM excludes gateway values found only in the main checkout.
+
+On the phone, Settings & status → Diagnostics → Security check includes `MODEL_SETTINGS`. It checks configuration consistency, not whether the gateway supports a model. Verify that with an actual reply.
 
 ## 2. Get the code and install dependencies
 
@@ -69,14 +99,15 @@ There are two ways to get the code; pick one.
 ### Option A: source archive (you just want to run it)
 
 ```bash
-curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
-cd claude-chat-mobile-master
-npm ci --omit=dev
+curl -fsSL -o ccm-master.tar.gz https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz \
+  && tar xzf ccm-master.tar.gz \
+  && cd claude-chat-mobile-master \
+  && npm ci --omit=dev
 ```
 
-The archive is generated by GitHub on the fly (`/archive/refs/heads/master.tar.gz`) and is about 1.5 MB. `master` only moves on release, so it is the latest release; to pin a version use `/archive/refs/tags/vX.Y.Z.tar.gz`, which unpacks into `claude-chat-mobile-X.Y.Z`. Trimming follows `export-ignore` in the repository's `.gitattributes`: the test tree, the Docker test environment, and the maintainer gates are left out, while the server, the setup wizard, the preflight checks, device approval, the desktop app, and both CLI bridges are all kept.
+Extraction and installation run only after a successful download. `master` tracks the latest release. To select a version, use `/archive/refs/tags/vX.Y.Z.tar.gz` and enter the matching `claude-chat-mobile-X.Y.Z` directory.
 
-`package.json` is kept as-is: `npm run` still lists `test` / `check` / `lint` / `mutate` and friends, but the test tree and gates they refer to are not in the archive, so they cannot run; `devDependencies` is still there too, and `--omit=dev` skips it. Use option B when you need `npm test` / `npm run check` / `npm run lint`.
+The archive includes runtime and setup tools, but no tests. Choose option B to change code or run checks.
 
 ### Option B: full repository (you want to change code or run tests)
 
@@ -110,21 +141,35 @@ The wizard:
 
 If a config file already exists, the wizard does not overwrite it by default.
 
+**Choosing Cloudflare only records the access profile.** The wizard does not create a tunnel, DNS record, or Access application, and does not fill in `CF_ACCESS_HOSTNAME/TEAM/AUD`. Complete the local startup and health check first, then follow the [deployment guide's installation sequence](deployment.md).
+
+### Pin the Claude CLI path
+
+In the project directory, from a terminal where `claude` works, run:
+
+```bash
+node scripts/config.js set CLAUDE_BIN="$(command -v claude)"
+```
+
+This saves the CLI's absolute path. A successful `which claude` in your terminal does not guarantee that a macOS background service can find it. The service uses `zsh -lc`, which reads `.zprofile` but not `.zshrc`; adding `~/.local/bin` only to `.zshrc` can cause this difference. If the CLI moves, update this setting and restart the server.
+
 ### The config file
 
-All configuration lives in `ccm.config.json` at the project root — one JSON file:
+Configuration lives in `ccm.config.json` at the project root. This is a format example: keep the generated token and use your own directory path.
 
 ```json
 {
   "$schemaVersion": 1,
   "AUTH_TOKEN": "…",
   "WORKDIRS": ["/Users/you/code/project-a"],
-  "PORT": 3000,
-  "WEB_STATUSLINE": false
+  "PORT": 3000
 }
 ```
 
 Toggles are real `true` / `false` and ports are numbers — no more `KEY=value` quoting and escaping rules.
+
+<details>
+<summary>More configuration: manual edits, multiple folders, and legacy migration</summary>
 
 Legacy `.env` is still supported: **`ccm.config.json` wins when present, otherwise the loader falls
 back to `.env`**, so existing deployments need no changes. (The wizard only generates the new
@@ -151,11 +196,7 @@ Migration reads the `.env`, inlines an external `workdirs.json` alongside it int
 and **keeps your existing `AUTH_TOKEN`**. The old `.env` is not deleted, but is no longer read (the
 new file wins).
 
-> ⚠️ **Do not "upgrade" with `npm run setup --force`.** `--force` is a clean reinstall and mints a
-> new `AUTH_TOKEN` — every approved device stops working and each phone has to be approved again.
-> **The refusal only exists in non-interactive mode (`--yes`)**: interactive `npm run setup` never reaches it
-> (and ignores `--force`) — it just asks whether to overwrite, and answering y mints a new token.
-> To upgrade, run `node scripts/config.js migrate`.
+> **Upgrade with `npm run config:migrate`; do not overwrite the configuration by rerunning setup.** Overwriting creates a new `AUTH_TOKEN`, requiring devices to sign in and be approved again. Interactive setup asks before overwriting; non-interactive setup requires `--force`.
 
 On a legacy deployment the desktop console shows a banner and a "Migrate" button at the top of the
 config window, so you never have to go back to a terminal.
@@ -229,13 +270,16 @@ The legacy `WORK_DIRS` (comma-separated) and `WORK_DIRS_FILE=workdirs.json` (ext
 Priority: shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > config-file inline `WORKDIRS`.
 When neither env var is set, the config-file `WORKDIRS` is used (the production path).
 
+</details>
+
 ## 4. Run the preflight checks
 
 ```bash
 node scripts/doctor.js
 ```
 
-The doctor checks the token, CLI path, workspaces, port, gateway environment, file permissions, bridge state, documentation/front-end consistency, and more. **Read its output rather than any list here** — a list in prose would drift as checks are added.
+The check covers the token, Claude path, project folders, port, and configuration permissions. Resolve failed checks first; unconfigured optional features can wait.
+If you selected Cloudflare before configuring public access, the `ACCESS_PROFILE` warning about incomplete `CF_ACCESS_*` is a pending setup step. Continue with local startup and health checks, then complete the deployment guide and resolve this warning before public-access acceptance.
 If it says port 3000 is held by the desktop app, do not run `npm start` next — restart from the desktop menu.
 
 For permission-only repairs:
@@ -248,7 +292,7 @@ node scripts/doctor.js --fix
 
 ## 5. Start the server
 
-For a first local trial:
+Start the server from the project directory and leave this terminal open:
 
 ```bash
 npm start
@@ -261,13 +305,13 @@ The default port is `3000`. The startup log should show:
 - a LAN URL that can be opened on your phone;
 - bridge and pending-device status.
 
-The health endpoint requires authentication too (`AUTH_TOKEN` is a startup prerequisite, so the server always has one):
+**Open another terminal and enter the same project directory**, then check the server:
 
 ```bash
-curl -sS "http://127.0.0.1:3000/health?token=<AUTH_TOKEN>"
+node scripts/service.js health --json
 ```
 
-The server is ready when it returns JSON containing `status`, `versions`, `buildNonce`, and `timestamp`. Treat `AUTH_TOKEN` as a key to your local shell: never paste the real value into issues, chat logs, or screenshots.
+The command reads the token from local configuration and sends an authenticated request to `/health`. The server is ready when it returns `ok: true`, `health.status: "ok"`, and server, SDK, and CLI versions in `health.versions`. Treat `AUTH_TOKEN` as a key to your local shell: never paste the real value into issues, chat logs, or screenshots.
 
 If the desktop app or an existing `npm start` already holds port 3000, do not start another. Restart from the desktop menu, or in the same terminal for headless. See the [operations quick reference](deployment.md#运维速查).
 
@@ -275,13 +319,21 @@ If the desktop app or an existing `npm start` already holds port 3000, do not st
 
 ### Same Wi-Fi
 
-Open the address printed at startup:
+Generate a QR code in the project directory on your computer, then scan it with a phone on the same Wi-Fi:
+
+```bash
+node scripts/qr.js
+```
+
+The code needs a terminal about 90 columns by 45 rows; enlarge the window if needed.
+
+For manual entry, view the token locally with `node scripts/config.js get AUTH_TOKEN --reveal` and fill in the address below. Use the LAN IP from the startup log; a redacted token will not work.
 
 ```text
 http://<lan-ip>:3000/#token=<AUTH_TOKEN>
 ```
 
-After the first load, the browser stores the token in `localStorage` and removes it from the address bar.
+The browser saves the token and removes it from the address bar after login. **The QR code and full address contain your access token: do not share them or display them during screen sharing.**
 
 ### Temporary HTTPS
 
@@ -301,7 +353,7 @@ A quick tunnel is for testing: its hostname may change on every start and it has
 
 ### Tailscale (the recommended path off Cloudflare)
 
-If you would rather not route traffic through Cloudflare or buy a domain, use Tailscale: install it on this machine and your phone under the same account, then run once on this machine
+If you would rather not route traffic through Cloudflare or buy a domain, Tailscale is an option. Follow the [official quickstart](https://tailscale.com/docs/how-to/quickstart) to create an account and sign in on your computer and phone, then run on your computer:
 
 ```bash
 tailscale serve --bg 3000
@@ -338,27 +390,28 @@ To revoke a mistaken approval or a lost device:
 node scripts/device.js deny <ID>
 ```
 
-Only two things skip device approval: a connection already validated by Cloudflare Access JWT, or a **genuine local connection** — the peer is loopback **and** the Host header is `localhost` or `127.0.0.1` (an empty Host does not count; a page opened as `http://[::1]:<port>` does not skip it and needs one approval).
-Requests arriving through cloudflared / nginx / an SSH reverse proxy also have `127.0.0.1` as their peer, but their Host is a public domain, so they **still need approval**. Normal LAN access and temporary quick tunnels do not skip it either. The rule lives in `shouldBypassDeviceApproval` in `app/src/auth/rate-limiter.js`.
+By default, direct local connections and connections verified by Cloudflare Access skip device approval. LAN phones and quick tunnels normally require it. With `DEVICE_APPROVAL_SCOPE=all`, every connection requires approval.
+
+Local detection checks both the source address and Host header. See the [deployment guide](deployment.md#架构) for SSH/frp TCP forwarding, and `shouldBypassDeviceApproval` in `app/src/auth/rate-limiter.js` for the implementation.
 
 ## 8. Complete the first-run check
 
-Two gates stay separate: **CCM access token / device approval** only decide whether the phone can enter the shell; **whether `claude` in your host terminal can complete one normal turn** decides whether chat can actually run. A running server is not the same as a working conversation.
+For a fixed domain using Cloudflare, first complete the deployment guide's [layer-by-layer checks](deployment.md#3b-逐层验收): **local health → tunnel routing → Access login → live connection**. A healthy tunnel or an Access login page is insufficient: after signing in, CCM must load and establish its live connection.
 
-**One criterion covers both model paths** (see [Claude subscriptions and third-party gateways](#claude-subscriptions-and-third-party-gateways) above): a Claude subscription requires the host to be signed in; a third-party gateway does not use Anthropic login at all and will **never** show `Not logged in` — what it needs is for `ANTHROPIC_*` in settings to actually take effect. So don't use "is it signed in" as the criterion — use "can `claude` hold a conversation in that same workspace directory."
+Opening CCM proves connectivity. **Complete installation by receiving a model reply:**
 
-On the phone, verify:
+1. Pick the target project folder, or use “No folder”.
+2. Start a session and send “Reply with OK only.” Confirm that the reply streams and the turn finishes.
+3. For `Not logged in · Please run /login`, sign in to Claude on the computer. For gateway 401, connection, or unknown-model errors, check the [CLI gateway settings](#claude-subscriptions-and-third-party-gateways). Get `claude` working in the same project directory, then retry on the phone.
+4. Check model, permissions, and effort below the composer. If Web Push is configured, send a test notification too.
 
-1. The expected workspace appears on the home screen.
-2. **Hard gate (works even before the model path is configured):** start a new session and send a message. **As long as what reaches the phone is the CLI's real result — a normal answer, or a specific error — this step passes**: it proves the CCM→CLI link works instead of faking a streaming success.
-   - Claude subscription, signed out → `Not logged in · Please run /login`: on the host, open `claude` and run `/login` (or first get a clean `claude auth status`).
-   - A third-party gateway **never** shows that line (it does not use Anthropic login). When its config is not in effect you get the gateway's own error instead — 401, connection refused, unknown model name → check which layer holds `ANTHROPIC_*` per [Claude subscriptions and third-party gateways](#claude-subscriptions-and-third-party-gateways), then look at the MODEL_SETTINGS item of the phone's security check (it only checks that the mapping is consistent; whether the gateway accepts a model name is what this error tells you).
-   - Both cases converge on the same action: **get `claude` through one normal turn in your host terminal, in that same workspace directory**, then retry from the phone.
-3. **Green path (the terminal can already hold a conversation):** send a harmless prompt such as “Reply with OK only.” The response streams and reaches a finished-turn state.
-4. In a session, tap the “model · permission · effort” pill below the input box (Session settings) and confirm model, permission mode, and effort are shown; service status is under ⚙️ Settings & status → 🖥 Host → 📊 Service status in the session drawer.
-5. If Web Push is enabled, use “Send a test notification” now instead of discovering a broken path during a real approval.
+A CLI error proves that the request reached the CLI, **but installation is not verified until the error is resolved and a normal reply arrives**. Service details are under Settings & status → Host → Service status.
 
-The minimum path is now complete. The sections below are optional enhancements and are not required for Web-originated sessions.
+The features below are optional for Web-originated sessions.
+
+## Optional: phone notifications
+
+For Web Push setup, platform requirements, and ntfy, see the [Chinese guide](getting-started.md#可选手机推送通知).
 
 ## Optional: CLI statusline bridge
 
@@ -370,7 +423,7 @@ npm run statusline:install
 ```
 
 - `status` is read-only and does not modify `~/.claude`.
-- `install` is explicit opt-in and wraps an existing Claude CLI statusline command. The installer refuses when no statusline is configured.
+- Run `install` to enable the bridge. It wraps an existing Claude CLI statusline command. The installer refuses when no statusline is configured.
 - Reopen the terminal Claude CLI and restart the persistent server after installation.
 - `npm run statusline:uninstall` restores the original command from its manifest and refuses to overwrite drifted configuration. It also removes `~/.claude/ccm/statusline-v1` (including snapshots), and `~/.claude/ccm` itself once it is empty.
 
@@ -399,7 +452,13 @@ alerts — a sibling of the "📊 Service status" button on that page, **not** s
 
 macOS only, and entirely optional — the phone UI and the command line already cover every feature.
 
-The setup wizard offers to compile it; you can also do it yourself at any time:
+Run `xcode-select -p` to check the build tools first. If they are missing, run the command below and finish installation in the system dialog before continuing. You need Xcode Command Line Tools; the full Xcode app is unnecessary. See [Apple's installation instructions](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools/).
+
+```bash
+xcode-select --install
+```
+
+Install the desktop console:
 
 ```bash
 npm run app:install    # first build, installed into /Applications — this is the macOS entry
@@ -408,13 +467,6 @@ npm run app:install    # first build, installed into /Applications — this is t
 
 # try-run without installing into /Applications:
 npm run app:build && open desktop/build/CCM.app
-```
-
-**It needs the Xcode Command Line Tools, not the full Xcode** (1–2GB versus 12GB+). Any machine
-that has used `git` or `cc` most likely already has them. Otherwise:
-
-```bash
-xcode-select --install
 ```
 
 A menu bar icon shows service status. **The desktop app is self-contained and never opens a
@@ -446,8 +498,9 @@ Headless keeps using `npm start` in a terminal. Do not let both occupy port 3000
 
 The desktop app is a GUI process, and it has a class of failures the command line structurally cannot
 hit — a window sinking behind another one so you cannot click it, the notch squeezing the menu bar icon
-out, a GUI process inheriting a different `PATH` than your terminal. What they share is that **the
-server keeps running fine; it is only that one screen that cannot reach it.**
+out, or a GUI process inheriting a different `PATH` than your terminal. The first two may affect only
+the console; a PATH difference can also prevent the server from finding Claude and starting. Check the
+service itself before drawing a conclusion from the menu-bar icon.
 
 So when a menu item "does nothing", check the service itself from a terminal first. Neither of these
 goes through the app:
@@ -467,14 +520,7 @@ of waiting for the app to recover.
 
 ### Why there is no prebuilt app to download
 
-An app you compile yourself carries **no quarantine attribute** and opens on a double-click. An app
-downloaded from a web page always gets one, and the first launch hits Gatekeeper's "cannot verify the
-developer". Fixing that properly means an Apple Developer account for notarization ($99/year), which
-is out of proportion for a self-hosted tool. Telling you to `xattr -d` around it would be telling you
-to disable a security mechanism.
-
-Compiling also has a side benefit: the binary matches exactly the source you are holding, and you do
-not have to trust anyone else's build.
+Building locally keeps the app aligned with your source version and avoids the quarantine attribute applied to downloaded apps. The project does not currently provide an Apple-notarized prebuilt installer.
 
 ### When the notch hides the menu bar icon
 
@@ -491,18 +537,24 @@ If the icon is already gone, recover once from the command line and reopen the a
 defaults write com.ccm.menubar CCMShowDockIcon -bool true
 ```
 
-<details>
-<summary>Delegate first installation to a coding agent</summary>
+## Delegate installation to a model
 
-Give the following prompt to Claude Code, Codex CLI, or another local coding agent from the repository directory:
+The model needs tools to read and write project files and run commands on this computer. A chat-only model can provide instructions. You complete account sign-in, verification codes, and payment details.
+
+Give a local coding agent the project directory and the prompt below. The source archive includes this guide too; the agent need not rely on finding `AGENTS.md`. For public access, continue with the [Cloudflare prompt](deployment.md#把-cloudflare-配置交给模型) (Chinese).
+
+<details>
+<summary>Copy the local first-install prompt</summary>
 
 ```text
 Install and start claude-chat-mobile for the first time. It connects my local claude CLI to a phone Web UI.
 This is a clean first installation, not a restart of a desktop app or npm start that is already running.
 
 Follow these steps in order and verify each result before continuing:
-1. Check that node --version is at least 20, which claude finds the command, and claude auth status shows a login.
-   Stop and tell me if any check fails; do not install or sign in to claude yourself.
+1. Check node --version is at least 20 and which claude finds the command. For a subscription, check claude auth status.
+   For an API key or gateway, check the existing CLI configuration; a subscription login is not required.
+   For missing tools, help install them using docs/getting-started.en.md §1. Give concrete steps for user sign-in
+   or system authorization, then continue when completed. Do not reinstall tools that already work.
 2. Run npm ci --omit=dev.
 3. Ask me whether to connect a project folder now (if so, confirm its absolute path; skipping is fine,
    I can pick one from my phone later) and whether to install the CLI hooks bridge.
@@ -512,9 +564,10 @@ Follow these steps in order and verify each result before continuing:
    so inherited values cannot override the file you are about to write. Then:
    node scripts/setup.js --yes --work-dir=<confirmed absolute path> --hooks=<on or off>
    (Drop --work-dir if no folder is being connected.) If a config file already exists, stop instead of adding --force yourself.
-5. Run node scripts/doctor.js. Use --fix only when its output calls for a safe permission repair.
+5. Save the CLI path with node scripts/config.js set CLAUDE_BIN="$(command -v claude)".
+   Run node scripts/doctor.js. Use --fix only for a reported permission repair.
 6. Confirm port 3000 is not held by the desktop app or another npm start, then start with `npm start` (headless).
-   Verify authenticated /health JSON; do not rely only on the process existing.
+   In another terminal, enter the same project directory and run node scripts/service.js health --json.
 7. Give me the LAN phone URL from startup logs, but never write AUTH_TOKEN into any file or report that may leave
    this machine.
 8. After my phone connects, run node scripts/device.js list. Let me verify the device before running approve.

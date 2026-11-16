@@ -98,8 +98,8 @@ node tests/acceptance/setup.mjs          # local.example/ → local/、secrets.j
 node tests/acceptance/preflight.mjs      # 加 --gateway 再探一次网关通不通
 ```
 
-**`local/` 不随 git 走。** 换电脑时模板和脚本跟着 clone 过来，真实值要自己带过去或重填。
-setup 幂等：已有的 `local/` 文件绝不覆盖；`.claude/skills/ccm-accept` 已存在且指向别处时只警告。
+**`local/` 不提交到 Git。** 换电脑时模板和脚本跟着 clone 过来，真实值要自己带过去或重填。
+setup 可重复执行：已有的 `local/` 文件绝不覆盖；`.claude/skills/ccm-accept` 已存在且指向别处时只警告。
 
 填写时会用到的两条命令：
 
@@ -118,9 +118,9 @@ node tests/acceptance/run.mjs --list --tier D         # 只列出，不执行
 node tests/acceptance/run.mjs                         # 跑 A 档重放（零 token）
 node tests/acceptance/run.mjs --changed origin/dev    # 只选相对 origin/dev 有变化的 A 档用例
 node tests/acceptance/env/up.mjs --env E1,E2          # 只打印要执行的 compose 命令
-node tests/acceptance/env/up.mjs --env E1,E2 --yes    # 真起
-node tests/acceptance/env/up.mjs --env E3 --yes       # 起真 claude 容器：钩子会问机主（花额度）
-node tests/acceptance/env/down.mjs --env all --yes    # 收环境（不删卷；要清空加 --purge-volumes）
+node tests/acceptance/env/up.mjs --env E1,E2 --yes    # 执行启动
+node tests/acceptance/env/up.mjs --env E3 --yes       # 起真 claude 容器：需机主授权（消耗模型额度）
+node tests/acceptance/env/down.mjs --env all --yes    # 停止环境（不删卷；要清空加 --purge-volumes）
 ```
 
 `run.mjs` 在 CI（`GITHUB_ACTIONS` 或任何 `CI=…`）或容器里直接以 1 退出。`--changed` 认的是用例定义

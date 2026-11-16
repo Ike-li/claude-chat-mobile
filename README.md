@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>电脑上的 Claude Code，出门用手机接着干。</strong><br>
-  就是你电脑上那个 claude · 任何网关和 API key 都能用 · 控制面在你自己机器上
+  就是你电脑上那个 claude · 任何网关和 API key 都能用 · 服务与记录保存在本机
 </p>
 
 <p align="center">
@@ -38,11 +38,11 @@
 * **手机上驱动的就是你电脑上那个 claude。** 通过 Agent SDK 驱动本机的 `claude` CLI，同一份 CLAUDE.md、MCP、skills、登录和权限规则。目标是终端里能做的事，手机上都能做。
 * **官方 Remote Control 进不去的配置，它都能用。** 中转、第三方网关、API key、国产模型、Bedrock / Vertex、关了遥测，你的 `claude` 怎么配就怎么用。
 * **会话不用提前准备。** 已连接文件夹里的全部会话都能看能续，终端里开的、上周的、忘了开远程开关的都在。
-* **控制面在你自己机器上。** 服务、会话记录、设备信任、审计全在本机，局域网内可以完全闭环，不用注册任何账号。
+* **服务与记录保存在本机。** 服务、会话记录、设备信任、审计全在本机，局域网内可独立运行，不用注册任何账号。
 
 ## 终端里的哪些事，手机上也能做
 
-离开电脑时最怕的不是看不到输出，是**它停在某个需要你的地方，白等一晚上**。所以先说这三件：
+手机可以处理审批、回答问题和接收任务通知：
 
 | 终端里 | 手机上 |
 | --- | --- |
@@ -70,17 +70,17 @@
 
 ## 和官方 Remote Control 差在哪
 
-**能用官方 [Remote Control](https://code.claude.com/docs/en/remote-control)、也接受它的账号与数据路径时，用官方**——零部署，是默认推荐。这个项目是给官方路径进不去、或不接受其控制面的人做的：前者典型是在 `claude` CLI 里接了中转、第三方模型、国产模型，官方那扇门直接关着；后者典型是要把会话记录和审计留在自己机器上。
+官方 [Remote Control](https://code.claude.com/docs/en/remote-control) 无需自行部署，适合接受其账号和数据存储方式的用户。CCM 适合使用其他模型网关，或希望将会话记录、设备信任和操作日志保存在本机的用户。
 
 |  | 官方 Remote Control | Claude Chat Mobile |
 | --- | --- | --- |
 | **模型通路** | 需 claude.ai 订阅登录 + 直连 `api.anthropic.com`。API key、Bedrock / Google Agent Platform / Microsoft Foundry、指向别处的 `ANTHROPIC_BASE_URL`、`DISABLE_TELEMETRY` 一类遥测开关、ZDR 合规组织——命中任一条即整条不可用 | 你的 `claude` CLI 怎么配就怎么用——第三方网关 / API key / Bedrock / Vertex / 关了遥测，都行 |
-| **控制面数据** | 会话 transcript 存到 Anthropic 服务器做跨设备同步 | 服务、transcript、设备信任、审计全在你机器上，局域网内可完全闭环 |
+| **控制面数据** | 会话 transcript 存到 Anthropic 服务器做跨设备同步 | 服务、transcript、设备信任、审计全在你机器上，局域网内可独立运行 |
 | **能看见什么** | 只有显式开过 Remote Control 的会话（或开了 auto-connect 之后新起的）；`/resume` 是终端专属命令，手机上翻不到历史会话 | 已连接文件夹里的**全部**会话——终端开的、上周的、忘了开开关的，都可见可续 |
 | **两端同时驾驶同一会话** | 可以，终端 / 网页 / 手机随便发 | **做不到**——单驾驶员模型，Web 接管要显式续接且可能分叉 |
 | **部署成本** | 零 | 自己跑一个 server |
 
-> 措辞边界：这不等于「数据绝不离开本机」——模型请求本来就由本机 `claude` CLI 按你现有配置发出。CCM 承诺的是**除此之外**不再多一条数据出口。
+> 模型请求仍由本机 `claude` 发往你配置的服务商。会话记录保存在本机，不代表模型请求不出网。
 
 CCM 对部署位置没有假设：`claude` CLI 在哪台机器上能跑通，控制面就跟到哪。主场景是自己的开发机；跑在一台远程服务器上同样成立，手机连的就是那台服务器。
 
@@ -88,13 +88,16 @@ CCM 对部署位置没有假设：`claude` CLI 在哪台机器上能跑通，控
 
 需要 Node ≥ 20 和本机已经能用的 `claude` CLI。项目**不会**替你安装或登录 Claude。
 
+第一次安装、还没准备环境：从[首次使用指南](docs/getting-started.md)开始。需要固定公网网址：接着按[Cloudflare 注册、域名、隧道与登录配置](docs/deployment.md#从零搭建)操作。交给模型安装：复制[安装提示词](docs/getting-started.md#把安装交给模型)。
+
 ```bash
-curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
-cd claude-chat-mobile-master
-npm ci --omit=dev && npm run setup && npm start
+curl -fsSL -o ccm-master.tar.gz https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz \
+  && tar xzf ccm-master.tar.gz \
+  && cd claude-chat-mobile-master \
+  && npm ci --omit=dev && npm run setup && npm start
 ```
 
-手机打开终端打印的地址即可。首次从新设备进来要批准一次：`node scripts/device.js list` 再 `approve <ID>`。手输 64 位 token 很痛苦，`node scripts/qr.js` 能把地址打成二维码扫一下。
+保持服务终端打开，另开终端进入项目目录，运行 `node scripts/qr.js`，用同一 WiFi 的手机扫码。新设备首次连接时，先用 `node scripts/device.js list` 核对，再运行 `node scripts/device.js approve <ID>` 批准。
 
 > **起服 ≠ 能聊天。** 手机上聊不通时，先在电脑终端里把 `claude` 聊通一轮再重试，验收清单见 [首次使用指南 §8](docs/getting-started.md#8-完成首次验收)。
 
@@ -102,7 +105,7 @@ npm ci --omit=dev && npm run setup && npm start
 
 ## 界面长什么样
 
-**不想先装也能摸一遍：[在线演示](https://ccm.osolee.cc.cd/demo/)。** 跑的是本仓库的真实前端（`app/public/` 原样），只把后端换成了一层浏览器内脚本——工作区切换、流式回复、工具调用、审批卡、文件浏览、后台任务、设置与状态都点得动，但**回复是固定脚本，不会真的调用模型**。
+**[在线演示](https://ccm.osolee.cc.cd/demo/)** 使用真实前端和模拟回复，可体验会话、工具卡片、审批、文件和设置界面，不会调用模型。
 
 ## 它是怎么工作的
 
@@ -110,7 +113,7 @@ npm ci --omit=dev && npm run setup && npm start
 手机 PWA / 浏览器 ↕ Socket.io ↕ CCM Server（本机） ↕ Claude Agent SDK ↕ 本机 claude CLI
 ```
 
-手机只是**远程控制面**。真正执行代码、读项目、调工具、维护会话的仍然是你电脑上的 Claude Code——没有数据库、没有多租户、没有 SaaS 后端。
+手机提供**远程操作界面**。真正执行代码、读项目、调工具、维护会话的仍然是你电脑上的 Claude Code——没有数据库、没有多租户、没有 SaaS 后端。
 
 **一个要知道的边界**：同一个实时会话同一时刻只有一个驾驶端。终端正在驾驶时 Web 默认只读，可以显式续接但可能产生会话分叉——两端不会同时向同一个 Claude 进程输入。
 
@@ -138,7 +141,7 @@ npm ci --omit=dev && npm run setup && npm start
 1. **单用户。** 没有多用户或租户隔离，鉴权通过后的权限就是运行 `claude` 的本机账号的权限。
 2. **没有 Token 就不启动。** `AUTH_TOKEN` 是启动前提，任何绑定模式都一样——本机浏览器打开也要令牌，不存在「本地免鉴权」。
 3. **只在已连接的文件夹里干活。** 文件、会话和相关操作只能进入 `WORKDIRS` 里的文件夹、它们的子文件夹，以及这些仓库自己的 git worktree；「无文件夹」会话跑在应用自建的一次性目录里。手机上可以添加文件夹，但家目录本身、磁盘根、`~/.claude` 不能添加。连接得越宽，手机能碰到的就越多：像 `~/code` 这样的大目录一连上，里面每个项目都可达。
-4. **新设备需要信任。** 除本机样 Host 的直连或已通过公网身份层（当前为 Cloudflare Access）外，持正确 Token 的新设备仍需一次审批。两点注意：**开着 Access 时它替代设备审批**，那张信任表管不到经它进来的连接；**本机判据读的是 Host 头，而 Host 由客户端填**，纯 TCP 转发（`ssh -R`、frp tcp）下远程来客发 `Host: localhost` 即可冒充本机。想让审批对所有路径生效，设 `DEVICE_APPROVAL_SCOPE=all`。
+4. **新设备需要信任。** 默认情况下，除本机直连或已通过 Cloudflare Access 登录的连接外，持正确 Token 的新设备仍需一次审批。两点注意：**开着 Access 时它替代设备审批**，那张信任表管不到经它进来的连接；**本机连接的识别会检查客户端提供的 Host 头**，纯 TCP 转发（`ssh -R`、frp tcp）下远程来客发 `Host: localhost` 即可冒充本机。想让审批对所有路径生效，设 `DEVICE_APPROVAL_SCOPE=all`。
 5. **继承 Claude Code 权限。** `permissions.allow` 等已有规则继续生效，公网使用前应检查 Bash、Write 的自动放行规则。
 6. **文件编辑属于直接写入。** 内置编辑器**不经过 Agent 的工具审批链**（有范围校验、大小限制、哈希冲突检测和审计），`FILE_EDIT=off` 可关闭，长期公网暴露建议关闭。
 
@@ -149,6 +152,7 @@ npm ci --omit=dev && npm run setup && npm start
 **使用**
 
 * **[首次使用指南](docs/getting-started.md)** · [Getting Started (EN)](docs/getting-started.en.md) —— 装机到手机发出第一条消息、配置、更新、命令速查
+* **[免费域名托管到 Cloudflare](docs/cloudflare-free-domain.md)** —— 申请域名、填写 NS、确认 Active，再接入项目
 * **[部署与运维](docs/deployment.md)** —— 局域网到长期公网、Cloudflare Tunnel / Access、不经 Cloudflare 的替代入口
 * [安全策略](SECURITY.md) —— 漏洞怎么私下报告
 

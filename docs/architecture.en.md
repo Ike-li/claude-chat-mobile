@@ -15,6 +15,8 @@
 
 ## Design goals
 
+Here, a transcript is the conversation record saved by the CLI. The driver is the side currently sending messages; catch-up means reading missing records and forwarding them to the Web UI.
+
 Claude Chat Mobile is a local forwarding and synchronization service:
 
 - For Web-originated work, it drives the local `claude` CLI through the Claude Agent SDK.
