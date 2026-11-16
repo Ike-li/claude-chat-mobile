@@ -3,7 +3,7 @@
 // 并回调 onDeliveryFailure（app 层用它触发 instances 广播的服务健康可见性）。
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import webpush from 'web-push';
+import * as webpush from 'web-push';
 import { ntfyRequestInit, describeDeliveryError } from './notifications.js';
 import * as metrics from './metrics.js';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
