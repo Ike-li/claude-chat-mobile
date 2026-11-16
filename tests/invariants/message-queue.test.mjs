@@ -3,7 +3,7 @@
 // 测什么：队列接真发送闸（createSendGate 的无人值守模式），断言落在「发了几次」和快照上：
 //   ① 回合结束后等 CLI 报 idle，汇报轮期间消息留在服务端 ② 汇报轮出错或被停时不发 ③ CLI 一直不报 idle 时兜底
 //   ④ 闸门不过转 held，取得回 ⑤ 第 6 节竞态表：撤回、停止与释放的先后
-//   ⑥ 立即发送：人在跟前，当场带 priority:'now' 交出去，只跳过在途轮闸；和撤回、停止、正常释放的先后
+//   ⑥ 立即发送：人在跟前，当场带 priority:'now' 交出去，只跳过在途轮闸；和撤回、停止、正常释放的先后；过闸异常与发出后异常的收口
 // 不测什么 + 为什么：① result 帧里的事实怎么取出来归 agent-queued-next.test.mjs ② socket、ack 键集、真假 CLI 帧序
 //   属 S2，见 tests/invariants/server/message-queue.test.mjs ③ 卡片和本地副本属前端
 // 槽位：S1（编排，定时器注入）
@@ -817,4 +817,81 @@ test('立即发送投递失败、这期间回合已经结束 → 转未发送，
   assert.equal((await ctx.q.sendNow(SID, 'c1')).ok, false);
   assert.equal(ctx.state(), 'held');
   assert.equal(ctx.reason(), 'send_failed');
+});
+
+test('立即发送过闸抛错、回合还在跑 → 回排队中，回合正常结束后仍只发一次', async () => {
+  const ctx = setup();
+  ctx.location = async () => { throw new Error('记录恢复失败'); };
+  ctx.accept();
+  assert.deepEqual(await ctx.q.sendNow(SID, 'c1'), { ok: false, error: 'send_failed' });
+  assert.equal(ctx.state(), 'waiting', '过闸异常不得把卡片挂在没有操作按钮的「正在发送」');
+  assert.deepEqual(ctx.a.sent, []);
+  ctx.location = async () => ({ status: 'found' });
+  ctx.endTurn();
+  ctx.q.onCliIdle(ctx.a);
+  await ctx.fireTimers();
+  assert.equal(ctx.a.sent.length, 1, '过闸异常不能丢消息，也不能导致重复发送');
+  assert.deepEqual(ctx.q.snapshot(), []);
+});
+
+test('立即发送置换实例时 resume 抛错 → 转未发送，原话仍可取回', async () => {
+  const ctx = setup({ gateOver: { resume: async () => { throw new Error('续接失败'); } } });
+  ctx.accept();
+  ctx.endTurn();
+  ctx.a.externalDirty = true;
+  assert.deepEqual(await ctx.q.sendNow(SID, 'c1'), { ok: false, error: 'send_failed' });
+  assert.equal(ctx.a.swapped, 1, '前提：交互发送闸确实尝试了置换');
+  assert.equal(ctx.state(), 'held', '回合已结束，回 waiting 也无人释放；必须让用户取得回');
+  assert.equal(ctx.reason(), 'send_failed');
+  ctx.q.onCliIdle(ctx.a);
+  await ctx.fireTimers();
+  assert.deepEqual(ctx.a.sent, []);
+  assert.equal(ctx.q.take(SID, 'c1').text, '接下来跑测试');
+});
+
+for (const action of ['停止', '取回']) {
+  test(`立即发送过闸期间${action}、随后过闸抛错 → 保留${action}结果，不复活条目`, async () => {
+    const ctx = setup();
+    let rejectLocation;
+    ctx.location = () => new Promise((_, reject) => { rejectLocation = reject; });
+    ctx.accept();
+    const pending = ctx.q.sendNow(SID, 'c1');
+    await flush();
+    if (action === '停止') ctx.q.hold(SID, 'stopped');
+    else assert.equal(ctx.q.take(SID, 'c1').text, '接下来跑测试');
+    rejectLocation(new Error('记录恢复失败'));
+    assert.deepEqual(await pending, { ok: false, error: 'cancelled' });
+    if (action === '停止') {
+      assert.equal(ctx.state(), 'held');
+      assert.equal(ctx.reason(), 'stopped', '异常不能覆盖用户停止的原因');
+    } else assert.deepEqual(ctx.q.snapshot(), [], '取回的话不能又冒出一张排队卡片');
+    ctx.endTurn();
+    ctx.q.onCliIdle(ctx.a);
+    await ctx.fireTimers();
+    assert.deepEqual(ctx.a.sent, []);
+  });
+}
+
+test('立即发送已发出、后续副作用抛错 → 回成功并移除条目，绝不重发', async () => {
+  const ctx = setup({ gateOver: { onManualSend: () => { throw new Error('发送后副作用失败'); } } });
+  ctx.accept();
+  assert.deepEqual(await ctx.q.sendNow(SID, 'c1'), { ok: true }, '消息已进实例，不能把副作用失败报成发送失败');
+  assert.equal(ctx.a.sent.length, 1);
+  assert.deepEqual(ctx.commits, ['c1'], '已经发出的消息仍须登记去重');
+  assert.deepEqual(ctx.q.snapshot(), [], '已发送条目不能留在「正在发送」');
+  assert.deepEqual(await ctx.q.sendNow(SID, 'c1'), { ok: false, error: 'not_found' });
+  ctx.endTurn();
+  ctx.q.onCliIdle(ctx.a);
+  await ctx.fireTimers();
+  assert.equal(ctx.a.sent.length, 1, '回合结束后不得把已经发出的原话再发一次');
+});
+
+test('立即发送投递前记日志抛错 → 不得假报成功或丢掉未发送的消息', async () => {
+  const ctx = setup({ gateOver: { interactionLog: { userMessageIn: () => { throw new Error('日志失败'); } } } });
+  ctx.accept();
+  assert.deepEqual(await ctx.q.sendNow(SID, 'c1'), { ok: false, error: 'send_failed' });
+  assert.deepEqual(ctx.a.sent, []);
+  assert.deepEqual(ctx.commits, [], '未发出的消息不能登记已处理');
+  assert.equal(ctx.state(), 'waiting', '投递前的异常不能当成已发出而移除条目');
+  assert.equal(ctx.q.take(SID, 'c1').text, '接下来跑测试');
 });

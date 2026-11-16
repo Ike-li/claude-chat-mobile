@@ -2,7 +2,7 @@
 // 守护：OPS-04（并进当前轮的消息不得让账面永挂；被让路那一轮的 result 不得把账面清零）/ MSG-03（没声明能力位的 CLI 不得这样发；还没开跑时点停止要连它一起停住）
 // 测什么：真 AgentSession 喂 CLI 2.1.319 零 token 实测的帧序（/tmp 探针 run1–run4，见 commit）：
 //   ① 能力位齐全才放行在途轮期间的发送，消息带 priority:'now' 交给 CLI ② 「让路」形态：A 以 aborted_* 结束、B 单独一轮
-//   ③ 「并进」形态：B 只有 lifecycle，没有自己的 result ④ 停止：B 还排在 CLI 时带 cancelQueued，出账并标「已随停止取消」
+//   ③ 「并进」形态：B 只有 lifecycle，没有自己的 result ④ 停止：B 还排在 CLI 时带 cancelQueued，出账并标「已随停止取消」；result 先于控制应答时保留停止来源
 // 不测什么 + 为什么：① 排队条目怎么交到这里归 message-queue.test.mjs ② socket 与真 server 接线属 S2
 //   ③ CLI 怎么选让路方式是 CLI 的事，这里只喂它实测吐出的帧
 // 槽位：S1（真 AgentSession，不起子进程）
@@ -185,3 +185,29 @@ test('B 已交给 CLI、queued 帧还没到就点停止：照样带 cancelQueued
   assert.equal(s.pendingTurns, 0);
   s.dispose();
 });
+
+for (const decidedBy of ['user', 'system:idle-watchdog']) {
+  test(`停止 result 先于控制应答、B 尚未取消：保留 ${decidedBy} 来源，不冒充立即发送让路`, async (t) => {
+    const { s, events, a } = await running();
+    t.after(() => s.dispose());
+    const b = await sendNow(s);
+    const calls = recordingQuery(s, () => {
+      // interrupt 已发起，但 _awaitingInterruptResult 要等控制应答才置位；CLI 可以先吐结果。
+      s.map(stopResult(a));
+      s.map(lifecycle('cancelled', b));
+      return { still_queued: [], cancelled: [b] };
+    });
+    await s.interrupt(decidedBy);
+    assert.deepEqual(calls, [{ cancelQueued: true }]);
+    const stopped = events.find(e => e.type === 'result').payload;
+    assert.equal(stopped.interrupted, true);
+    assert.equal(stopped.interruptedBy, decidedBy, '已有明确停止来源时不得标成 send_now，否则误说「已让给新消息」并抑制通知');
+    assert.deepEqual(events.find(e => e.type === 'system' && e.payload.kind === 'queue_dropped')?.payload.clientMessageIds, ['c-b']);
+    assert.equal(s.pendingTurns, 0);
+    assert.equal(await s.send('下一条'), true);
+    const next = s.queue.at(-1).uuid;
+    s.queue = [];
+    s.map(result({ user_message_uuid: next }));
+    assert.equal(events.filter(e => e.type === 'result').at(-1).payload.interrupted, false, '停止来源不得泄漏到下一轮');
+  });
+}

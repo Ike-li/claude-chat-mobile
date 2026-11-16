@@ -165,10 +165,11 @@ export function createSendGate({
   async function deliver(a, { text, model, attachments, clientMessageId, startedAt = Date.now(), shouldSend, priority }) {
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
     const cancellable = { ...(shouldSend ? { shouldSend } : {}), ...(priority ? { priority } : {}) };
-    // FRESH 首轮 sessionId 可能仍 null：走 agent.logKey()（provisionalKey）与 agent 内 userMessageOut/agentSend 对齐
-    interactionLog.userMessageIn(a.logKey(), text, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
     let sent;
     try {
+      // 投递前的日志异常也走未发送回执；调用方据此区分「尚未发送」与 send 成功后的副作用抛错。
+      // FRESH 首轮 sessionId 可能仍 null：走 agent.logKey()（provisionalKey）与 agent 内 userMessageOut/agentSend 对齐
+      interactionLog.userMessageIn(a.logKey(), text, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
       if (hasAttachments) {
         // 落盘 <cwd>/.ccm-uploads/ → 绝对路径注入 prompt → 送 SDK（claude 用 Read 读，白名单内免审批）；
         // 气泡走 displayText（原文，不含路径）+ 去完整 data 的元数据（含小 thumb，进缓冲供回放）

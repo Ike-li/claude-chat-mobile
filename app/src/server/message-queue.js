@@ -177,17 +177,33 @@ export function createMessageQueue({
     if (!a.canSendNow?.()) return { ok: false, error: 'send_now_unsupported' };
     setPhase(entry, 'sending');
     const stillMine = () => isCurrent(entry) && entry.phase === 'sending';
-    const gate = await sendGate.prepare(a, { sendNow: true });
+    let gate;
+    try {
+      gate = await sendGate.prepare(a, { sendNow: true });
+    } catch (err) {
+      log(sessionId, `[SYS] 排队消息：立即发送判定异常（${err?.message || err}）`);
+      if (!stillMine()) return { ok: false, error: 'cancelled' };
+      settleSendNowFailure(entry, 'send_failed');
+      return { ok: false, error: 'send_failed' };
+    }
     if (!stillMine()) return { ok: false, error: 'cancelled' }; // 过闸期间被撤回或停止
     if (!gate.ok) {
       settleSendNowFailure(entry, gate.code);
       return { ok: false, error: gate.code };
     }
     log(sessionId, '[SYS] 排队消息：立即发送');
-    const out = await sendGate.deliver(gate.instance, {
-      text: entry.text, model: entry.model, attachments: entry.attachments, clientMessageId: entry.clientMessageId,
-      priority: 'now', shouldSend: stillMine,
-    });
+    let out;
+    try {
+      out = await sendGate.deliver(gate.instance, {
+        text: entry.text, model: entry.model, attachments: entry.attachments, clientMessageId: entry.clientMessageId,
+        priority: 'now', shouldSend: stillMine,
+      });
+    } catch (err) {
+      // 同正常释放：deliver 在 send 成功前的失败都走返回值，抛错说明已投递、后续副作用失败，不能留着重发。
+      log(sessionId, `[SYS] 排队消息：立即发送后异常（${err?.message || err}）`);
+      remove(entry, 'sent_now');
+      return { ok: true };
+    }
     if (out.ok) {
       remove(entry, 'sent_now');
       return { ok: true };

@@ -3857,8 +3857,9 @@ export class AgentSession {
         // command_lifecycle 至今任何一版 d.ts 都没有，却照样收得到。本仓不按枚举写 switch，只做
         // 前缀判定 + 原样透传，正是为此；旧 CLI 不发这个字段 → null，各判据自动退回原样。
         const terminalReason = typeof msg.terminal_reason === 'string' ? msg.terminal_reason : null;
-        // 给「立即发送」让路：没人按停止，被腰斩的却不是那条立即发送的消息自己的轮。要在出槽之前看，出槽后就分不出来了
-        const yieldedToSendNow = !this._awaitingInterruptResult && (terminalReason?.startsWith('aborted_') ?? false)
+        // 给「立即发送」让路：没人按停止，被腰斩的却不是那条立即发送的消息自己的轮。要在出槽之前看，出槽后就分不出来了。
+        // result 可先于 interrupt 控制应答到：_awaitingInterruptResult 尚未置位，但 _interruptedBy 已记录了停止来源。
+        const yieldedToSendNow = !this._interruptedBy && !this._awaitingInterruptResult && (terminalReason?.startsWith('aborted_') ?? false)
           && this._openTurns.some(t => t.sendNow && t.msgUuid !== msg.user_message_uuid);
         // settle 槽：uuid 精确出槽 → 中断跳过 force 槽 → FIFO 回落，三路见 _settleOneResultTurn
         const settled = this._settleOneResultTurn(msg.user_message_uuid, terminalReason);
