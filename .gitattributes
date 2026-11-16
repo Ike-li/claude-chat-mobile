@@ -62,3 +62,6 @@
 *.mjs                       text
 *.json                      text
 *.md                        text
+
+# 维护者 CSS 编译入口，分发只需已生成的 tw.css。
+/app/public/css/tailwind.css export-ignore

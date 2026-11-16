@@ -40,7 +40,7 @@
   <link rel="stylesheet" href="/vendor/codemirror/codemirror.min.css">
   <script src="/socket.io/socket.io.min.js" defer></script>
   <link rel="stylesheet" href="/css/app.css">
-  <!-- Tailwind 工具类：npm run build:css 按 tailwind.config.js 预编译的产物，别手改（npm run check 会拿重编结果逐字节比对）。
+  <!-- Tailwind 工具类：npm run build:css 按 css/tailwind.css 与 tailwind.config.js 预编译的产物，别手改（npm run check 会拿重编结果逐字节比对）。
        必须排在 app.css 之后：此前浏览器内编译出的样式表追加在 head 末尾，同特异性的规则一直是工具类胜出。 -->
   <link rel="stylesheet" href="/css/tw.css">
 </head>
@@ -54,7 +54,7 @@
       <div class="text-sm text-ink-soft mb-5">需要访问令牌才能连接到这台机器。<span class="text-ink-faint">第一次打开、换了浏览器或清过浏览器数据时，这里还没有保存令牌，输入一次即可。</span></div>
       <label class="block text-xs text-ink-faint mb-1.5" for="authToken">访问令牌</label>
       <input id="authToken" type="password" autocomplete="current-password" enterkeyhint="go" placeholder="粘贴 AUTH_TOKEN"
-        class="w-full bg-sunk border border-line rounded-lg px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:ring-1 focus:ring-accent mb-2">
+        class="w-full bg-sunk border border-line rounded-lg px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-hidden focus:ring-1 focus:ring-accent mb-2">
       <div id="authError" class="hidden text-xs text-danger mb-2"></div>
       <button id="authSubmit" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">进入</button>
       <div class="text-xs text-ink-faint mt-4 leading-relaxed">令牌仅存于本机浏览器（localStorage），不上传。也可用 <code class="bg-sunk px-1 rounded">#token=值</code> 直接进入。令牌在服务器 <code class="bg-sunk px-1 rounded">ccm.config.json</code> 的 <code class="bg-sunk px-1 rounded">AUTH_TOKEN</code> 里（启动日志只显示掩码）。<button id="authHelpLink" type="button" class="text-accent underline">不知道令牌？查看帮助</button></div>
@@ -784,7 +784,7 @@
         <div class="w-full flex items-start relative">
           <textarea id="input" rows="1" placeholder="给 Claude 发消息..." enterkeyhint="send"
             aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"
-            class="flex-1 resize-none bg-transparent border-0 ring-0 outline-none focus:ring-0 focus:border-transparent px-2.5 py-2 text-sm text-ink placeholder-ink-faint max-h-36 min-h-[36px] leading-relaxed"></textarea>
+            class="flex-1 resize-none bg-transparent border-0 ring-0 outline-hidden focus:ring-0 focus:border-transparent px-2.5 py-2 text-sm text-ink placeholder-ink-faint max-h-36 min-h-[36px] leading-relaxed"></textarea>
         </div>
 
         <input type="file" id="fileInput" multiple class="hidden">

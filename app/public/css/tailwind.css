@@ -1,0 +1,31 @@
+/* 编译入口：只扫产品 HTML / JS，避免测试夹具和文档里的类名混入分发 CSS。 */
+/* 保留 v3 的无层叠分层顺序：app.css 在前、工具类在后，同特异性的 hidden 等工具类仍胜出。 */
+@import "tailwindcss/theme.css";
+@import "tailwindcss/preflight.css";
+@import "tailwindcss/utilities.css" source(none);
+@config "../../../tailwind.config.js";
+@source "../index.html";
+@source "../js";
+
+/* 保留 v3 的小号阴影、圆角和模糊尺度。inline 也避免与 app.css 同名的
+   --radius-* 设计变量碰撞：工具类继续编成固定尺寸，不被运行时 token 改写。 */
+@theme inline {
+  --radius-sm: 0.125rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.5rem;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --blur-sm: 4px;
+}
+
+/* 维持既有触控和表单默认样式。 */
+@custom-variant hover (&:hover);
+*, ::before, ::after, ::backdrop, ::file-selector-button { border-color: #e5e7eb; }
+input::placeholder, textarea::placeholder { color: #9ca3af; opacity: 1; }
+button, [role="button"] { cursor: pointer; }
+dialog { margin: auto; }
+
+/* v3 把 hidden 排在 inline-flex 等 display 工具类之后；状态切换依赖两类并存时仍能隐藏。 */
+.hidden { display: none; }

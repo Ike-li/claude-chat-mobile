@@ -57,7 +57,7 @@ project's own code is licensed under Apache-2.0 (see root `LICENSE`); that does 
 - 构建 / Build: Tailwind CSS CLI 预编译的样式表（含 preflight 基础样式），不在本目录，位于 `app/public/css/tw.css` / stylesheet precompiled by the Tailwind CSS CLI (includes the preflight base styles); it lives at `app/public/css/tw.css`, not in this directory
 - 版权 / Copyright: © Tailwind Labs, Inc. and contributors
 - 许可 / License: MIT (SPDX: `MIT`)
-- 来源 / Source: https://github.com/tailwindlabs/tailwindcss（npm 包 `tailwindcss@3.4.17`）
+- 来源 / Source: https://github.com/tailwindlabs/tailwindcss（npm 包 `tailwindcss@4.3.5`）
 
 ## Source Serif（字体 / font） — `source-serif-400.woff2`, `source-serif-600.woff2`, `source-serif-italic.woff2`
 

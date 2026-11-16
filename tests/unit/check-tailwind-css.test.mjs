@@ -4,18 +4,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { checkTailwindCss } from '../../tests/gates/check-tailwind-css.js';
 
-const CLI = createRequire(import.meta.url).resolve('tailwindcss/lib/cli.js');
+const require = createRequire(import.meta.url);
+const CLI = join(dirname(require.resolve('@tailwindcss/cli/package.json')), 'dist/index.mjs');
+const MODULES = dirname(dirname(require.resolve('tailwindcss/package.json')));
 
 async function makeRepo(t) {
   const root = await mkdtemp(join(tmpdir(), 'ccm-tailwind-css-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'app/public/css'), { recursive: true });
+  await mkdir(join(root, 'app/public/js'), { recursive: true });
+  await symlink(MODULES, join(root, 'node_modules'), 'dir');
+  await writeFile(join(root, 'app/public/css/tailwind.css'),
+    await readFile(new URL('../../app/public/css/tailwind.css', import.meta.url)));
   await writeFile(join(root, 'tailwind.config.js'), "export default { content: { relative: true, files: ['./app/public/index.html'] } };\n");
   await writeFile(join(root, 'app/public/index.html'), '<div class="p-2"></div>\n');
   return root;
@@ -23,7 +29,7 @@ async function makeRepo(t) {
 
 // 与 package.json 的 build:css 同一组参数，产物写进文件——机主提交的就是这样编出来的那份
 function buildCss(root) {
-  const r = spawnSync(process.execPath, [CLI, '-c', 'tailwind.config.js', '-o', 'app/public/css/tw.css'], { cwd: root, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [CLI, '-i', 'app/public/css/tailwind.css', '-o', 'app/public/css/tw.css'], { cwd: root, encoding: 'utf8' });
   assert.equal(r.status, 0, `夹具编译失败：${r.stderr}`);
 }
 
@@ -47,4 +53,16 @@ test('配置写坏、CLI 编不出来 → 报编译失败，不当成产物过�
   const { problems } = checkTailwindCss({ rootDir: root });
   assert.equal(problems.length, 1, 'CLI 退出码非 0 却没报——编不出来也能判过，门禁就形同虚设');
   assert.match(problems[0], /编译失败/, '编不出来被报成了别的问题，会把人引去重跑 build:css');
+});
+
+// JS 模板也是生产工具类的来源，不能只扫描初始 HTML。
+test('JS 模板新增语义透明度类而未重编 → 同样报告过期', async t => {
+  const root = await makeRepo(t);
+  await writeFile(join(root, 'tailwind.config.js'), "export default { theme: { extend: { colors: { accent: 'var(--accent)' } } } };\n");
+  buildCss(root);
+  await writeFile(join(root, 'app/public/js/card.js'), "export const html = '<div class=\"bg-accent/10\"></div>';\n");
+  assert.equal(checkTailwindCss({ rootDir: root }).problems.length, 1,
+    'JS 模板新增的语义透明度类没有被扫描，页面会静默失去样式');
+  buildCss(root);
+  assert.deepEqual(checkTailwindCss({ rootDir: root }).problems, []);
 });
